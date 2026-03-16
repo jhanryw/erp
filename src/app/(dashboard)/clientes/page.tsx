@@ -29,7 +29,7 @@ async function getCustomers() {
       customer_metrics (total_spent, order_count, avg_ticket, last_purchase_date, rfm_segment)
     `)
     .order('created_at', { ascending: false })
-    .limit(50)
+    .limit(50) as unknown as { data: any[] | null, error: any }
   return data ?? []
 }
 

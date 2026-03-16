@@ -35,9 +35,9 @@ export default function NovoClientePage() {
 
     const { data: customer, error } = await supabase
       .from('customers')
-      .insert({ ...data, created_by: user.id })
+      .insert({ ...data, created_by: user.id } as any)
       .select('id')
-      .single()
+      .single() as unknown as { data: { id: string } | null, error: any }
 
     if (error) {
       if (error.code === '23505') {
@@ -49,7 +49,7 @@ export default function NovoClientePage() {
     }
 
     toast.success('Cliente cadastrado com sucesso!')
-    router.push(`/clientes/${customer.id}`)
+    router.push(`/clientes/${customer!.id}`)
   }
 
   function handleCPFChange(e: React.ChangeEvent<HTMLInputElement>) {

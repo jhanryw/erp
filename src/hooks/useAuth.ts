@@ -29,13 +29,13 @@ export function useAuth() {
         .from('users')
         .select('name, role')
         .eq('id', authUser.id)
-        .single()
+        .single() as unknown as { data: { name: string, role: string } | null, error: any }
 
       setUser({
         id: authUser.id,
         email: authUser.email,
         name: profile?.name ?? authUser.email ?? '',
-        role: profile?.role ?? 'seller',
+        role: (profile?.role ?? 'seller') as UserRole,
       })
       setLoading(false)
     }

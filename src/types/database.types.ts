@@ -177,6 +177,10 @@ export interface Database {
           id: number
           product_id: number
           sku_variation: string
+          color: string | null
+          size: string | null
+          model: string | null
+          fabric: string | null
           cost_override: number | null
           price_override: number | null
           photo_url: string | null
@@ -186,6 +190,10 @@ export interface Database {
         Insert: {
           product_id: number
           sku_variation: string
+          color?: string | null
+          size?: string | null
+          model?: string | null
+          fabric?: string | null
           cost_override?: number | null
           price_override?: number | null
           photo_url?: string | null
@@ -193,6 +201,10 @@ export interface Database {
         }
         Update: {
           sku_variation?: string
+          color?: string | null
+          size?: string | null
+          model?: string | null
+          fabric?: string | null
           cost_override?: number | null
           price_override?: number | null
           photo_url?: string | null
@@ -505,6 +517,86 @@ export interface Database {
           total_reversed: number
         }
       }
+      mv_stock_status: {
+        Row: {
+          product_variation_id: number
+          product_id: number
+          product_name: string
+          sku: string
+          color: string | null
+          size: string | null
+          current_qty: number
+          avg_cost: number
+          stock_value_at_cost: number
+          stock_value_at_price: number
+          last_entry_date: string | null
+          supplier_id: number | null
+        }
+      }
+      mv_color_performance: {
+        Row: {
+          color: string
+          category_id: number | null
+          units_sold: number
+          total_revenue: number
+          total_gross_profit: number
+          avg_margin_pct: number
+          avg_ticket: number
+          product_count: number
+        }
+      }
+      mv_abc_by_revenue: {
+        Row: {
+          product_id: number
+          product_name: string
+          sku: string
+          supplier_id: number | null
+          supplier_name: string | null
+          value: number
+          cumulative_pct: number
+          abc_curve: AbcCurve
+          margin_pct: number | null
+        }
+      }
+      mv_abc_by_profit: {
+        Row: {
+          product_id: number
+          product_name: string
+          sku: string
+          supplier_id: number | null
+          supplier_name: string | null
+          value: number
+          cumulative_pct: number
+          abc_curve: AbcCurve
+          margin_pct: number | null
+        }
+      }
+      mv_abc_by_volume: {
+        Row: {
+          product_id: number
+          product_name: string
+          sku: string
+          supplier_id: number | null
+          supplier_name: string | null
+          value: number
+          cumulative_pct: number
+          abc_curve: AbcCurve
+          margin_pct: number | null
+        }
+      }
+      mv_supplier_performance: {
+        Row: {
+          supplier_id: number
+          supplier_name: string
+          total_purchased_brl: number
+          total_revenue: number
+          total_gross_profit: number
+          avg_margin_pct: number
+          top_product_name: string | null
+          avg_ticket_per_purchase: number
+          product_count: number
+        }
+      }
       mv_daily_sales_summary: {
         Row: {
           sale_date: string
@@ -622,6 +714,27 @@ export type User = Tables<'users'>
 export type Product = Tables<'products'>
 export type ProductVariation = Tables<'product_variations'>
 export type Supplier = Tables<'suppliers'>
+
+// Dimensões de variação — cada produto pode ter combinações de cor × tamanho × modelo × tecido
+export type VariationDimensions = {
+  color: string | null
+  size: string | null
+  model: string | null
+  fabric: string | null
+}
+
+// Rótulo legível da variação
+export function variationLabel(v: VariationDimensions): string {
+  return [v.color, v.size, v.model, v.fabric].filter(Boolean).join(' / ') || v.color || 'Padrão'
+}
+
+// Views tipadas
+export type MvStockStatus = Views<'mv_stock_status'>
+export type MvColorPerformance = Views<'mv_color_performance'>
+export type MvAbcByRevenue = Views<'mv_abc_by_revenue'>
+export type MvAbcByProfit = Views<'mv_abc_by_profit'>
+export type MvAbcByVolume = Views<'mv_abc_by_volume'>
+export type MvSupplierPerformance = Views<'mv_supplier_performance'>
 export type Category = Tables<'categories'>
 export type Customer = Tables<'customers'>
 export type CustomerMetrics = Tables<'customer_metrics'>

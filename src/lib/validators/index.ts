@@ -16,6 +16,21 @@ export const productSchema = z.object({
   active: z.boolean().default(true),
 })
 
+// ─── Variação de Produto ──────────────────────────────────────────────────────
+// Cada variação combina até 4 dimensões: cor × tamanho × modelo × tecido
+export const productVariationSchema = z.object({
+  product_id: z.number().positive(),
+  sku_variation: z.string().min(2, 'SKU da variação obrigatório').max(80),
+  color: z.string().max(50).nullable().optional(),
+  size: z.string().max(20).nullable().optional(),
+  model: z.string().max(50).nullable().optional(),
+  fabric: z.string().max(50).nullable().optional(),
+  cost_override: z.coerce.number().min(0).nullable().optional(),
+  price_override: z.coerce.number().min(0).nullable().optional(),
+  photo_url: z.string().url().nullable().optional(),
+  active: z.boolean().default(true),
+})
+
 // ─── Fornecedor ───────────────────────────────────────────────────────────────
 export const supplierSchema = z.object({
   name: z.string().min(2, 'Nome obrigatório'),
@@ -88,6 +103,7 @@ export const marketingCostSchema = z.object({
 })
 
 export type ProductFormData = z.infer<typeof productSchema>
+export type ProductVariationFormData = z.infer<typeof productVariationSchema>
 export type SupplierFormData = z.infer<typeof supplierSchema>
 export type CustomerFormData = z.infer<typeof customerSchema>
 export type SaleFormData = z.infer<typeof saleSchema>

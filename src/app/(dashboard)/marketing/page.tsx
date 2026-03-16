@@ -22,8 +22,8 @@ async function getMarketingData() {
   const thirtyDaysAgo = subDays(new Date(), 30).toISOString().split('T')[0]
 
   const [costs, campaigns] = await Promise.all([
-    supabase.from('marketing_costs').select('*').gte('cost_date', thirtyDaysAgo).order('cost_date', { ascending: false }),
-    supabase.from('campaigns').select('*').eq('active', true).limit(5),
+    supabase.from('marketing_costs').select('*').gte('cost_date', thirtyDaysAgo).order('cost_date', { ascending: false }) as unknown as Promise<{ data: any[] | null, error: any }>,
+    supabase.from('campaigns').select('*').eq('active', true).limit(5) as unknown as Promise<{ data: any[] | null, error: any }>,
   ])
 
   const costData = costs.data ?? []
@@ -96,7 +96,7 @@ export default async function MarketingPage() {
             <h3 className="text-sm font-semibold text-text-primary">Por Categoria</h3>
           </CardHeader>
           <div className="p-5 space-y-3">
-            {Object.entries(byCategory)
+            {(Object.entries(byCategory) as [string, number][])
               .sort(([, a], [, b]) => b - a)
               .map(([cat, val]) => (
                 <div key={cat}>

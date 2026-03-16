@@ -16,10 +16,10 @@ async function getStockData() {
       .from('mv_stock_status')
       .select('*')
       .order('current_qty', { ascending: true })
-      .limit(50),
+      .limit(50) as unknown as Promise<{ data: any[] | null, error: any }>,
     supabase
       .from('mv_stock_status')
-      .select('current_qty, stock_value_at_cost, stock_value_at_price'),
+      .select('current_qty, stock_value_at_cost, stock_value_at_price') as unknown as Promise<{ data: any[] | null, error: any }>,
   ])
 
   const items = stockItems.data ?? []

@@ -5,7 +5,7 @@ import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
-import { formatCurrency, formatDate as fmtDate } from '@/lib/utils/currency'
+import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
 async function getFinancialData() {
@@ -14,7 +14,7 @@ async function getFinancialData() {
     .from('mv_monthly_financial')
     .select('*')
     .order('month', { ascending: false })
-    .limit(12)
+    .limit(12) as unknown as { data: any[] | null, error: any }
 
   const current = months?.[0]
   const previous = months?.[1]

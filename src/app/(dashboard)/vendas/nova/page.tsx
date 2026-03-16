@@ -96,7 +96,7 @@ export default function NovaVendaPage() {
       .from('v_cashback_balance')
       .select('available_balance')
       .eq('customer_id', customer.id)
-      .single()
+      .single() as unknown as { data: { available_balance: number } | null, error: any }
     setCashbackBalance(data?.available_balance ?? 0)
   }
 
@@ -147,9 +147,9 @@ export default function NovaVendaPage() {
         sale_origin: data.sale_origin,
         notes: data.notes,
         sale_date: new Date().toISOString().split('T')[0],
-      })
+      } as any)
       .select('id, sale_number')
-      .single()
+      .single() as unknown as { data: { id: string, sale_number: string } | null, error: any }
 
     if (error || !sale) {
       toast.error('Erro ao registrar venda', { description: error?.message })
@@ -167,7 +167,7 @@ export default function NovaVendaPage() {
       total_price: item.unit_price * item.quantity - (item.discount_amount ?? 0),
     }))
 
-    await supabase.from('sale_items').insert(itemsPayload)
+    await supabase.from('sale_items').insert(itemsPayload as any)
 
     toast.success('Venda registrada!', {
       description: `Pedido ${sale.sale_number} criado com sucesso.`,
@@ -412,7 +412,7 @@ export default function NovaVendaPage() {
                   control={control}
                   name="sale_origin"
                   render={({ field }) => (
-                    <Select label="Origem da Venda" {...field}>
+                    <Select label="Origem da Venda" {...field} value={field.value ?? ''}>
                       <option value="">Não informado</option>
                       <option value="instagram">Instagram</option>
                       <option value="referral">Indicação</option>

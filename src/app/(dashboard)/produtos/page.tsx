@@ -18,7 +18,7 @@ async function getProducts() {
       categories:category_id (id, name),
       suppliers:supplier_id (id, name)
     `)
-    .order('name', { ascending: true })
+    .order('name', { ascending: true }) as unknown as { data: any[] | null, error: any }
 
   return data ?? []
 }

@@ -16,7 +16,7 @@ async function checkAdmin() {
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single() as unknown as { data: { role: string } | null, error: any }
   if (profile?.role !== 'admin') redirect('/?error=permission_denied')
 }
 

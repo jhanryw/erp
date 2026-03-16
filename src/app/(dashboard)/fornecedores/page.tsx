@@ -12,7 +12,7 @@ async function getSuppliers() {
   const { data } = await supabase
     .from('suppliers')
     .select('id, name, document, phone, city, state, active, created_at')
-    .order('name', { ascending: true })
+    .order('name', { ascending: true }) as unknown as { data: any[] | null, error: any }
   return data ?? []
 }
 

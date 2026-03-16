@@ -6,7 +6,7 @@ interface TopProduct {
   product_name: string
   total_revenue: number
   total_units_sold: number
-  realized_margin_pct: number
+  realized_margin_pct: number | null
 }
 
 export function TopProductsWidget({ products }: { products: TopProduct[] }) {
@@ -54,7 +54,7 @@ export function TopProductsWidget({ products }: { products: TopProduct[] }) {
                 {formatCurrency(product.total_revenue)}
               </p>
               <p className="text-xs text-text-muted">
-                {formatPercent(product.realized_margin_pct)} mg
+                {product.realized_margin_pct != null ? formatPercent(product.realized_margin_pct) : '—'} mg
               </p>
             </div>
           </Link>

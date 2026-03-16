@@ -21,7 +21,7 @@ async function getSales() {
       users:seller_id (id, name)
     `)
     .order('created_at', { ascending: false })
-    .limit(50)
+    .limit(50) as unknown as { data: any[] | null, error: any }
 
   return data ?? []
 }

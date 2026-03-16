@@ -7,10 +7,6 @@
     color-scheme: dark;
   }
 
-  html {
-    @apply dark;
-  }
-
   * {
     @apply border-border;
   }

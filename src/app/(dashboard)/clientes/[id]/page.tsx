@@ -19,27 +19,30 @@ const ORIGIN_LABELS: Record<string, string> = {
 
 async function getCustomer(id: string) {
   const supabase = createClient()
-  const [customer, sales, cashback] = await Promise.all([
-    supabase
-      .from('customers')
-      .select(`*, customer_metrics (*)`)
-      .eq('id', id)
-      .single(),
+
+  const { data: customer } = await supabase
+    .from('customers')
+    .select('*, customer_metrics (*)')
+    .eq('id', Number(id))
+    .single() as unknown as { data: any }
+
+  if (!customer) return null
+
+  const [{ data: sales }, { data: cashback }] = await Promise.all([
     supabase
       .from('sales')
       .select('id, sale_number, total, status, sale_date, payment_method')
-      .eq('customer_id', id)
+      .eq('customer_id', Number(id))
       .order('sale_date', { ascending: false })
-      .limit(10),
+      .limit(10) as unknown as Promise<{ data: any[] }>,
     supabase
       .from('v_cashback_balance')
       .select('*')
-      .eq('customer_id', id)
-      .single(),
+      .eq('customer_id', Number(id))
+      .single() as unknown as Promise<{ data: any }>,
   ])
 
-  if (!customer.data) return null
-  return { customer: customer.data, sales: sales.data ?? [], cashback: cashback.data }
+  return { customer, sales: sales ?? [], cashback }
 }
 
 export default async function ClienteDetalhePage({ params }: { params: { id: string } }) {

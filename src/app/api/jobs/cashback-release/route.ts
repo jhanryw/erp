@@ -11,12 +11,12 @@ export async function POST(request: Request) {
   const supabase = createAdminClient()
   const today = new Date().toISOString().split('T')[0]
 
-  const { data, error } = await supabase
-    .from('cashback_transactions')
+  const { data, error } = await (supabase
+    .from('cashback_transactions') as any)
     .update({ status: 'available' })
     .eq('status', 'pending')
     .lte('release_date', today)
-    .select('id')
+    .select('id') as { data: any[] | null, error: any }
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

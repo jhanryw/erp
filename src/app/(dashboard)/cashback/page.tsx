@@ -8,7 +8,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
-import type { CashbackStatus, CashbackTransactionType } from '@/types/database.types'
+import type { CashbackStatus, CashbackTransactionType, Tables } from '@/types/database.types'
+
+type CashbackRow = Pick<Tables<'cashback_transactions'>, 'type' | 'status' | 'amount'>
 
 const STATUS_CONFIG: Record<CashbackStatus, { label: string; variant: any }> = {
   pending: { label: 'Pendente', variant: 'warning' },
@@ -33,13 +35,13 @@ async function getCashbackData() {
       .limit(30),
   ])
 
-  const all = totals.data ?? []
+  const all = (totals.data ?? []) as CashbackRow[]
   const pendingTotal = all.filter((t) => t.status === 'pending').reduce((s, t) => s + t.amount, 0)
   const availableTotal = all.filter((t) => t.status === 'available').reduce((s, t) => s + t.amount, 0)
   const usedTotal = all.filter((t) => t.type === 'use').reduce((s, t) => s + t.amount, 0)
   const expiredTotal = all.filter((t) => t.type === 'expire').reduce((s, t) => s + t.amount, 0)
 
-  return { pendingTotal, availableTotal, usedTotal, expiredTotal, transactions: transactions.data ?? [] }
+  return { pendingTotal, availableTotal, usedTotal, expiredTotal, transactions: (transactions.data ?? []) as any[] }
 }
 
 export default async function CashbackPage() {

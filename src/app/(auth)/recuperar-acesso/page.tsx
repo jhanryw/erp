@@ -1,5 +1,7 @@
 'use client'
 
+export const dynamic = 'force-dynamic'
+
 import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -19,13 +21,15 @@ export default function RecoverPage() {
   const [sent, setSent] = useState(false)
   const supabase = createClient()
 
+  type FormData = z.infer<typeof schema>
+
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
-  } = useForm({ resolver: zodResolver(schema) })
+  } = useForm<FormData>({ resolver: zodResolver(schema) })
 
-  async function onSubmit({ email }: { email: string }) {
+  async function onSubmit({ email }: FormData) {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback?type=recovery`,
     })
