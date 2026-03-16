@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Edit, ShoppingCart, Gift, Star } from 'lucide-react'
+import { ArrowLeft, Edit, ShoppingCart, Gift, Star, Palette } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -10,46 +10,100 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { formatCPF } from '@/lib/utils/cpf'
-import type { RfmSegment, SaleStatus } from '@/types/database.types'
+import type { RfmSegment, SaleStatus, CashbackTransactionType, CashbackStatus } from '@/types/database.types'
 
 const ORIGIN_LABELS: Record<string, string> = {
   instagram: 'Instagram', referral: 'Indicação', paid_traffic: 'Tráfego Pago',
   website: 'Site', store: 'Loja', other: 'Outro',
 }
 
+const CASHBACK_TYPE_LABELS: Record<CashbackTransactionType, string> = {
+  earn: 'Crédito', release: 'Liberação', use: 'Uso', expire: 'Expiração', reverse: 'Estorno',
+}
+
+const CASHBACK_STATUS_COLOR: Record<CashbackStatus, string> = {
+  pending: 'text-warning',
+  available: 'text-success',
+  used: 'text-text-muted',
+  expired: 'text-error',
+  reversed: 'text-error',
+}
+
 async function getCustomer(id: string) {
   const supabase = createClient()
+  const customerId = Number(id)
 
   const { data: customer } = await supabase
     .from('customers')
     .select('*, customer_metrics (*)')
-    .eq('id', Number(id))
+    .eq('id', customerId)
     .single() as unknown as { data: any }
 
   if (!customer) return null
 
-  const [{ data: sales }, { data: cashback }] = await Promise.all([
+  const [
+    { data: sales },
+    { data: cashback },
+    { data: cashbackTx },
+  ] = await Promise.all([
     supabase
       .from('sales')
       .select('id, sale_number, total, status, sale_date, payment_method')
-      .eq('customer_id', Number(id))
+      .eq('customer_id', customerId)
       .order('sale_date', { ascending: false })
       .limit(10) as unknown as Promise<{ data: any[] }>,
     supabase
       .from('v_cashback_balance')
       .select('*')
-      .eq('customer_id', Number(id))
+      .eq('customer_id', customerId)
       .single() as unknown as Promise<{ data: any }>,
+    supabase
+      .from('cashback_transactions')
+      .select('id, type, amount, status, release_date, expiry_date, used_at, created_at, sale_id')
+      .eq('customer_id', customerId)
+      .order('created_at', { ascending: false })
+      .limit(20) as unknown as Promise<{ data: any[] }>,
   ])
 
-  return { customer, sales: sales ?? [], cashback }
+  // Compute preferences from sale items in recent purchases
+  let favColor: string | null = null
+  let favSize: string | null = null
+  const saleIds = (sales ?? []).map((s: any) => s.id)
+
+  if (saleIds.length > 0) {
+    const { data: items } = await supabase
+      .from('sale_items')
+      .select('quantity, product_variations(color, size)')
+      .in('sale_id', saleIds) as unknown as { data: any[] | null }
+
+    const colorMap: Record<string, number> = {}
+    const sizeMap: Record<string, number> = {}
+
+    for (const item of items ?? []) {
+      const pv = item.product_variations as any
+      const qty = item.quantity ?? 1
+      if (pv?.color) colorMap[pv.color] = (colorMap[pv.color] ?? 0) + qty
+      if (pv?.size) sizeMap[pv.size] = (sizeMap[pv.size] ?? 0) + qty
+    }
+
+    favColor = Object.entries(colorMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+    favSize = Object.entries(sizeMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
+  }
+
+  return {
+    customer,
+    sales: sales ?? [],
+    cashback,
+    cashbackTx: cashbackTx ?? [],
+    preferences: { favColor, favSize },
+  }
 }
 
 export default async function ClienteDetalhePage({ params }: { params: { id: string } }) {
   const result = await getCustomer(params.id)
   if (!result) notFound()
 
-  const { customer, sales, cashback } = result
+  const { customer, sales, cashback, cashbackTx, preferences } = result
   const metrics = (customer.customer_metrics as any)?.[0] ?? null
 
   return (
@@ -98,7 +152,7 @@ export default async function ClienteDetalhePage({ params }: { params: { id: str
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Histórico de compras */}
+        {/* Purchase history */}
         <div className="lg:col-span-2">
           <Card>
             <CardHeader>
@@ -137,7 +191,7 @@ export default async function ClienteDetalhePage({ params }: { params: { id: str
           </Card>
         </div>
 
-        {/* RFM Score */}
+        {/* Right column: RFM + Preferences + Notes */}
         <div className="space-y-4">
           {metrics?.rfm_r_score && (
             <Card padding="md">
@@ -167,6 +221,29 @@ export default async function ClienteDetalhePage({ params }: { params: { id: str
             </Card>
           )}
 
+          {/* Preferences */}
+          {(preferences.favColor || preferences.favSize) && (
+            <Card padding="md">
+              <h3 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
+                <Palette className="w-4 h-4 text-brand" /> Preferências
+              </h3>
+              <div className="space-y-2">
+                {preferences.favColor && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-muted">Cor favorita</span>
+                    <span className="text-xs font-semibold text-text-primary">{preferences.favColor}</span>
+                  </div>
+                )}
+                {preferences.favSize && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-text-muted">Tamanho favorito</span>
+                    <span className="text-xs font-semibold text-text-primary">{preferences.favSize}</span>
+                  </div>
+                )}
+              </div>
+            </Card>
+          )}
+
           {customer.notes && (
             <Card padding="md">
               <h3 className="text-sm font-semibold text-text-primary mb-2">Observações</h3>
@@ -175,6 +252,58 @@ export default async function ClienteDetalhePage({ params }: { params: { id: str
           )}
         </div>
       </div>
+
+      {/* Cashback Transactions */}
+      {cashbackTx.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">Histórico de Cashback</h3>
+            <div className="flex items-center gap-4 text-xs">
+              <span className="text-text-muted">
+                Disponível: <span className="font-semibold text-success">{formatCurrency(cashback?.available_balance ?? 0)}</span>
+              </span>
+              {(cashback?.pending_balance ?? 0) > 0 && (
+                <span className="text-text-muted">
+                  A liberar: <span className="font-semibold text-warning">{formatCurrency(cashback.pending_balance)}</span>
+                </span>
+              )}
+            </div>
+          </CardHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Tipo</TableHead>
+                <TableHead>Data</TableHead>
+                <TableHead align="right">Valor</TableHead>
+                <TableHead align="center">Status</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {cashbackTx.map((tx: any) => (
+                <TableRow key={tx.id}>
+                  <TableCell>
+                    <span className="font-medium">{CASHBACK_TYPE_LABELS[tx.type as CashbackTransactionType] ?? tx.type}</span>
+                    {tx.sale_id && (
+                      <Link href={`/vendas/${tx.sale_id}`} className="block text-xs text-accent hover:text-accent-muted">
+                        Ver venda
+                      </Link>
+                    )}
+                  </TableCell>
+                  <TableCell muted>{formatDate(tx.created_at)}</TableCell>
+                  <TableCell align="right" className="font-semibold tabular-nums">
+                    {formatCurrency(tx.amount)}
+                  </TableCell>
+                  <TableCell align="center">
+                    <span className={`text-xs font-medium ${CASHBACK_STATUS_COLOR[tx.status as CashbackStatus] ?? 'text-text-muted'}`}>
+                      {tx.status}
+                    </span>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      )}
     </div>
   )
 }
