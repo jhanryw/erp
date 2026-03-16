@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    @apply dark;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-bg-root text-text-primary antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Scrollbar customizada */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-bg-base;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-border-strong rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-text-disabled;
+  }
+}
+
+@layer components {
+  /* Skeleton shimmer */
+  .skeleton {
+    @apply bg-bg-elevated animate-shimmer;
+    background-image: linear-gradient(
+      90deg,
+      theme('colors.bg.elevated') 25%,
+      theme('colors.bg.overlay') 50%,
+      theme('colors.bg.elevated') 75%
+    );
+    background-size: 200% 100%;
+  }
+
+  /* Input base */
+  .input-base {
+    @apply w-full rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm text-text-primary
+           placeholder:text-text-muted
+           focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand
+           disabled:cursor-not-allowed disabled:opacity-50
+           transition-colors;
+  }
+
+  /* Label base */
+  .label-base {
+    @apply block text-sm font-medium text-text-secondary mb-1.5;
+  }
+
+  /* Card base */
+  .card {
+    @apply bg-bg-base border border-border rounded-xl shadow-card;
+  }
+
+  /* Stat value */
+  .stat-value {
+    @apply text-2xl font-bold text-text-primary tabular-nums;
+  }
+
+  /* Table styles */
+  .table-row-hover {
+    @apply hover:bg-white/[0.03] cursor-pointer transition-colors;
+  }
+}
