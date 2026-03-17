@@ -34,7 +34,7 @@ export function DeleteSupplierButton({ id, redirectAfter = false }: { id: number
       if (redirectAfter) {
         router.push('/fornecedores')
       } else {
-        router.refresh()
+        window.location.reload()
       }
     } finally {
       setLoading(false)

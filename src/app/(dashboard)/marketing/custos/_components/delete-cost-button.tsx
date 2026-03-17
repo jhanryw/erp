@@ -1,14 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
 
 export function DeleteCostButton({ id }: { id: number }) {
-  const router = useRouter()
   const [loading, setLoading] = useState(false)
 
   async function handleDelete() {
@@ -22,7 +20,7 @@ export function DeleteCostButton({ id }: { id: number }) {
         return
       }
       toast.success('Custo excluído')
-      router.refresh()
+      window.location.reload()
     } finally {
       setLoading(false)
     }
