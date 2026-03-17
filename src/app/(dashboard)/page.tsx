@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server'
 import { getDashboardData } from '@/services/dashboard'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -10,20 +9,8 @@ import { ShoppingCart, TrendingUp, Users, Package } from 'lucide-react'
 import type { UserRole } from '@/types/database.types'
 
 export default async function DashboardPage() {
-  const supabase = createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  let role: UserRole = 'seller'
-  if (user) {
-    const { data: profile } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single() as unknown as { data: { role: string } | null, error: any }
-    role = (profile?.role ?? 'seller') as UserRole
-  }
+  // ⚠️ DEV BYPASS — role fixo como admin, sem consultar auth
+  const role: UserRole = 'admin'
 
   const data = await getDashboardData(role)
 

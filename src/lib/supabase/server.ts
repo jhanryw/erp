@@ -1,35 +1,22 @@
 /**
- * Supabase Server Client
- * Use em Server Components, Server Actions e API Routes.
- * Lê cookies para manter a sessão do usuário.
- * Respeita RLS — acesso limitado ao que o usuário pode ver.
+ * ⚠️ DEV BYPASS — usa service_role_key em vez da anon key.
+ * Ignora RLS em todas as tabelas. NÃO use em produção.
+ *
+ * Para reativar: troque de volta para createServerClient com
+ * NEXT_PUBLIC_SUPABASE_ANON_KEY e o handler de cookies original.
  */
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import type { Database } from '@/types/database.types'
 
 export function createClient() {
-  const cookieStore = cookies()
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+  // Usa service_role → bypassa RLS. Fallback para anon se a key não estiver definida.
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 
-  return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // Server Component — cookies não podem ser setados neste contexto.
-            // O middleware tratará o refresh da sessão.
-          }
-        },
-      },
-    }
-  )
+  return createSupabaseClient<Database>(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  })
 }

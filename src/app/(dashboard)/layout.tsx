@@ -1,5 +1,6 @@
-import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+// ⚠️ DEV BYPASS — verificação de sessão removida. Acesso direto ao dashboard.
+// force-dynamic: evita que o Next.js tente pré-renderizar páginas que dependem do banco
+export const dynamic = 'force-dynamic'
 import { Sidebar } from '@/components/layout/sidebar'
 import { Topbar } from '@/components/layout/topbar'
 import { BottomTabBar } from '@/components/layout/mobile-nav'
@@ -9,12 +10,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-
-  if (!user) {
-    redirect('/login')
-  }
+  // DEV: auth check removido — sem redirect para /login
 
   return (
     <div className="flex h-screen bg-bg-root overflow-hidden">

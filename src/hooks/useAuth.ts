@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import type { User } from '@supabase/supabase-js'
+// ⚠️ DEV BYPASS — retorna usuário admin fixo sem consultar o Supabase Auth.
+// Para reativar: restaure a versão original com supabase.auth.getUser() e
+// a query em public.users para buscar name/role.
+
 import type { UserRole } from '@/types/database.types'
 
 interface AuthUser {
@@ -12,52 +13,19 @@ interface AuthUser {
   role: UserRole
 }
 
+const DEV_ADMIN: AuthUser = {
+  id: '00000000-0000-0000-0000-000000000001',
+  email: 'dev@santtorini.local',
+  name: 'Dev Admin',
+  role: 'admin',
+}
+
 export function useAuth() {
-  const [user, setUser] = useState<AuthUser | null>(null)
-  const [loading, setLoading] = useState(true)
-  const supabase = createClient()
-
-  useEffect(() => {
-    async function loadUser(authUser: User | null) {
-      if (!authUser) {
-        setUser(null)
-        setLoading(false)
-        return
-      }
-
-      const { data: profile } = await supabase
-        .from('users')
-        .select('name, role')
-        .eq('id', authUser.id)
-        .single() as unknown as { data: { name: string, role: string } | null, error: any }
-
-      setUser({
-        id: authUser.id,
-        email: authUser.email,
-        name: profile?.name ?? authUser.email ?? '',
-        role: (profile?.role ?? 'seller') as UserRole,
-      })
-      setLoading(false)
-    }
-
-    supabase.auth.getUser().then(({ data: { user } }) => loadUser(user))
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      loadUser(session?.user ?? null)
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
-
-  const signOut = async () => {
-    await supabase.auth.signOut()
-    window.location.href = '/login'
+  return {
+    user: DEV_ADMIN,
+    loading: false,
+    signOut: async () => { window.location.href = '/' },
+    isAdmin: true,
+    isSeller: false,
   }
-
-  const isAdmin = user?.role === 'admin'
-  const isSeller = user?.role === 'seller'
-
-  return { user, loading, signOut, isAdmin, isSeller }
 }
