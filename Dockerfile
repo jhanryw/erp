@@ -1,20 +1,18 @@
-# Usa uma imagem leve do Node.js
-FROM node:18-slim
+# 1. Usa o Node 20 (necessário para o Supabase)
+FROM node:20-slim
 
-# Define a pasta de trabalho dentro do servidor
 WORKDIR /app
 
-# Copia os arquivos de dependências
+# 2. Copia os arquivos de dependências
 COPY package*.json ./
 
-# Instala as dependências (express e compression)
-RUN npm install --production
+# 3. Instala as dependências (omitindo as de desenvolvimento)
+RUN npm install --omit=dev
 
-# Copia o restante dos arquivos do projeto
+# 4. Copia o RESTO dos arquivos (Isso inclui o seu server.js)
 COPY . .
 
-# Expõe a porta que o seu server.js usa (3000)
-EXPOSE 3000
-
-# Comando para ligar o site
+# 5. O PULO DO GATO: 
+# Verifique se o seu arquivo principal é 'server.js' ou 'index.js'.
+# Se ele estiver dentro de uma pasta 'src', mude para ["node", "src/server.js"]
 CMD ["node", "server.js"]
