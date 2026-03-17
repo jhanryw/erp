@@ -49,7 +49,6 @@ export default function NovoProdutoPage() {
       .from('products')
       .insert({
         ...data,
-        margin_pct: Math.round(margin * 100) / 100,
         supplier_id: data.supplier_id || null,
         subcategory_id: null,
         collection_id: null,
