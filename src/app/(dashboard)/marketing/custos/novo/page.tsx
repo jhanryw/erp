@@ -1,0 +1,165 @@
+'use client'
+
+import { useRouter } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { toast } from 'sonner'
+import Link from 'next/link'
+import { ArrowLeft } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
+import { useAuth } from '@/hooks/useAuth'
+import { marketingCostSchema, type MarketingCostFormData } from '@/lib/validators'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
+import { toISODate } from '@/lib/utils/date'
+
+const CATEGORY_LABELS: Record<string, string> = {
+  paid_traffic: 'Tráfego Pago',
+  influencers: 'Influenciadores',
+  events: 'Eventos',
+  photos: 'Fotos / Conteúdo',
+  gifts: 'Brindes',
+  packaging: 'Embalagens',
+  rent: 'Aluguel',
+  salaries: 'Salários',
+  operational: 'Operacional',
+  taxes: 'Impostos',
+  other: 'Outros',
+}
+
+export default function NovoCustoMarketingPage() {
+  const router = useRouter()
+  const { user } = useAuth()
+  const supabase = createClient()
+
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<MarketingCostFormData>({
+    resolver: zodResolver(marketingCostSchema),
+    defaultValues: {
+      cost_date: toISODate(new Date()),
+      is_recurring: false,
+    },
+  })
+
+  async function onSubmit(data: MarketingCostFormData) {
+    const { error } = await supabase
+      .from('marketing_costs')
+      .insert({
+        ...data,
+        campaign_id: data.campaign_id || null,
+        notes: data.notes || null,
+        created_by: user?.id ?? '00000000-0000-0000-0000-000000000001',
+      } as any)
+
+    if (error) {
+      toast.error('Erro ao registrar custo', { description: error.message })
+      return
+    }
+
+    toast.success('Custo de marketing registrado!')
+    router.push('/marketing')
+  }
+
+  return (
+    <div className="max-w-xl space-y-5">
+      <div className="flex items-center gap-3">
+        <Link href="/marketing">
+          <Button variant="ghost" size="icon">
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
+        </Link>
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">Lançar Custo de Marketing</h2>
+          <p className="text-sm text-text-muted">Registre um investimento em marketing</p>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="card p-6 space-y-5">
+        {/* Categoria */}
+        <Select
+          label="Categoria"
+          required
+          error={errors.category?.message}
+          {...register('category')}
+        >
+          <option value="">Selecione a categoria</option>
+          {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </Select>
+
+        {/* Descrição */}
+        <Input
+          label="Descrição"
+          required
+          placeholder="Ex: Impulsionamento Instagram — setembro"
+          error={errors.description?.message}
+          {...register('description')}
+        />
+
+        {/* Valor + Data */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Input
+            label="Valor (R$)"
+            required
+            type="number"
+            step="0.01"
+            min="0.01"
+            placeholder="0,00"
+            error={errors.amount?.message}
+            {...register('amount')}
+          />
+          <Input
+            label="Data do custo"
+            required
+            type="date"
+            error={errors.cost_date?.message}
+            {...register('cost_date')}
+          />
+        </div>
+
+        {/* Recorrente */}
+        <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            id="is_recurring"
+            className="w-4 h-4 rounded border-border bg-bg-input accent-brand"
+            {...register('is_recurring')}
+          />
+          <label htmlFor="is_recurring" className="text-sm text-text-primary cursor-pointer">
+            Custo recorrente (mensal)
+          </label>
+        </div>
+
+        {/* Observações */}
+        <div>
+          <label className="label-base">
+            Observações <span className="text-text-muted font-normal">(opcional)</span>
+          </label>
+          <textarea
+            className="input-base resize-none"
+            rows={3}
+            placeholder="Detalhes sobre este investimento..."
+            {...register('notes')}
+          />
+        </div>
+
+        {/* Ações */}
+        <div className="flex gap-3 pt-2">
+          <Link href="/marketing" className="flex-1">
+            <Button type="button" variant="secondary" className="w-full">
+              Cancelar
+            </Button>
+          </Link>
+          <Button type="submit" loading={isSubmitting} className="flex-1">
+            Registrar Custo
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
