@@ -6,6 +6,9 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
+import { DeleteSupplierButton } from './_components/delete-supplier-button'
+
+export const dynamic = 'force-dynamic'
 
 async function getSuppliers() {
   const supabase = createClient()
@@ -55,6 +58,7 @@ export default async function FornecedoresPage() {
                   <TableHead>Telefone</TableHead>
                   <TableHead>Cidade / UF</TableHead>
                   <TableHead align="center">Status</TableHead>
+                  <TableHead align="center">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -68,6 +72,14 @@ export default async function FornecedoresPage() {
                     <TableCell muted>{s.city && s.state ? `${s.city} / ${s.state}` : s.city ?? '—'}</TableCell>
                     <TableCell align="center">
                       <Badge variant={s.active ? 'success' : 'default'} size="sm">{s.active ? 'Ativo' : 'Inativo'}</Badge>
+                    </TableCell>
+                    <TableCell align="center">
+                      <div className="flex items-center justify-center gap-1">
+                        <Link href={`/fornecedores/${s.id}/editar`}>
+                          <Button variant="ghost" size="sm" className="text-xs px-2">Editar</Button>
+                        </Link>
+                        <DeleteSupplierButton id={s.id} />
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

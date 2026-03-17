@@ -10,6 +10,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { subDays } from 'date-fns'
 
+export const dynamic = 'force-dynamic'
+
 const CATEGORY_LABELS: Record<string, string> = {
   paid_traffic: 'Tráfego Pago', influencers: 'Influenciadores', events: 'Eventos',
   photos: 'Fotos/Conteúdo', gifts: 'Brindes', packaging: 'Embalagens',

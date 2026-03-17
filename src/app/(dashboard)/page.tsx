@@ -8,6 +8,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { ShoppingCart, TrendingUp, Users, Package } from 'lucide-react'
 import type { UserRole } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 export default async function DashboardPage() {
   // ⚠️ DEV BYPASS — role fixo como admin, sem consultar auth
   const role: UserRole = 'admin'

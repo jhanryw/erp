@@ -11,6 +11,8 @@ import { formatDate } from '@/lib/utils/date'
 import { maskCPF } from '@/lib/utils/cpf'
 import type { RfmSegment } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 const ORIGIN_LABELS: Record<string, string> = {
   instagram: 'Instagram',
   referral: 'Indicação',

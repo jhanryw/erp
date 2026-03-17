@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ArrowRight } from 'lucide-react'
 
+export const dynamic = 'force-dynamic'
+
 const MODULES = [
   {
     href: '/inteligencia/abc',

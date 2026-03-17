@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
+export const dynamic = 'force-dynamic'
+
 async function getTurnoverData() {
   const supabase = createClient()
   const [stockRes, perfRes] = await Promise.all([

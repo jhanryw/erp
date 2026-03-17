@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Building2, Package, Edit } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DeleteSupplierButton } from '../_components/delete-supplier-button'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import {
@@ -11,6 +12,8 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+
+export const dynamic = 'force-dynamic'
 
 async function getSupplier(id: string) {
   const supabase = createClient()
@@ -92,12 +95,15 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
             </div>
           </div>
         </div>
-        <Link href={`/fornecedores/${supplier.id}/editar`}>
-          <Button variant="secondary" size="sm">
-            <Edit className="w-3.5 h-3.5" />
-            Editar
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href={`/fornecedores/${supplier.id}/editar`}>
+            <Button variant="secondary" size="sm">
+              <Edit className="w-3.5 h-3.5" />
+              Editar
+            </Button>
+          </Link>
+          <DeleteSupplierButton id={supplier.id} redirectAfter />
+        </div>
       </div>
 
       {/* KPIs */}

@@ -9,6 +9,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 
+export const dynamic = 'force-dynamic'
+
 async function getProducts() {
   const supabase = createClient()
   const { data } = await supabase

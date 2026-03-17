@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
+export const dynamic = 'force-dynamic'
+
 async function getFinancialData() {
   const supabase = createClient()
   const { data: months } = await supabase

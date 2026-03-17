@@ -7,6 +7,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 
+export const dynamic = 'force-dynamic'
+
 async function getAbcData() {
   const supabase = createClient()
   const { data } = await supabase

@@ -10,6 +10,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { DeleteEntryButton } from './_components/delete-entry-button'
 
+export const dynamic = 'force-dynamic'
+
 const CATEGORY_LABELS: Record<string, string> = {
   sale: 'Venda',
   cashback_used: 'Cashback Utilizado',

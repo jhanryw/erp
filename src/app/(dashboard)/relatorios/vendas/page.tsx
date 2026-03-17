@@ -9,6 +9,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import type { SaleStatus } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 async function getSalesData() {
   const supabase = createClient()
   const [salesRes, summaryRes] = await Promise.all([

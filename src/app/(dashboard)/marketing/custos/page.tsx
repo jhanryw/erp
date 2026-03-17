@@ -10,6 +10,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { DeleteCostButton } from './_components/delete-cost-button'
 
+export const dynamic = 'force-dynamic'
+
 const CATEGORY_LABELS: Record<string, string> = {
   paid_traffic: 'Tráfego Pago',
   influencers: 'Influenciadores',

@@ -8,6 +8,8 @@ import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
+export const dynamic = 'force-dynamic'
+
 const ORIGIN_LABELS: Record<string, string> = {
   instagram: 'Instagram',
   referral: 'Indicação',

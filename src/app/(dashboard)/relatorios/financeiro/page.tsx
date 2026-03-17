@@ -7,6 +7,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
+export const dynamic = 'force-dynamic'
+
 async function getFinancialData() {
   const supabase = createClient()
   const [monthlyRes, entriesRes] = await Promise.all([

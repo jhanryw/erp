@@ -9,6 +9,8 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
+export const dynamic = 'force-dynamic'
+
 async function getStockData() {
   const supabase = createClient()
   const [stockItems, summary] = await Promise.all([

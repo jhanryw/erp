@@ -12,6 +12,8 @@ import { formatDate } from '@/lib/utils/date'
 import { formatCPF } from '@/lib/utils/cpf'
 import type { RfmSegment, SaleStatus, CashbackTransactionType, CashbackStatus } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 const ORIGIN_LABELS: Record<string, string> = {
   instagram: 'Instagram', referral: 'Indicação', paid_traffic: 'Tráfego Pago',
   website: 'Site', store: 'Loja', other: 'Outro',

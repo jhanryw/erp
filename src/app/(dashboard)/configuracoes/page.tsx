@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, ShieldAlert } from 'lucide-react'
 
+export const dynamic = 'force-dynamic'
+
 const SETTINGS_SECTIONS = [
   { href: '/configuracoes/usuarios', icon: Users, title: 'Usuários', description: 'Gerenciar acesso e perfis da equipe interna.' },
   { href: '/configuracoes/categorias', icon: Tag, title: 'Categorias', description: 'Categorias e subcategorias de produtos.' },

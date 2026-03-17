@@ -10,6 +10,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import type { CashbackStatus, CashbackTransactionType, Tables } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 type CashbackRow = Pick<Tables<'cashback_transactions'>, 'type' | 'status' | 'amount'>
 
 const STATUS_CONFIG: Record<CashbackStatus, { label: string; variant: any }> = {

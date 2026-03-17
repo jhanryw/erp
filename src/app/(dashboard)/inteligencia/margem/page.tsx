@@ -6,6 +6,8 @@ import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
 
+export const dynamic = 'force-dynamic'
+
 async function getMarginData() {
   const supabase = createClient()
   const { data } = await supabase

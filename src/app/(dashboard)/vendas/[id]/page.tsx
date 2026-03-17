@@ -15,6 +15,8 @@ import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
 import type { SaleStatus } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 const STATUS_STEPS: SaleStatus[] = ['pending', 'paid', 'shipped', 'delivered']
 
 const STATUS_LABELS: Record<string, string> = {

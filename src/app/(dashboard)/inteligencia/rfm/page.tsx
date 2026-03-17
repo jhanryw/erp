@@ -8,6 +8,8 @@ import { RfmBadge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import type { RfmSegment } from '@/types/database.types'
 
+export const dynamic = 'force-dynamic'
+
 async function getRfmData() {
   const supabase = createClient()
   const { data } = await supabase
