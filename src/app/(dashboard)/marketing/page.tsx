@@ -48,6 +48,7 @@ export default async function MarketingPage() {
         </div>
         <div className="flex gap-2">
           <Link href="/marketing/campanhas"><Button variant="secondary" size="sm">Campanhas</Button></Link>
+          <Link href="/marketing/custos"><Button variant="secondary" size="sm">Ver Custos</Button></Link>
           <Link href="/marketing/custos/novo"><Button size="sm"><Plus className="w-4 h-4" />Lançar Custo</Button></Link>
         </div>
       </div>

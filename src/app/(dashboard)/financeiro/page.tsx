@@ -44,6 +44,7 @@ export default async function FinanceiroPage() {
         <div className="flex gap-2">
           <Link href="/financeiro/fluxo"><Button variant="secondary" size="sm">Fluxo de Caixa</Button></Link>
           <Link href="/financeiro/dre"><Button variant="secondary" size="sm">DRE Completo</Button></Link>
+          <Link href="/financeiro/lancamentos"><Button variant="secondary" size="sm">Ver Lançamentos</Button></Link>
           <Link href="/financeiro/lancamentos/novo"><Button size="sm"><DollarSign className="w-4 h-4" />Lançamento</Button></Link>
         </div>
       </div>

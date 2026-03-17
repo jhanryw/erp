@@ -12,6 +12,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
+import { CancelSaleButton } from './_components/cancel-sale-button'
 import type { SaleStatus } from '@/types/database.types'
 
 const STATUS_STEPS: SaleStatus[] = ['pending', 'paid', 'shipped', 'delivered']
@@ -82,7 +83,10 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
             </p>
           </div>
         </div>
-        {canReturn && <ReturnButton saleId={sale.id} />}
+        <div className="flex gap-2">
+          {canReturn && <ReturnButton saleId={sale.id} />}
+          {!isTerminal && <CancelSaleButton saleId={sale.id} />}
+        </div>
       </div>
 
       {/* Status Timeline */}
