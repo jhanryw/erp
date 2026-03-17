@@ -1,3 +1,5 @@
+'use client'
+
 import { cn } from '@/lib/utils/cn'
 import { Loader2 } from 'lucide-react'
 import { forwardRef } from 'react'

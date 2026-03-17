@@ -47,7 +47,7 @@ export default async function ProdutosPage() {
             icon={Package}
             title="Nenhum produto cadastrado"
             description="Cadastre o primeiro produto do catálogo."
-            action={{ label: 'Cadastrar produto', onClick: () => {} }}
+            action={{ label: 'Cadastrar produto', href: '/produtos/novo' }}
           />
         ) : (
           <>
@@ -71,7 +71,6 @@ export default async function ProdutosPage() {
                 {products.map((product) => (
                   <TableRow
                     key={product.id}
-                    onClick={() => {}}
                     className="group"
                   >
                     <TableCell>

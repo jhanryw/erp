@@ -1,3 +1,5 @@
+'use client'
+
 import { cn } from '@/lib/utils/cn'
 
 export function Table({ children, className }: { children: React.ReactNode; className?: string }) {

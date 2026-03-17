@@ -57,7 +57,7 @@ export default async function ClientesPage() {
             icon={Users}
             title="Nenhum cliente cadastrado"
             description="Cadastre o primeiro cliente."
-            action={{ label: 'Cadastrar cliente', onClick: () => {} }}
+            action={{ label: 'Cadastrar cliente', href: '/clientes/novo' }}
           />
         ) : (
           <>

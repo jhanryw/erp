@@ -56,7 +56,7 @@ export default async function VendasPage() {
             icon={ShoppingCart}
             title="Nenhuma venda registrada"
             description="Registre a primeira venda do sistema."
-            action={{ label: 'Nova venda', onClick: () => {} }}
+            action={{ label: 'Nova venda', href: '/vendas/nova' }}
           />
         ) : (
           <>

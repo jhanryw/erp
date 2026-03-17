@@ -1,5 +1,8 @@
+'use client'
+
 import { cn } from '@/lib/utils/cn'
 import type { LucideIcon } from 'lucide-react'
+import Link from 'next/link'
 import { Button } from './button'
 
 interface EmptyStateProps {
@@ -8,7 +11,7 @@ interface EmptyStateProps {
   description?: string
   action?: {
     label: string
-    onClick: () => void
+    href: string
   }
   className?: string
 }
@@ -24,9 +27,11 @@ export function EmptyState({ icon: Icon, title, description, action, className }
         <p className="text-sm text-text-secondary max-w-sm">{description}</p>
       )}
       {action && (
-        <Button className="mt-5" onClick={action.onClick} size="sm">
-          {action.label}
-        </Button>
+        <Link href={action.href}>
+          <Button className="mt-5" size="sm">
+            {action.label}
+          </Button>
+        </Link>
       )}
     </div>
   )
