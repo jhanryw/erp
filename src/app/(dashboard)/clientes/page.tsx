@@ -54,7 +54,7 @@ export default async function ClientesPage() {
       <Card>
         {customers.length === 0 ? (
           <EmptyState
-            icon={Users}
+            icon={<Users className="w-6 h-6 text-text-muted" />}
             title="Nenhum cliente cadastrado"
             description="Cadastre o primeiro cliente."
             action={{ label: 'Cadastrar cliente', href: '/clientes/novo' }}

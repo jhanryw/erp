@@ -1,12 +1,13 @@
 'use client'
 
 import { cn } from '@/lib/utils/cn'
-import type { LucideIcon } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from './button'
 
 interface EmptyStateProps {
-  icon: LucideIcon
+  /** Passe como JSX: icon={<Warehouse className="w-6 h-6 text-text-muted" />}
+   *  NÃO passe como referência de componente (icon={Warehouse}) — viola RSC boundary */
+  icon: React.ReactNode
   title: string
   description?: string
   action?: {
@@ -16,11 +17,11 @@ interface EmptyStateProps {
   className?: string
 }
 
-export function EmptyState({ icon: Icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
   return (
     <div className={cn('flex flex-col items-center justify-center py-16 px-6 text-center', className)}>
       <div className="w-12 h-12 rounded-2xl bg-bg-overlay flex items-center justify-center mb-4">
-        <Icon className="w-6 h-6 text-text-muted" />
+        {icon}
       </div>
       <h3 className="text-sm font-medium text-text-primary mb-1">{title}</h3>
       {description && (

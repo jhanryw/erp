@@ -75,7 +75,7 @@ export default async function AlertasPage() {
         </CardHeader>
         {criticos.length === 0 ? (
           <EmptyState
-            icon={AlertTriangle}
+            icon={<AlertTriangle className="w-6 h-6 text-text-muted" />}
             title="Nenhum alerta crítico"
             description="Todos os produtos estão acima do limite mínimo."
           />

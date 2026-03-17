@@ -58,7 +58,7 @@ export default async function MovimentacoesPage() {
       <Card>
         {lotes.length === 0 ? (
           <EmptyState
-            icon={ArrowDownToLine}
+            icon={<ArrowDownToLine className="w-6 h-6 text-text-muted" />}
             title="Nenhuma movimentação"
             description="Registre a primeira entrada de estoque."
           />
