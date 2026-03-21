@@ -8,6 +8,7 @@ import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
+import { DeleteProductButton } from './_components/delete-product-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +68,7 @@ export default async function ProdutosPage() {
                   <TableHead align="right">Preço</TableHead>
                   <TableHead align="right">Margem</TableHead>
                   <TableHead align="center">Status</TableHead>
+                  <TableHead align="center">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -130,6 +132,14 @@ export default async function ProdutosPage() {
                       <Badge variant={product.active ? 'success' : 'default'} size="sm">
                         {product.active ? 'Ativo' : 'Inativo'}
                       </Badge>
+                    </TableCell>
+                    <TableCell align="center">
+                      <div className="flex items-center justify-center gap-1">
+                        <Link href={`/produtos/${product.id}/editar`}>
+                          <Button variant="ghost" size="sm" className="text-xs px-2">Editar</Button>
+                        </Link>
+                        <DeleteProductButton id={product.id} />
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
