@@ -7,7 +7,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { productSchema, type ProductFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -15,7 +14,6 @@ import { Button } from '@/components/ui/button'
 
 export default function NovoProdutoPage() {
   const router = useRouter()
-  const supabase = createClient()
   const [categories, setCategories] = useState<any[]>([])
   const [suppliers, setSuppliers] = useState<any[]>([])
 
@@ -34,10 +32,8 @@ export default function NovoProdutoPage() {
   })
 
   useEffect(() => {
-    supabase.from('categories').select('id, name').eq('active', true).order('name')
-      .then(({ data }) => setCategories(data ?? []))
-    supabase.from('suppliers').select('id, name').eq('active', true).order('name')
-      .then(({ data }) => setSuppliers(data ?? []))
+    fetch('/api/categorias').then(r => r.json()).then(({ categories }) => setCategories(categories ?? []))
+    fetch('/api/fornecedores').then(r => r.json()).then(({ suppliers }) => setSuppliers(suppliers ?? []))
   }, [])
 
   const baseCost = Number(watch('base_cost')) || 0
