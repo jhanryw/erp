@@ -1188,3 +1188,170 @@ CREATE POLICY finance_admin ON finance_entries FOR ALL TO authenticated USING (c
 
 -- Parameters: apenas admin
 CREATE POLICY params_admin ON parameters FOR ALL TO authenticated USING (current_user_role() = 'admin');
+
+-- =============================================================================
+-- MIGRATION: SHIPPING MODULE
+-- =============================================================================
+
+-- ======================================
+-- SHIPPING ORIGINS
+-- ======================================
+CREATE TABLE shipping_origins (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  cep TEXT NOT NULL,
+  street TEXT NOT NULL,
+  number TEXT,
+  complement TEXT,
+  neighborhood TEXT NOT NULL,
+  city TEXT NOT NULL,
+  state CHAR(2) NOT NULL,
+  latitude NUMERIC(10,8) NOT NULL,
+  longitude NUMERIC(11,8) NOT NULL,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ======================================
+-- SHIPPING ZONES
+-- ======================================
+CREATE TABLE shipping_zones (
+  id SERIAL PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  state TEXT NOT NULL DEFAULT 'RN',
+  city TEXT,
+  neighborhoods_json JSONB DEFAULT '[]'::jsonb,
+  cep_ranges_json JSONB DEFAULT '[]'::jsonb,
+  min_km NUMERIC(6,2),
+  max_km NUMERIC(6,2),
+  color TEXT DEFAULT '#3b82f6',
+  priority INT DEFAULT 100,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(name)
+);
+
+-- ======================================
+-- SHIPPING RULES
+-- ======================================
+CREATE TABLE shipping_rules (
+  id SERIAL PRIMARY KEY,
+  zone_id INT NOT NULL REFERENCES shipping_zones(id) ON DELETE CASCADE,
+  rule_type TEXT NOT NULL,
+  client_price NUMERIC(10,2) NOT NULL,
+  internal_cost NUMERIC(10,2) NOT NULL,
+  estimated_hours INT DEFAULT 24,
+  free_shipping_min_order NUMERIC(10,2),
+  min_order_to_enable NUMERIC(10,2),
+  allow_pickup BOOLEAN DEFAULT FALSE,
+  allow_delivery BOOLEAN DEFAULT TRUE,
+  is_active BOOLEAN DEFAULT TRUE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- ======================================
+-- CUSTOMER ADDRESSES
+-- ======================================
+CREATE TABLE customer_addresses (
+  id SERIAL PRIMARY KEY,
+  customer_id INT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
+  cep TEXT NOT NULL,
+  street TEXT NOT NULL,
+  number TEXT NOT NULL,
+  complement TEXT,
+  neighborhood TEXT NOT NULL,
+  city TEXT NOT NULL,
+  state CHAR(2) NOT NULL,
+  reference TEXT,
+  latitude NUMERIC(10,8),
+  longitude NUMERIC(11,8),
+  geocode_source TEXT,
+  is_validated BOOLEAN DEFAULT FALSE,
+  is_default BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_customer_addresses_customer ON customer_addresses(customer_id);
+CREATE INDEX idx_customer_addresses_cep ON customer_addresses(cep);
+
+-- ======================================
+-- SHIPMENTS
+-- ======================================
+CREATE TABLE shipments (
+  id SERIAL PRIMARY KEY,
+  order_id INT NOT NULL UNIQUE REFERENCES sales(id),
+  customer_id INT NOT NULL REFERENCES customers(id),
+  address_id INT REFERENCES customer_addresses(id),
+  origin_id INT NOT NULL REFERENCES shipping_origins(id),
+  zone_id INT REFERENCES shipping_zones(id),
+  rule_id INT REFERENCES shipping_rules(id),
+  delivery_mode TEXT NOT NULL CHECK (delivery_mode IN ('pickup', 'delivery')),
+  distance_km NUMERIC(8,2),
+  client_shipping_price NUMERIC(10,2),
+  internal_shipping_cost_estimated NUMERIC(10,2),
+  internal_shipping_cost_real NUMERIC(10,2),
+  shipping_subsidy NUMERIC(10,2),
+  status TEXT DEFAULT 'aguardando_confirmacao',
+  courier_name TEXT,
+  courier_phone TEXT,
+  dispatched_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  pickup_at TIMESTAMPTZ,
+  notes TEXT,
+  proof_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_shipments_order ON shipments(order_id);
+CREATE INDEX idx_shipments_status ON shipments(status);
+CREATE INDEX idx_shipments_zone ON shipments(zone_id);
+CREATE INDEX idx_shipments_delivery_mode ON shipments(delivery_mode);
+
+-- ======================================
+-- SHIPMENT EVENTS
+-- ======================================
+CREATE TABLE shipment_events (
+  id SERIAL PRIMARY KEY,
+  shipment_id INT NOT NULL REFERENCES shipments(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  description TEXT,
+  created_by TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_shipment_events_shipment ON shipment_events(shipment_id);
+CREATE INDEX idx_shipment_events_status ON shipment_events(status);
+
+-- RLS Policies for Shipping
+CREATE POLICY shipping_origins_admin ON shipping_origins FOR ALL TO authenticated USING (current_user_role() = 'admin');
+CREATE POLICY shipping_zones_select ON shipping_zones FOR SELECT TO authenticated USING (TRUE);
+CREATE POLICY shipping_zones_write ON shipping_zones FOR ALL TO authenticated USING (current_user_role() = 'admin');
+CREATE POLICY shipping_rules_select ON shipping_rules FOR SELECT TO authenticated USING (TRUE);
+CREATE POLICY shipping_rules_write ON shipping_rules FOR ALL TO authenticated USING (current_user_role() = 'admin');
+
+CREATE POLICY customer_addresses_select ON customer_addresses FOR SELECT TO authenticated USING (
+  current_user_role() = 'admin' OR customer_id IN (
+    SELECT id FROM customers WHERE created_by = auth.uid()
+  )
+);
+CREATE POLICY customer_addresses_insert ON customer_addresses FOR INSERT TO authenticated WITH CHECK (
+  customer_id IN (SELECT id FROM customers WHERE created_by = auth.uid())
+);
+CREATE POLICY customer_addresses_update ON customer_addresses FOR UPDATE TO authenticated USING (
+  customer_id IN (SELECT id FROM customers WHERE created_by = auth.uid())
+);
+
+CREATE POLICY shipments_select_admin ON shipments FOR SELECT TO authenticated USING (current_user_role() = 'admin');
+CREATE POLICY shipments_select_seller ON shipments FOR SELECT TO authenticated USING (
+  order_id IN (SELECT id FROM sales WHERE seller_id = auth.uid())
+);
+CREATE POLICY shipments_insert ON shipments FOR INSERT TO authenticated WITH CHECK (TRUE);
+
+CREATE POLICY shipment_events_select ON shipment_events FOR SELECT TO authenticated USING (current_user_role() = 'admin');
+CREATE POLICY shipment_events_insert ON shipment_events FOR INSERT TO authenticated WITH CHECK (TRUE);
