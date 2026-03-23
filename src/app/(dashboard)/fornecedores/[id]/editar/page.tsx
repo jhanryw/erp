@@ -8,7 +8,6 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
@@ -45,52 +44,38 @@ export default function EditarFornecedorPage({ params }: { params: { id: string 
   })
 
   useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('suppliers')
-      .select('*')
-      .eq('id', Number(params.id))
-      .single()
-      .then(({ data: raw, error }) => {
-        const data = raw as any
-        if (error || !data) {
+    fetch(`/api/fornecedores/${params.id}`)
+      .then(r => r.json())
+      .then(({ supplier, error }) => {
+        if (error || !supplier) {
           toast.error('Fornecedor não encontrado')
           router.push('/fornecedores')
           return
         }
         reset({
-          name: data.name,
-          document: data.document ?? '',
-          phone: data.phone ?? '',
-          city: data.city ?? '',
-          state: data.state ?? '',
-          notes: data.notes ?? '',
-          active: data.active ?? true,
+          name: supplier.name ?? '',
+          document: supplier.document ?? '',
+          phone: supplier.phone ?? '',
+          city: supplier.city ?? '',
+          state: supplier.state ?? '',
+          notes: supplier.notes ?? '',
+          active: supplier.active ?? true,
         })
         setLoading(false)
       })
   }, [params.id, reset, router])
 
   async function onSubmit(data: SupplierEditForm) {
-    const supabase = createClient()
-    const { error } = await (supabase as any)
-      .from('suppliers')
-      .update({
-        name: data.name,
-        document: data.document || null,
-        phone: data.phone || null,
-        city: data.city || null,
-        state: data.state || null,
-        notes: data.notes || null,
-        active: data.active,
-      })
-      .eq('id', Number(params.id))
-
-    if (error) {
-      toast.error('Erro ao atualizar fornecedor', { description: error.message })
+    const res = await fetch(`/api/fornecedores/${params.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao atualizar fornecedor', { description: json.error })
       return
     }
-
     toast.success('Fornecedor atualizado!')
     router.push(`/fornecedores/${params.id}`)
   }

@@ -8,7 +8,6 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -63,50 +62,37 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
   const categories = entryType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
 
   useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('finance_entries')
-      .select('*')
-      .eq('id', Number(params.id))
-      .single()
-      .then(({ data: raw, error }) => {
-        const data = raw as any
-        if (error || !data) {
+    fetch(`/api/financeiro/lancamentos/${params.id}`)
+      .then(r => r.json())
+      .then(({ entry, error }) => {
+        if (error || !entry) {
           toast.error('Lançamento não encontrado')
           router.push('/financeiro/lancamentos')
           return
         }
         reset({
-          type: data.type,
-          category: data.category,
-          description: data.description,
-          amount: data.amount,
-          reference_date: data.reference_date,
-          notes: data.notes ?? '',
+          type: entry.type,
+          category: entry.category,
+          description: entry.description,
+          amount: entry.amount,
+          reference_date: entry.reference_date,
+          notes: entry.notes ?? '',
         })
         setLoading(false)
       })
   }, [params.id, reset, router])
 
   async function onSubmit(data: FinanceEntryForm) {
-    const supabase = createClient()
-    const { error } = await (supabase as any)
-      .from('finance_entries')
-      .update({
-        type: data.type,
-        category: data.category,
-        description: data.description,
-        amount: data.amount,
-        reference_date: data.reference_date,
-        notes: data.notes || null,
-      })
-      .eq('id', Number(params.id))
-
-    if (error) {
-      toast.error('Erro ao atualizar lançamento', { description: error.message })
+    const res = await fetch(`/api/financeiro/lancamentos/${params.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao atualizar lançamento', { description: json.error })
       return
     }
-
     toast.success('Lançamento atualizado com sucesso!')
     router.push('/financeiro/lancamentos')
   }

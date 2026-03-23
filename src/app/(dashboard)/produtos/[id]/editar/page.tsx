@@ -7,7 +7,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { productSchema, type ProductFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -34,58 +33,51 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const margin = basePrice > 0 ? ((basePrice - baseCost) / basePrice) * 100 : 0
 
   useEffect(() => {
-    const supabase = createClient()
-
     Promise.all([
-      supabase.from('categories').select('id, name').eq('active', true).order('name'),
-      supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
-      supabase.from('products').select('*').eq('id', Number(params.id)).single(),
-    ]).then(([{ data: cats }, { data: sups }, { data: raw, error }]) => {
-      setCategories(cats ?? [])
-      setSuppliers(sups ?? [])
+      fetch('/api/categorias').then(r => r.json()),
+      fetch('/api/fornecedores').then(r => r.json()),
+      fetch(`/api/produtos/${params.id}`).then(r => r.json()),
+    ]).then(([catsJson, supsJson, { product, error }]) => {
+      setCategories(catsJson.categories ?? [])
+      setSuppliers(supsJson.suppliers ?? [])
 
-      const data = raw as any
-      if (error || !data) {
+      if (error || !product) {
         toast.error('Produto não encontrado')
         router.push('/produtos')
         return
       }
 
       reset({
-        name: data.name,
-        sku: data.sku,
-        category_id: data.category_id,
-        supplier_id: data.supplier_id ?? undefined,
-        origin: data.origin,
-        base_cost: data.base_cost,
-        base_price: data.base_price,
-        active: data.active,
+        name: product.name ?? '',
+        sku: product.sku ?? '',
+        category_id: product.category_id,
+        supplier_id: product.supplier_id ?? undefined,
+        origin: product.origin ?? 'third_party',
+        base_cost: product.base_cost ?? 0,
+        base_price: product.base_price ?? 0,
+        active: product.active ?? true,
       })
       setLoading(false)
     })
   }, [params.id, reset, router])
 
   async function onSubmit(data: ProductFormData) {
-    const supabase = createClient()
-    const { error } = await (supabase as any)
-      .from('products')
-      .update({
-        name: data.name,
-        sku: data.sku,
-        category_id: data.category_id,
-        supplier_id: data.supplier_id || null,
-        origin: data.origin,
-        base_cost: data.base_cost,
-        base_price: data.base_price,
-        active: data.active,
-      })
-      .eq('id', Number(params.id))
-
-    if (error) {
-      toast.error('Erro ao atualizar produto', { description: error.message })
+    const res = await fetch(`/api/produtos/${params.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...data,
+        category_id: Number(data.category_id),
+        supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
+        base_cost: Number(data.base_cost),
+        base_price: Number(data.base_price),
+      }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao atualizar produto', { description: json.error })
       return
     }
-
     toast.success('Produto atualizado!')
     router.push(`/produtos/${params.id}`)
   }

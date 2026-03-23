@@ -14,6 +14,13 @@ const schema = z.object({
   active: z.boolean().default(true),
 })
 
+export async function GET() {
+  const admin = createAdminClient()
+  const { data, error } = (await admin.from('suppliers').select('id, name').eq('active', true).order('name')) as unknown as { data: { id: number; name: string }[] | null; error: any }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ suppliers: data ?? [] })
+}
+
 export async function POST(request: Request) {
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }

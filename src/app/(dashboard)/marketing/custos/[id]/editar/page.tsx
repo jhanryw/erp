@@ -7,7 +7,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { marketingCostSchema, type MarketingCostFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -41,52 +40,38 @@ export default function EditarCustoMarketingPage({ params }: { params: { id: str
   })
 
   useEffect(() => {
-    const supabase = createClient()
-    supabase
-      .from('marketing_costs')
-      .select('*')
-      .eq('id', Number(params.id))
-      .single()
-      .then(({ data: raw, error }) => {
-        const data = raw as any
-        if (error || !data) {
+    fetch(`/api/marketing/custos/${params.id}`)
+      .then(r => r.json())
+      .then(({ cost, error }) => {
+        if (error || !cost) {
           toast.error('Custo não encontrado')
           router.push('/marketing/custos')
           return
         }
         reset({
-          category: data.category,
-          description: data.description,
-          amount: data.amount,
-          cost_date: data.cost_date,
-          is_recurring: data.is_recurring ?? false,
-          campaign_id: data.campaign_id ?? undefined,
-          notes: data.notes ?? '',
+          category: cost.category,
+          description: cost.description,
+          amount: cost.amount,
+          cost_date: cost.cost_date,
+          is_recurring: cost.is_recurring ?? false,
+          campaign_id: cost.campaign_id ?? undefined,
+          notes: cost.notes ?? '',
         })
         setLoading(false)
       })
   }, [params.id, reset, router])
 
   async function onSubmit(data: MarketingCostFormData) {
-    const supabase = createClient()
-    const { error } = await (supabase as any)
-      .from('marketing_costs')
-      .update({
-        category: data.category,
-        description: data.description,
-        amount: data.amount,
-        cost_date: data.cost_date,
-        is_recurring: data.is_recurring,
-        campaign_id: data.campaign_id || null,
-        notes: data.notes || null,
-      })
-      .eq('id', Number(params.id))
-
-    if (error) {
-      toast.error('Erro ao atualizar custo', { description: error.message })
+    const res = await fetch(`/api/marketing/custos/${params.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, campaign_id: data.campaign_id || null, notes: data.notes || null }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao atualizar custo', { description: json.error })
       return
     }
-
     toast.success('Custo de marketing atualizado!')
     router.push('/marketing/custos')
   }
