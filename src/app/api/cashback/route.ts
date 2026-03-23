@@ -40,15 +40,15 @@ export async function POST(request: Request) {
     .maybeSingle() as unknown as { data: { id: number } | null }
 
   if (existing) {
-    const { error } = await admin
+    const { error } = (await (admin as any)
       .from('cashback_config')
-      .update({ ...parsed.data, updated_by: null } as any)
-      .eq('id', existing.id)
+      .update({ ...parsed.data, updated_by: null })
+      .eq('id', existing.id)) as { error: any }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   } else {
-    const { error } = await admin
+    const { error } = (await (admin as any)
       .from('cashback_config')
-      .insert({ ...parsed.data, updated_by: null } as any)
+      .insert({ ...parsed.data, updated_by: null })) as { error: any }
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   }
 
