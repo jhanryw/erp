@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const zoneId = searchParams.get('zone_id')
 
-    let query = admin.from('shipping_rules').select('*')
+    let query = (admin as any).from('shipping_rules').select('*')
 
     if (zoneId) {
       query = query.eq('zone_id', parseInt(zoneId))
@@ -51,7 +51,7 @@ export async function POST(request: Request) {
 
     const admin = createAdminClient()
 
-    const { data: rule, error } = await admin
+    const { data: rule, error } = await (admin as any)
       .from('shipping_rules')
       .insert({
         zone_id: parsed.data.zone_id,

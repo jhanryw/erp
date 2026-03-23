@@ -15,7 +15,7 @@ export async function calculateShipping(
     const admin = createAdminClient()
 
     // 1. Get origin
-    const { data: origins } = await admin
+    const { data: origins } = await (admin as any)
       .from('shipping_origins')
       .select('*')
       .eq('is_active', true)
@@ -31,7 +31,7 @@ export async function calculateShipping(
     const distance = calculateDistance(origin.latitude, origin.longitude, latitude, longitude)
 
     // 3. Find matching zone/rule by priority: CEP → Neighborhood → Distance
-    const { data: zones } = await admin
+    const { data: zones } = await (admin as any)
       .from('shipping_zones')
       .select('*, shipping_rules(*)')
       .eq('is_active', true)

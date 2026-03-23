@@ -46,7 +46,7 @@ export function TableHead({
   className,
   align = 'left',
 }: {
-  children: React.ReactNode
+  children?: React.ReactNode
   className?: string
   align?: 'left' | 'center' | 'right'
 }) {
@@ -69,14 +69,17 @@ export function TableCell({
   className,
   align = 'left',
   muted,
+  colSpan,
 }: {
-  children: React.ReactNode
+  children?: React.ReactNode
   className?: string
   align?: 'left' | 'center' | 'right'
   muted?: boolean
+  colSpan?: number
 }) {
   return (
     <td
+      colSpan={colSpan}
       className={cn(
         'px-4 py-3.5',
         align === 'center' && 'text-center',

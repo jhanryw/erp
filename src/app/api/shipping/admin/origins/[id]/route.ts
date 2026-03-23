@@ -22,7 +22,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
   try {
     const admin = createAdminClient()
 
-    const { data: origin, error } = await admin
+    const { data: origin, error } = await (admin as any)
       .from('shipping_origins')
       .select('*')
       .eq('id', parseInt(params.id))
@@ -49,7 +49,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
     const admin = createAdminClient()
 
-    const { data: origin, error } = await admin
+    const { data: origin, error } = await (admin as any)
       .from('shipping_origins')
       .update(parsed.data)
       .eq('id', parseInt(params.id))

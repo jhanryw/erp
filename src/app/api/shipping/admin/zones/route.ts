@@ -21,7 +21,7 @@ export async function GET() {
   try {
     const admin = createAdminClient()
 
-    const { data: zones, error } = await admin
+    const { data: zones, error } = await (admin as any)
       .from('shipping_zones')
       .select('*, shipping_rules(*)')
       .order('priority', { ascending: true })
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
 
     const admin = createAdminClient()
 
-    const { data: zone, error } = await admin
+    const { data: zone, error } = await (admin as any)
       .from('shipping_zones')
       .insert({
         name: parsed.data.name,

@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -9,6 +9,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/variacoes', icon: Grid3X3, title: 'Variações', description: 'Tipos e valores: cor, tamanho, modelo, tecido.' },
   { href: '/configuracoes/colecoes', icon: BookOpen, title: 'Coleções', description: 'Coleções e estações do catálogo.' },
   { href: '/cashback/configuracao', icon: Gift, title: 'Regra de Cashback', description: 'Taxa, prazo de liberação, expiração e valor mínimo.' },
+  { href: '/configuracoes/frete', icon: Truck, title: 'Configuração de Frete', description: 'Origem logística, zonas de entrega, preços e regras de frete grátis.' },
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
 ]
 

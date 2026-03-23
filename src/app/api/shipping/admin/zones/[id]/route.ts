@@ -22,7 +22,7 @@ export async function GET(request: Request, { params }: { params: { id: string }
   try {
     const admin = createAdminClient()
 
-    const { data: zone, error } = await admin
+    const { data: zone, error } = await (admin as any)
       .from('shipping_zones')
       .select('*, shipping_rules(*)')
       .eq('id', parseInt(params.id))
@@ -49,7 +49,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
     const admin = createAdminClient()
 
-    const { data: zone, error } = await admin
+    const { data: zone, error } = await (admin as any)
       .from('shipping_zones')
       .update(parsed.data)
       .eq('id', parseInt(params.id))
@@ -70,7 +70,7 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
   try {
     const admin = createAdminClient()
 
-    const { error } = await admin.from('shipping_zones').delete().eq('id', parseInt(params.id))
+    const { error } = await (admin as any).from('shipping_zones').delete().eq('id', parseInt(params.id))
 
     if (error) throw error
 
