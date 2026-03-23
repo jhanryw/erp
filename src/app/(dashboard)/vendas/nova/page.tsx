@@ -14,7 +14,6 @@ import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
-import { useAuth } from '@/hooks/useAuth'
 
 // Steps do fluxo
 const STEPS = ['Cliente', 'Itens', 'Pagamento', 'Confirmar']
@@ -26,7 +25,6 @@ export default function NovaVendaPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
   const [cashbackBalance, setCashbackBalance] = useState(0)
   const router = useRouter()
-  const { user } = useAuth()
   const supabase = createClient()
 
   const debouncedCustomer = useDebounce(customerSearch, 300)
@@ -124,55 +122,20 @@ export default function NovaVendaPage() {
   const total = Math.max(0, subtotal - discountAmount - cashbackUsed + shippingCharged)
 
   async function onSubmit(data: SaleFormData) {
-    if (!user) return
-
-    // Calcular totais
-    const subtotalCalc = data.items.reduce(
-      (s, i) => s + i.unit_price * i.quantity - i.discount_amount,
-      0
-    )
-
-    const { data: sale, error } = await supabase
-      .from('sales')
-      .insert({
-        customer_id: data.customer_id,
-        seller_id: user.id,
-        status: 'paid',
-        subtotal: subtotalCalc,
-        discount_amount: data.discount_amount ?? 0,
-        cashback_used: data.cashback_used ?? 0,
-        shipping_charged: data.shipping_charged ?? 0,
-        total: Math.max(0, subtotalCalc - (data.discount_amount ?? 0) - (data.cashback_used ?? 0) + (data.shipping_charged ?? 0)),
-        payment_method: data.payment_method,
-        sale_origin: data.sale_origin,
-        notes: data.notes,
-        sale_date: new Date().toISOString().split('T')[0],
-      } as any)
-      .select('id, sale_number')
-      .single() as unknown as { data: { id: string, sale_number: string } | null, error: any }
-
-    if (error || !sale) {
-      toast.error('Erro ao registrar venda', { description: error?.message })
+    const res = await fetch('/api/vendas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao registrar venda', { description: json.error })
       return
     }
-
-    // Inserir itens
-    const itemsPayload = data.items.map((item) => ({
-      sale_id: sale.id,
-      product_variation_id: item.product_variation_id,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      unit_cost: item.unit_cost,
-      discount_amount: item.discount_amount ?? 0,
-      total_price: item.unit_price * item.quantity - (item.discount_amount ?? 0),
-    }))
-
-    await supabase.from('sale_items').insert(itemsPayload as any)
-
     toast.success('Venda registrada!', {
-      description: `Pedido ${sale.sale_number} criado com sucesso.`,
+      description: `Pedido ${json.sale.sale_number} criado com sucesso.`,
     })
-    router.push(`/vendas/${sale.id}`)
+    router.push(`/vendas/${json.sale.id}`)
   }
 
   return (

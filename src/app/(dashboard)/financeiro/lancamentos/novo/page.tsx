@@ -7,8 +7,6 @@ import { z } from 'zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
-import { useAuth } from '@/hooks/useAuth'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -48,8 +46,6 @@ const EXPENSE_CATEGORIES = [
 
 export default function NovoLancamentoPage() {
   const router = useRouter()
-  const { user } = useAuth()
-  const supabase = createClient()
 
   const {
     register,
@@ -68,19 +64,16 @@ export default function NovoLancamentoPage() {
   const categories = entryType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
 
   async function onSubmit(data: FinanceEntryForm) {
-    const { error } = await supabase
-      .from('finance_entries')
-      .insert({
-        ...data,
-        notes: data.notes || null,
-        created_by: user?.id ?? '00000000-0000-0000-0000-000000000001',
-      } as any)
-
-    if (error) {
-      toast.error('Erro ao registrar lançamento', { description: error.message })
+    const res = await fetch('/api/financeiro/lancamentos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, notes: data.notes || null }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao registrar lançamento', { description: json.error })
       return
     }
-
     toast.success('Lançamento registrado com sucesso!')
     router.push('/financeiro')
   }

@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 
@@ -6,20 +5,6 @@ export async function POST(
   _request: Request,
   { params }: { params: { id: string } }
 ) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { data: profile } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', user.id)
-    .single() as unknown as { data: { role: string } | null }
-
-  if (profile?.role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
-
   const saleId = Number(params.id)
   const admin = createAdminClient()
 
@@ -64,7 +49,6 @@ export async function POST(
     amount: sale.total,
     reference_date: new Date().toISOString().slice(0, 10),
     sale_id: saleId,
-    created_by: user.id,
   } as any)
 
   return NextResponse.json({ success: true })

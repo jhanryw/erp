@@ -45,24 +45,24 @@ export default function NovoProdutoPage() {
   const margin = basePrice > 0 ? ((basePrice - baseCost) / basePrice) * 100 : 0
 
   async function onSubmit(data: ProductFormData) {
-    const { data: product, error } = await supabase
-      .from('products')
-      .insert({
+    const res = await fetch('/api/produtos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         ...data,
-        supplier_id: data.supplier_id || null,
-        subcategory_id: null,
-        collection_id: null,
-      } as any)
-      .select('id')
-      .single() as unknown as { data: { id: number } | null; error: any }
-
-    if (error) {
-      toast.error('Erro ao cadastrar produto', { description: error.message })
+        category_id: Number(data.category_id),
+        supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
+        base_cost: Number(data.base_cost),
+        base_price: Number(data.base_price),
+      }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao cadastrar produto', { description: json.error })
       return
     }
-
     toast.success('Produto cadastrado com sucesso!')
-    router.push(`/produtos/${product!.id}`)
+    router.push(`/produtos/${json.product.id}`)
   }
 
   return (

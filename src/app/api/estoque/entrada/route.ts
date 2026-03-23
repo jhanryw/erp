@@ -1,18 +1,8 @@
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { stockLotSchema } from '@/lib/validators'
 
 export async function POST(request: Request) {
-  const supabase = createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
   const body = await request.json()
   const parsed = stockLotSchema.safeParse(body)
 
@@ -53,7 +43,6 @@ export async function POST(request: Request) {
       cost_per_unit,
       entry_date,
       notes: notes ?? null,
-      created_by: user.id,
     } as any)
     .select()
     .single() as unknown as { data: { id: string } | null, error: any }
@@ -99,7 +88,6 @@ export async function POST(request: Request) {
     amount: total_lot_cost,
     reference_date: entry_date,
     stock_lot_id: lot!.id,
-    created_by: user.id,
   } as any)
 
   return NextResponse.json({

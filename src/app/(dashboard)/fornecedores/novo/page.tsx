@@ -6,7 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
 import { supplierSchema, type SupplierFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -19,7 +18,6 @@ const BRAZIL_STATES = [
 
 export default function NovoFornecedorPage() {
   const router = useRouter()
-  const supabase = createClient()
 
   const {
     register,
@@ -31,28 +29,18 @@ export default function NovoFornecedorPage() {
   })
 
   async function onSubmit(data: SupplierFormData) {
-    const payload = {
-      ...data,
-      document: data.document || null,
-      phone: data.phone || null,
-      city: data.city || null,
-      state: data.state || null,
-      notes: data.notes || null,
-    }
-
-    const { data: supplier, error } = await supabase
-      .from('suppliers')
-      .insert(payload as any)
-      .select('id')
-      .single() as unknown as { data: { id: number } | null; error: any }
-
-    if (error) {
-      toast.error('Erro ao cadastrar fornecedor', { description: error.message })
+    const res = await fetch('/api/fornecedores', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao cadastrar fornecedor', { description: json.error })
       return
     }
-
     toast.success('Fornecedor cadastrado com sucesso!')
-    router.push(`/fornecedores/${supplier!.id}`)
+    router.push(`/fornecedores/${json.supplier.id}`)
   }
 
   return (

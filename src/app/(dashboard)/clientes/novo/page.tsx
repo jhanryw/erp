@@ -6,10 +6,8 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import { customerSchema, type CustomerFormData } from '@/lib/validators'
 import { formatCPF } from '@/lib/utils/cpf'
-import { useAuth } from '@/hooks/useAuth'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -17,8 +15,6 @@ import { useState } from 'react'
 
 export default function NovoClientePage() {
   const router = useRouter()
-  const { user } = useAuth()
-  const supabase = createClient()
   const [cpfDisplay, setCpfDisplay] = useState('')
 
   const {
@@ -31,25 +27,22 @@ export default function NovoClientePage() {
   })
 
   async function onSubmit(data: CustomerFormData) {
-    if (!user) return
-
-    const { data: customer, error } = await supabase
-      .from('customers')
-      .insert({ ...data, created_by: user.id } as any)
-      .select('id')
-      .single() as unknown as { data: { id: string } | null, error: any }
-
-    if (error) {
-      if (error.code === '23505') {
+    const res = await fetch('/api/clientes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      if (json.error === 'CPF já cadastrado.') {
         toast.error('CPF já cadastrado')
       } else {
-        toast.error('Erro ao cadastrar cliente', { description: error.message })
+        toast.error('Erro ao cadastrar cliente', { description: json.error })
       }
       return
     }
-
     toast.success('Cliente cadastrado com sucesso!')
-    router.push(`/clientes/${customer!.id}`)
+    router.push(`/clientes/${json.customer.id}`)
   }
 
   function handleCPFChange(e: React.ChangeEvent<HTMLInputElement>) {

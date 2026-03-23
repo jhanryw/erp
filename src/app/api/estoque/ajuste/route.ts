@@ -1,4 +1,3 @@
-import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -11,20 +10,6 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-
-  const { data: profile } = await supabase
-    .from('users')
-    .select('role')
-    .eq('id', user.id)
-    .single() as unknown as { data: { role: string } | null }
-
-  if (profile?.role !== 'admin') {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
-  }
-
   const body = await request.json()
   const parsed = schema.safeParse(body)
   if (!parsed.success) {
@@ -73,7 +58,6 @@ export async function POST(request: Request) {
       amount: parseFloat((Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)),
       reference_date: new Date().toISOString().slice(0, 10),
       notes: notes ?? null,
-      created_by: user.id,
     } as any)
   }
 

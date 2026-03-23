@@ -6,8 +6,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
-import { useAuth } from '@/hooks/useAuth'
 import { marketingCostSchema, type MarketingCostFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
@@ -30,8 +28,6 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function NovoCustoMarketingPage() {
   const router = useRouter()
-  const { user } = useAuth()
-  const supabase = createClient()
 
   const {
     register,
@@ -46,20 +42,16 @@ export default function NovoCustoMarketingPage() {
   })
 
   async function onSubmit(data: MarketingCostFormData) {
-    const { error } = await supabase
-      .from('marketing_costs')
-      .insert({
-        ...data,
-        campaign_id: data.campaign_id || null,
-        notes: data.notes || null,
-        created_by: user?.id ?? '00000000-0000-0000-0000-000000000001',
-      } as any)
-
-    if (error) {
-      toast.error('Erro ao registrar custo', { description: error.message })
+    const res = await fetch('/api/marketing/custos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...data, campaign_id: data.campaign_id || null, notes: data.notes || null }),
+    })
+    const json = await res.json()
+    if (!res.ok) {
+      toast.error('Erro ao registrar custo', { description: json.error })
       return
     }
-
     toast.success('Custo de marketing registrado!')
     router.push('/marketing')
   }
