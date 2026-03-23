@@ -1,7 +1,5 @@
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/server'
-import { redirect } from 'next/navigation'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, ShieldAlert } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,17 +12,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
 ]
 
-async function checkAdmin() {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single() as unknown as { data: { role: string } | null, error: any }
-  if (profile?.role !== 'admin') redirect('/?error=permission_denied')
-}
-
 export default async function ConfiguracoesPage() {
-  await checkAdmin()
-
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">
@@ -33,11 +21,6 @@ export default async function ConfiguracoesPage() {
           <h2 className="text-lg font-semibold text-text-primary">Configurações</h2>
           <p className="text-sm text-text-muted">Parâmetros e gestão do sistema</p>
         </div>
-      </div>
-
-      <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-brand/10 border border-brand/20">
-        <ShieldAlert className="w-4 h-4 text-brand flex-shrink-0" />
-        <p className="text-xs text-brand">Acesso restrito a administradores. Alterações impactam todo o sistema.</p>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
