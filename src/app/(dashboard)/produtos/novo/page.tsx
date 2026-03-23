@@ -62,6 +62,7 @@ export default function NovoProdutoPage() {
       return
     }
     toast.success('Produto cadastrado com sucesso!')
+    router.refresh()
     router.push(`/produtos/${json.product.id}`)
   }
 

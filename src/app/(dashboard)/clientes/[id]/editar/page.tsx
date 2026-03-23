@@ -66,6 +66,7 @@ export default function EditarClientePage({ params }: { params: { id: string } }
       return
     }
     toast.success('Cliente atualizado!')
+    router.refresh()
     router.push(`/clientes/${params.id}`)
   }
 

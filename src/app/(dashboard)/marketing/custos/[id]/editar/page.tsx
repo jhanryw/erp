@@ -73,6 +73,7 @@ export default function EditarCustoMarketingPage({ params }: { params: { id: str
       return
     }
     toast.success('Custo de marketing atualizado!')
+    router.refresh()
     router.push('/marketing/custos')
   }
 

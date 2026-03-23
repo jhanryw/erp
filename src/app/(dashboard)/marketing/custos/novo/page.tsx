@@ -53,6 +53,7 @@ export default function NovoCustoMarketingPage() {
       return
     }
     toast.success('Custo de marketing registrado!')
+    router.refresh()
     router.push('/marketing')
   }
 

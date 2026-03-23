@@ -94,6 +94,7 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
       return
     }
     toast.success('Lançamento atualizado com sucesso!')
+    router.refresh()
     router.push('/financeiro/lancamentos')
   }
 

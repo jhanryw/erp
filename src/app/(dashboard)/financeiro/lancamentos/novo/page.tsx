@@ -75,6 +75,7 @@ export default function NovoLancamentoPage() {
       return
     }
     toast.success('Lançamento registrado com sucesso!')
+    router.refresh()
     router.push('/financeiro')
   }
 

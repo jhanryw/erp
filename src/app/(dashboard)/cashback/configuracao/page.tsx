@@ -60,6 +60,7 @@ export default function CashbackConfiguracaoPage() {
       return
     }
     toast.success('Configuração salva com sucesso!')
+    router.refresh()
     router.push('/cashback')
   }
 

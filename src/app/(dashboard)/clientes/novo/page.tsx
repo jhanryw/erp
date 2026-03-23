@@ -42,6 +42,7 @@ export default function NovoClientePage() {
       return
     }
     toast.success('Cliente cadastrado com sucesso!')
+    router.refresh()
     router.push(`/clientes/${json.customer.id}`)
   }
 

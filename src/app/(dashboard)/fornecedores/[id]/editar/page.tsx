@@ -77,6 +77,7 @@ export default function EditarFornecedorPage({ params }: { params: { id: string 
       return
     }
     toast.success('Fornecedor atualizado!')
+    router.refresh()
     router.push(`/fornecedores/${params.id}`)
   }
 

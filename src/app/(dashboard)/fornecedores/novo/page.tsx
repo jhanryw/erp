@@ -40,6 +40,7 @@ export default function NovoFornecedorPage() {
       return
     }
     toast.success('Fornecedor cadastrado com sucesso!')
+    router.refresh()
     router.push(`/fornecedores/${json.supplier.id}`)
   }
 
