@@ -1,38 +1,77 @@
-import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { Plus, Warehouse, AlertTriangle, Package, DollarSign } from 'lucide-react'
+import {
+  Plus,
+  Warehouse,
+  AlertTriangle,
+  Package,
+  DollarSign,
+} from 'lucide-react'
+
+import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader } from '@/components/ui/card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
 export const dynamic = 'force-dynamic'
 
+type StockStatusRow = {
+  product_name: string
+  sku: string
+  current_qty: number | null
+  avg_cost: number | null
+  stock_value_at_cost: number | null
+  stock_value_at_price: number | null
+  last_entry_date: string | null
+}
+
 async function getStockData() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
+
   const [stockItems, summary] = await Promise.all([
     supabase
       .from('mv_stock_status')
       .select('*')
       .order('current_qty', { ascending: true })
-      .limit(50) as unknown as Promise<{ data: any[] | null, error: any }>,
+      .limit(50),
     supabase
       .from('mv_stock_status')
-      .select('current_qty, stock_value_at_cost, stock_value_at_price') as unknown as Promise<{ data: any[] | null, error: any }>,
+      .select('current_qty, stock_value_at_cost, stock_value_at_price'),
   ])
 
-  const items = stockItems.data ?? []
-  const all = summary.data ?? []
+  if (stockItems.error) {
+    console.error('Erro ao listar estoque:', stockItems.error.message)
+  }
+
+  if (summary.error) {
+    console.error('Erro ao resumir estoque:', summary.error.message)
+  }
+
+  const items = (stockItems.data ?? []) as StockStatusRow[]
+  const all = (summary.data ?? []) as StockStatusRow[]
 
   return {
     items,
-    totalQty: all.reduce((s, r) => s + (r.current_qty ?? 0), 0),
-    totalCostValue: all.reduce((s, r) => s + (r.stock_value_at_cost ?? 0), 0),
-    totalSaleValue: all.reduce((s, r) => s + (r.stock_value_at_price ?? 0), 0),
-    alertCount: all.filter((r) => r.current_qty <= 3).length,
+    totalQty: all.reduce((s, r) => s + Number(r.current_qty ?? 0), 0),
+    totalCostValue: all.reduce(
+      (s, r) => s + Number(r.stock_value_at_cost ?? 0),
+      0
+    ),
+    totalSaleValue: all.reduce(
+      (s, r) => s + Number(r.stock_value_at_price ?? 0),
+      0
+    ),
+    alertCount: all.filter((r) => Number(r.current_qty ?? 0) <= 3).length,
   }
 }
 
@@ -40,132 +79,118 @@ export default async function EstoquePage() {
   const data = await getStockData()
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">Estoque</h2>
-          <p className="text-sm text-text-muted">Posição atual</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Estoque</h1>
+          <p className="text-sm text-muted-foreground">Posição atual</p>
         </div>
-        <Link href="/estoque/entrada">
-          <Button size="sm">
-            <Plus className="w-4 h-4" />
+
+        <Button asChild>
+          <Link href="/estoque/entrada">
+            <Plus className="mr-2 h-4 w-4" />
             Registrar Entrada
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </div>
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title="Total em Estoque"
+          title="Quantidade Total"
           value={formatNumber(data.totalQty)}
-          subtitle="unidades"
-          icon={<Package className="w-4 h-4" />}
+          icon={Warehouse}
         />
         <StatCard
-          title="Valor a Custo"
+          title="Valor em Custo"
           value={formatCurrency(data.totalCostValue)}
-          subtitle="imobilizado"
-          icon={<Warehouse className="w-4 h-4" />}
+          icon={DollarSign}
         />
         <StatCard
-          title="Valor a Preço"
+          title="Valor em Venda"
           value={formatCurrency(data.totalSaleValue)}
-          subtitle="potencial de venda"
-          icon={<DollarSign className="w-4 h-4" />}
+          icon={Package}
         />
         <StatCard
-          title="Alertas"
-          value={data.alertCount}
-          subtitle="produtos com estoque baixo"
-          icon={<AlertTriangle className="w-4 h-4" />}
+          title="Alertas de Estoque"
+          value={formatNumber(data.alertCount)}
+          icon={AlertTriangle}
           valueClassName={data.alertCount > 0 ? 'text-warning' : undefined}
         />
       </div>
 
-      {/* Links rápidos */}
-      <div className="flex gap-3">
-        <Link href="/estoque/movimentacoes">
-          <Button variant="secondary" size="sm">Ver Movimentações</Button>
-        </Link>
-        <Link href="/estoque/alertas">
-          <Button variant="secondary" size="sm">
-            {data.alertCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-warning mr-1" />
-            )}
+      <div className="flex flex-wrap gap-3">
+        <Button asChild variant="outline">
+          <Link href="/estoque/movimentacoes">Ver Movimentações</Link>
+        </Button>
+
+        <Button asChild variant="outline">
+          <Link href="/estoque/alertas">
             Ver Alertas
-          </Button>
-        </Link>
+            {data.alertCount > 0 && (
+              <span className="ml-2 rounded-full bg-warning/15 px-2 py-0.5 text-xs text-warning">
+                {data.alertCount}
+              </span>
+            )}
+          </Link>
+        </Button>
       </div>
 
-      {/* Tabela */}
-      <Card>
-        {data.items.length === 0 ? (
-          <EmptyState
-            icon={<Warehouse className="w-6 h-6 text-text-muted" />}
-            title="Estoque vazio"
-            description="Registre a primeira entrada de estoque."
-          />
-        ) : (
-          <>
-            <CardHeader>
-              <p className="text-xs text-text-muted">{data.items.length} variações em estoque</p>
-            </CardHeader>
+      {data.items.length === 0 ? (
+        <EmptyState
+          icon={Warehouse}
+          title="Estoque vazio"
+          description="Registre a primeira entrada de estoque."
+          action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
+        />
+      ) : (
+        <Card>
+          <CardHeader className="text-sm text-muted-foreground">
+            {data.items.length} variações em estoque
+          </CardHeader>
+
+          <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Produto</TableHead>
                   <TableHead>SKU</TableHead>
-                  <TableHead align="right">Qtd</TableHead>
-                  <TableHead align="right">Custo Médio</TableHead>
-                  <TableHead align="right">Valor Custo</TableHead>
-                  <TableHead align="right">Valor Venda</TableHead>
+                  <TableHead>Qtd</TableHead>
+                  <TableHead>Custo Médio</TableHead>
+                  <TableHead>Valor Custo</TableHead>
+                  <TableHead>Valor Venda</TableHead>
                   <TableHead>Última Entrada</TableHead>
                 </TableRow>
               </TableHeader>
+
               <TableBody>
-                {data.items.map((item: any) => (
-                  <TableRow key={item.product_variation_id}>
+                {data.items.map((item, idx) => (
+                  <TableRow key={`${item.sku}-${idx}`}>
+                    <TableCell className="font-medium">
+                      {item.product_name}
+                    </TableCell>
                     <TableCell>
-                      <Link href={`/produtos/${item.product_id}`} className="text-sm font-medium hover:text-accent">
-                        {item.product_name}
-                      </Link>
+                      <code>{item.sku}</code>
                     </TableCell>
-                    <TableCell muted>
-                      <code className="text-xs bg-bg-overlay px-1.5 py-0.5 rounded">{item.sku}</code>
+                    <TableCell>{formatNumber(item.current_qty ?? 0)}</TableCell>
+                    <TableCell>{formatCurrency(item.avg_cost ?? 0)}</TableCell>
+                    <TableCell>
+                      {formatCurrency(item.stock_value_at_cost ?? 0)}
                     </TableCell>
-                    <TableCell align="right">
-                      <span
-                        className={`text-sm font-semibold ${
-                          item.current_qty === 0
-                            ? 'text-error'
-                            : item.current_qty <= 3
-                            ? 'text-warning'
-                            : 'text-success'
-                        }`}
-                      >
-                        {item.current_qty}
-                      </span>
+                    <TableCell>
+                      {formatCurrency(item.stock_value_at_price ?? 0)}
                     </TableCell>
-                    <TableCell align="right" muted>
-                      {formatCurrency(item.avg_cost)}
-                    </TableCell>
-                    <TableCell align="right" muted>
-                      {formatCurrency(item.stock_value_at_cost)}
-                    </TableCell>
-                    <TableCell align="right" className="font-medium">
-                      {formatCurrency(item.stock_value_at_price)}
-                    </TableCell>
-                    <TableCell muted>
-                      {item.last_entry_date ? formatDate(item.last_entry_date) : '—'}
+                    <TableCell>
+                      {item.last_entry_date
+                        ? formatDate(item.last_entry_date)
+                        : '—'}
                     </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
-          </>
-        )}
-      </Card>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }

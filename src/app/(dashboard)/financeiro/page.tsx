@@ -1,30 +1,62 @@
-import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
-import { DollarSign, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import {
+  DollarSign,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+} from 'lucide-react'
+
+import { createAdminClient } from '@/lib/supabase/admin'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 
 export const dynamic = 'force-dynamic'
 
+type MonthlyFinancialRow = {
+  month: string
+  total_income: number | null
+  exp_stock: number | null
+  exp_marketing: number | null
+  exp_rent: number | null
+  exp_salaries: number | null
+  exp_operational: number | null
+  exp_taxes: number | null
+  exp_other: number | null
+  net_result: number | null
+}
+
 async function getFinancialData() {
-  const supabase = createClient()
-  const { data: months } = await supabase
+  const supabase = createAdminClient()
+
+  const { data: months, error } = await supabase
     .from('mv_monthly_financial')
     .select('*')
     .order('month', { ascending: false })
-    .limit(12) as unknown as { data: any[] | null, error: any }
+    .limit(12)
 
-  const current = months?.[0]
-  const previous = months?.[1]
+  if (error) {
+    console.error('Erro ao listar financeiro:', error.message)
+  }
+
+  const rows = (months ?? []) as MonthlyFinancialRow[]
+  const current = rows[0] ?? null
+  const previous = rows[1] ?? null
 
   return {
     current,
     previous,
-    months: months ?? [],
+    months: rows,
   }
 }
 
@@ -36,87 +68,133 @@ function trendPct(current: number, previous: number): number | undefined {
 export default async function FinanceiroPage() {
   const { current, previous, months } = await getFinancialData()
 
+  const currentIncome = Number(current?.total_income ?? 0)
+  const currentStock = Number(current?.exp_stock ?? 0)
+  const currentNet = Number(current?.net_result ?? 0)
+
+  const previousIncome = Number(previous?.total_income ?? 0)
+  const previousStock = Number(previous?.exp_stock ?? 0)
+  const previousNet = Number(previous?.net_result ?? 0)
+
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">Financeiro</h2>
-          <p className="text-sm text-text-muted">Regime de competência</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Financeiro</h1>
+          <p className="text-sm text-muted-foreground">Regime de competência</p>
         </div>
-        <div className="flex gap-2">
-          <Link href="/financeiro/fluxo"><Button variant="secondary" size="sm">Fluxo de Caixa</Button></Link>
-          <Link href="/financeiro/dre"><Button variant="secondary" size="sm">DRE Completo</Button></Link>
-          <Link href="/financeiro/lancamentos"><Button variant="secondary" size="sm">Ver Lançamentos</Button></Link>
-          <Link href="/financeiro/lancamentos/novo"><Button size="sm"><DollarSign className="w-4 h-4" />Lançamento</Button></Link>
+
+        <div className="flex flex-wrap gap-3">
+          <Button asChild variant="outline">
+            <Link href="/financeiro/fluxo-caixa">Fluxo de Caixa</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/financeiro/dre">DRE Completo</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/financeiro/lancamentos/novo">Lançamento</Link>
+          </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Receita do Mês"
-          value={formatCurrency(current?.total_income ?? 0)}
-          trend={previous ? { value: trendPct(current?.total_income ?? 0, previous.total_income) ?? 0, label: 'vs mês anterior' } : undefined}
-          icon={<TrendingUp className="w-4 h-4" />}
+          value={formatCurrency(currentIncome)}
+          icon={TrendingUp}
+          trend={
+            previous ? trendPct(currentIncome, previousIncome) : undefined
+          }
         />
+
         <StatCard
-          title="Despesas do Mês"
-          value={formatCurrency(current?.total_expenses ?? 0)}
-          trend={previous ? { value: trendPct(current?.total_expenses ?? 0, previous.total_expenses) ?? 0, label: 'vs mês anterior' } : undefined}
-          icon={<TrendingDown className="w-4 h-4" />}
+          title="CMV do Mês"
+          value={formatCurrency(currentStock)}
+          icon={TrendingDown}
+          trend={previous ? trendPct(currentStock, previousStock) : undefined}
         />
+
         <StatCard
-          title="CMV (Custo Mercadoria)"
-          value={formatCurrency(current?.exp_stock ?? 0)}
-          subtitle="custo dos produtos vendidos"
+          title="Resultado Líquido"
+          value={formatCurrency(currentNet)}
+          icon={currentNet >= 0 ? DollarSign : Minus}
+          valueClassName={currentNet >= 0 ? 'text-success' : 'text-error'}
+          trend={previous ? trendPct(currentNet, previousNet) : undefined}
         />
+
         <StatCard
-          title="Lucro Líquido"
-          value={formatCurrency(current?.net_result ?? 0)}
-          valueClassName={(current?.net_result ?? 0) >= 0 ? 'text-success' : 'text-error'}
-          icon={<DollarSign className="w-4 h-4" />}
+          title="Margem Líquida"
+          value={
+            currentIncome > 0
+              ? `${((currentNet / currentIncome) * 100).toFixed(1)}%`
+              : '0,0%'
+          }
+          icon={currentNet >= 0 ? TrendingUp : TrendingDown}
+          valueClassName={currentNet >= 0 ? 'text-success' : 'text-error'}
         />
       </div>
 
       <Card>
         <CardHeader>
-          <h3 className="text-sm font-semibold text-text-primary">DRE — Últimos 12 meses</h3>
+          <h2 className="text-lg font-semibold">DRE — Últimos 12 meses</h2>
         </CardHeader>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Mês</TableHead>
-              <TableHead align="right">Receita</TableHead>
-              <TableHead align="right">CMV</TableHead>
-              <TableHead align="right">Despesas Op.</TableHead>
-              <TableHead align="right">Lucro Líquido</TableHead>
-              <TableHead align="right">Margem %</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {months.map((m) => {
-              const opex = (m.exp_marketing ?? 0) + (m.exp_rent ?? 0) + (m.exp_salaries ?? 0) + (m.exp_operational ?? 0) + (m.exp_taxes ?? 0) + (m.exp_other ?? 0)
-              const margin = m.total_income > 0 ? (m.net_result / m.total_income) * 100 : 0
-              return (
-                <TableRow key={m.month}>
-                  <TableCell className="font-medium capitalize">{formatDate(m.month, 'MMM yyyy')}</TableCell>
-                  <TableCell align="right">{formatCurrency(m.total_income)}</TableCell>
-                  <TableCell align="right" muted>{formatCurrency(m.exp_stock ?? 0)}</TableCell>
-                  <TableCell align="right" muted>{formatCurrency(opex)}</TableCell>
-                  <TableCell align="right">
-                    <span className={`font-semibold ${m.net_result >= 0 ? 'text-success' : 'text-error'}`}>
-                      {formatCurrency(m.net_result)}
-                    </span>
-                  </TableCell>
-                  <TableCell align="right">
-                    <span className={`text-sm ${margin >= 20 ? 'text-success' : margin >= 10 ? 'text-warning' : 'text-error'}`}>
+
+        <CardContent className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Mês</TableHead>
+                <TableHead>Receita</TableHead>
+                <TableHead>CMV</TableHead>
+                <TableHead>Despesas Op.</TableHead>
+                <TableHead>Lucro Líquido</TableHead>
+                <TableHead>Margem %</TableHead>
+              </TableRow>
+            </TableHeader>
+
+            <TableBody>
+              {months.map((m) => {
+                const income = Number(m.total_income ?? 0)
+                const stock = Number(m.exp_stock ?? 0)
+                const opex =
+                  Number(m.exp_marketing ?? 0) +
+                  Number(m.exp_rent ?? 0) +
+                  Number(m.exp_salaries ?? 0) +
+                  Number(m.exp_operational ?? 0) +
+                  Number(m.exp_taxes ?? 0) +
+                  Number(m.exp_other ?? 0)
+
+                const net = Number(m.net_result ?? 0)
+                const margin = income > 0 ? (net / income) * 100 : 0
+
+                return (
+                  <TableRow key={m.month}>
+                    <TableCell>{formatDate(m.month, 'MMM yyyy')}</TableCell>
+                    <TableCell>{formatCurrency(income)}</TableCell>
+                    <TableCell>{formatCurrency(stock)}</TableCell>
+                    <TableCell>{formatCurrency(opex)}</TableCell>
+                    <TableCell
+                      className={net >= 0 ? 'text-success' : 'text-error'}
+                    >
+                      {formatCurrency(net)}
+                    </TableCell>
+                    <TableCell
+                      className={
+                        margin >= 20
+                          ? 'text-success'
+                          : margin >= 10
+                          ? 'text-warning'
+                          : 'text-error'
+                      }
+                    >
                       {margin.toFixed(1)}%
-                    </span>
-                  </TableCell>
-                </TableRow>
-              )
-            })}
-          </TableBody>
-        </Table>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
+          </Table>
+        </CardContent>
       </Card>
     </div>
   )

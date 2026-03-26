@@ -1,119 +1,195 @@
-import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import { Plus, TrendingUp } from 'lucide-react'
+import { subDays } from 'date-fns'
+
+import { createAdminClient } from '@/lib/supabase/admin'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader } from '@/components/ui/card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
-import { subDays } from 'date-fns'
 
 export const dynamic = 'force-dynamic'
 
 const CATEGORY_LABELS: Record<string, string> = {
-  paid_traffic: 'Tráfego Pago', influencers: 'Influenciadores', events: 'Eventos',
-  photos: 'Fotos/Conteúdo', gifts: 'Brindes', packaging: 'Embalagens',
-  rent: 'Aluguel', salaries: 'Salários', operational: 'Operacional',
-  taxes: 'Impostos', other: 'Outros',
+  paid_traffic: 'Tráfego Pago',
+  influencers: 'Influenciadores',
+  events: 'Eventos',
+  photos: 'Fotos/Conteúdo',
+  gifts: 'Brindes',
+  packaging: 'Embalagens',
+  rent: 'Aluguel',
+  salaries: 'Salários',
+  operational: 'Operacional',
+  taxes: 'Impostos',
+  other: 'Outros',
+}
+
+type MarketingCostRow = {
+  id: number
+  category: string
+  amount: number
+  cost_date: string
+}
+
+type CampaignRow = {
+  id: number
+  name: string
+  active: boolean
+  budget: number | null
 }
 
 async function getMarketingData() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const thirtyDaysAgo = subDays(new Date(), 30).toISOString().split('T')[0]
 
   const [costs, campaigns] = await Promise.all([
-    supabase.from('marketing_costs').select('*').gte('cost_date', thirtyDaysAgo).order('cost_date', { ascending: false }) as unknown as Promise<{ data: any[] | null, error: any }>,
-    supabase.from('campaigns').select('*').eq('active', true).limit(5) as unknown as Promise<{ data: any[] | null, error: any }>,
+    supabase
+      .from('marketing_costs')
+      .select('*')
+      .gte('cost_date', thirtyDaysAgo)
+      .order('cost_date', { ascending: false }),
+    supabase.from('campaigns').select('*').eq('active', true).limit(5),
   ])
 
-  const costData = costs.data ?? []
-  const total = costData.reduce((s, c) => s + c.amount, 0)
+  if (costs.error) {
+    console.error('Erro ao listar custos de marketing:', costs.error.message)
+  }
+
+  if (campaigns.error) {
+    console.error('Erro ao listar campanhas:', campaigns.error.message)
+  }
+
+  const costData = (costs.data ?? []) as MarketingCostRow[]
+  const campaignData = (campaigns.data ?? []) as CampaignRow[]
+
+  const total = costData.reduce((s, c) => s + Number(c.amount ?? 0), 0)
+
   const byCategory = costData.reduce((acc, c) => {
-    acc[c.category] = (acc[c.category] ?? 0) + c.amount
+    acc[c.category] = (acc[c.category] ?? 0) + Number(c.amount ?? 0)
     return acc
   }, {} as Record<string, number>)
 
-  return { costs: costData, campaigns: campaigns.data ?? [], total, byCategory }
+  return {
+    costs: costData,
+    campaigns: campaignData,
+    total,
+    byCategory,
+  }
 }
 
 export default async function MarketingPage() {
   const { costs, campaigns, total, byCategory } = await getMarketingData()
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">Marketing</h2>
-          <p className="text-sm text-text-muted">Últimos 30 dias</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Marketing</h1>
+          <p className="text-sm text-muted-foreground">Últimos 30 dias</p>
         </div>
-        <div className="flex gap-2">
-          <Link href="/marketing/campanhas"><Button variant="secondary" size="sm">Campanhas</Button></Link>
-          <Link href="/marketing/custos"><Button variant="secondary" size="sm">Ver Custos</Button></Link>
-          <Link href="/marketing/custos/novo"><Button size="sm"><Plus className="w-4 h-4" />Lançar Custo</Button></Link>
+
+        <div className="flex flex-wrap gap-3">
+          <Button asChild variant="outline">
+            <Link href="/marketing/campanhas">Campanhas</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/marketing/custos">Ver Custos</Link>
+          </Button>
+          <Button asChild>
+            <Link href="/marketing/custos/novo">
+              <Plus className="mr-2 h-4 w-4" />
+              Lançar Custo
+            </Link>
+          </Button>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-        <StatCard title="Investimento Total" value={formatCurrency(total)} subtitle="últimos 30 dias" icon={<TrendingUp className="w-4 h-4" />} />
-        <StatCard title="Campanhas Ativas" value={campaigns.length} subtitle="em andamento" />
-        <StatCard title="CAC" value="—" subtitle="Configure clientes por período" />
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <StatCard
+          title="Custo Total"
+          value={formatCurrency(total)}
+          icon={TrendingUp}
+        />
+        <StatCard
+          title="Campanhas Ativas"
+          value={String(campaigns.length)}
+          icon={TrendingUp}
+        />
+        <StatCard
+          title="Categorias com Custo"
+          value={String(Object.keys(byCategory).length)}
+          icon={TrendingUp}
+        />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Custos recentes */}
+      <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <h3 className="text-sm font-semibold text-text-primary">Custos Recentes</h3>
+            <h2 className="text-lg font-semibold">Custos Recentes</h2>
           </CardHeader>
-          {costs.length === 0 ? (
-            <div className="p-8 text-center text-sm text-text-muted">Nenhum custo registrado</div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Data</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead align="right">Valor</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {costs.slice(0, 8).map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell muted>{formatDate(c.cost_date)}</TableCell>
-                    <TableCell>
-                      <Badge variant="default" size="sm">{CATEGORY_LABELS[c.category] ?? c.category}</Badge>
-                    </TableCell>
-                    <TableCell align="right" className="font-semibold">{formatCurrency(c.amount)}</TableCell>
+
+          <div className="overflow-x-auto">
+            {costs.length === 0 ? (
+              <div className="px-6 pb-6 text-sm text-muted-foreground">
+                Nenhum custo registrado
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Data</TableHead>
+                    <TableHead>Categoria</TableHead>
+                    <TableHead>Valor</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                </TableHeader>
+                <TableBody>
+                  {costs.slice(0, 8).map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>{formatDate(c.cost_date)}</TableCell>
+                      <TableCell>
+                        {CATEGORY_LABELS[c.category] ?? c.category}
+                      </TableCell>
+                      <TableCell>{formatCurrency(c.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
         </Card>
 
-        {/* Por categoria */}
         <Card>
           <CardHeader>
-            <h3 className="text-sm font-semibold text-text-primary">Por Categoria</h3>
+            <h2 className="text-lg font-semibold">Por Categoria</h2>
           </CardHeader>
-          <div className="p-5 space-y-3">
+
+          <div className="space-y-3 px-6 pb-6">
             {(Object.entries(byCategory) as [string, number][])
               .sort(([, a], [, b]) => b - a)
               .map(([cat, val]) => (
-                <div key={cat}>
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-secondary">{CATEGORY_LABELS[cat] ?? cat}</span>
-                    <span className="font-semibold text-text-primary">{formatCurrency(val)}</span>
-                  </div>
-                  <div className="h-1.5 bg-bg-overlay rounded-full">
-                    <div className="h-full bg-brand rounded-full" style={{ width: `${(val / total) * 100}%` }} />
-                  </div>
+                <div
+                  key={cat}
+                  className="flex items-center justify-between rounded-lg border p-3"
+                >
+                  <span className="text-sm font-medium">
+                    {CATEGORY_LABELS[cat] ?? cat}
+                  </span>
+                  <Badge variant="secondary">{formatCurrency(val)}</Badge>
                 </div>
               ))}
+
             {Object.keys(byCategory).length === 0 && (
-              <p className="text-sm text-text-muted text-center py-4">Sem dados</p>
+              <div className="text-sm text-muted-foreground">Sem dados</div>
             )}
           </div>
         </Card>
