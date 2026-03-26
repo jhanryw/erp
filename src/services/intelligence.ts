@@ -73,7 +73,7 @@ export interface StockTurnoverRow {
 export interface SupplierPerformanceRow {
   supplier_id: number
   supplier_name: string
-  total_purchased_brl: number
+  total_purchased_value: number
   total_revenue: number
   total_gross_profit: number
   avg_margin_pct: number
@@ -122,7 +122,14 @@ export async function getAbcCurve(
   const { data, error } = await supabase
     .from(ABC_VIEW_MAP[dimension] as any)
     .select('*')
-    .order('value', { ascending: false })
+    .order(
+      dimension === 'revenue'
+        ? 'total_revenue'
+        : dimension === 'profit'
+        ? 'total_gross_profit'
+        : 'total_units_sold',
+      { ascending: false }
+    )
     .limit(limit)
 
   if (error) throw new Error(`getAbcCurve: ${error.message}`)
@@ -144,8 +151,7 @@ export async function getRfmMatrix(limit = 500): Promise<RfmRow[]> {
       segment,
       total_spent,
       purchase_count,
-      days_since_last_purchase,
-      customers ( name )
+      days_since_last_purchase
     `)
     .order('rfm_total', { ascending: false })
     .limit(limit) as unknown as { data: any[] | null, error: any }
@@ -154,7 +160,7 @@ export async function getRfmMatrix(limit = 500): Promise<RfmRow[]> {
 
   return ((data ?? []) as any[]).map((r) => ({
     customer_id: r.customer_id,
-    customer_name: r.customers?.name ?? '',
+    customer_name: `Cliente #${r.customer_id}`,
     r_score: r.r_score,
     f_score: r.f_score,
     m_score: r.m_score,
@@ -264,11 +270,7 @@ export async function getRestockSuggestions(
       product_id,
       product_name,
       sku,
-      color,
-      size,
-      current_qty,
-      supplier_id,
-      suppliers ( name )
+      current_qty
     `)
     .lte('current_qty', maxQty)
     .order('current_qty', { ascending: true })
@@ -280,13 +282,12 @@ export async function getRestockSuggestions(
     product_variation_id: r.product_variation_id,
     product_id: r.product_id,
     product_name: r.product_name,
-    sku_variation: r.sku,
-    color: r.color,
-    size: r.size,
+    sku: r.sku,
+    color: null,
+    size: null,
     current_qty: r.current_qty,
-    supplier_id: r.supplier_id ?? null,
-    supplier_name: r.suppliers?.name ?? null,
-    suggested_qty: Math.max(10, (maxQty - r.current_qty + 1) * 3),
+    supplier_id: null,
+    supplier_name: null,
   }))
 }
 
