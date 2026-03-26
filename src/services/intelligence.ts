@@ -82,18 +82,16 @@ export interface SupplierPerformanceRow {
   product_count: number
 }
 
-export interface RestockSuggestion {
+export type RestockSuggestion = {
   product_variation_id: number
   product_id: number
   product_name: string
-  sku_variation: string
+  sku: string
   color: string | null
   size: string | null
   current_qty: number
   supplier_id: number | null
   supplier_name: string | null
-  /** quantidade sugerida para recompra (3× o déficit) */
-  suggested_qty: number
 }
 
 export interface DeadStockRow {
