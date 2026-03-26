@@ -119,12 +119,12 @@ export default async function CashbackPage() {
           </p>
         </div>
 
-        <Button asChild>
-          <Link href="/cashback/configuracoes">
+        <Link href="/cashback/configuracoes">
+          <Button>
             <Settings className="mr-2 h-4 w-4" />
-            Configurar
-          </Link>
-        </Button>
+              Configurar
+          </Button>
+        </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
