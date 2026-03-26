@@ -11,6 +11,11 @@ const schema = z.object({
   notes: z.string().optional(),
 })
 
+type StockRow = {
+  quantity: number | null
+  avg_cost: number | null
+}
+
 export async function POST(request: Request) {
   const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID
 
@@ -35,25 +40,34 @@ export async function POST(request: Request) {
 
   const admin = createAdminClient()
 
-  const { data: current, error: currentError } = await admin
+  const stockRes: {
+    data: StockRow | null
+    error: { message: string; code?: string } | null
+  } = (await admin
     .from('stock')
     .select('quantity, avg_cost')
     .eq('product_variation_id', product_variation_id)
-    .single()
+    .maybeSingle()) as unknown as {
+    data: StockRow | null
+    error: { message: string; code?: string } | null
+  }
 
-  if (currentError && currentError.code !== 'PGRST116') {
+  if (stockRes.error) {
     return NextResponse.json(
-      { error: currentError.message },
+      { error: stockRes.error.message },
       { status: 500 }
     )
   }
 
-  const currentQty = current?.quantity ?? 0
+  const currentQty = Number(stockRes.data?.quantity ?? 0)
+  const currentAvgCost = Number(stockRes.data?.avg_cost ?? 0)
   const newQty = currentQty + delta
 
   if (newQty < 0) {
     return NextResponse.json(
-      { error: `Estoque insuficiente. Atual: ${currentQty}, Ajuste: ${delta}` },
+      {
+        error: `Estoque insuficiente. Atual: ${currentQty}, Ajuste: ${delta}`,
+      },
       { status: 400 }
     )
   }
@@ -62,7 +76,7 @@ export async function POST(request: Request) {
     {
       product_variation_id,
       quantity: newQty,
-      avg_cost: current?.avg_cost ?? 0,
+      avg_cost: currentAvgCost,
       last_updated: new Date().toISOString(),
     } as any,
     { onConflict: 'product_variation_id' }
@@ -76,17 +90,19 @@ export async function POST(request: Request) {
   }
 
   if (delta < 0) {
-    const { error: financeError } = await admin.from('finance_entries').insert({
-      type: 'expense',
-      category: 'other_expense',
-      description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
-      amount: parseFloat(
-        (Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)
-      ),
-      reference_date: new Date().toISOString().slice(0, 10),
-      notes: notes ?? null,
-      created_by: SYSTEM_USER_ID,
-    } as any)
+    const { error: financeError } = await admin
+      .from('finance_entries')
+      .insert({
+        type: 'expense',
+        category: 'other_expense',
+        description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
+        amount: parseFloat(
+          (Math.abs(delta) * currentAvgCost).toFixed(2)
+        ),
+        reference_date: new Date().toISOString().slice(0, 10),
+        notes: notes ?? null,
+        created_by: SYSTEM_USER_ID,
+      } as any)
 
     if (financeError) {
       return NextResponse.json(
