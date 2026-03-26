@@ -122,23 +122,31 @@ export default async function CashbackPage() {
         <Link href="/cashback/configuracoes">
           <Button>
             <Settings className="mr-2 h-4 w-4" />
-              Configurar
+            Configurar
           </Button>
         </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="Pendente" value={formatCurrency(pendingTotal)} icon={Gift} />
+        <StatCard
+          title="Pendente"
+          value={formatCurrency(pendingTotal)}
+          icon={<Gift className="h-4 w-4" />}
+        />
         <StatCard
           title="Disponível"
           value={formatCurrency(availableTotal)}
-          icon={Gift}
+          icon={<Gift className="h-4 w-4" />}
         />
-        <StatCard title="Usado" value={formatCurrency(usedTotal)} icon={Gift} />
+        <StatCard
+          title="Usado"
+          value={formatCurrency(usedTotal)}
+          icon={<Gift className="h-4 w-4" />}
+        />
         <StatCard
           title="Expirado"
           value={formatCurrency(expiredTotal)}
-          icon={Gift}
+          icon={<Gift className="h-4 w-4" />}
         />
       </div>
 
