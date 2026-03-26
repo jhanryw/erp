@@ -2,8 +2,6 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
-const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID!
-
 if (!SYSTEM_USER_ID) {
   throw new Error('SYSTEM_USER_ID não definido nas variáveis de ambiente.')
 }
@@ -16,10 +14,13 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const body = await request.json()
-  const parsed = schema.safeParse(body)
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+  const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID
+
+  if (!SYSTEM_USER_ID) {
+    return NextResponse.json(
+      { error: 'SYSTEM_USER_ID não definido nas variáveis de ambiente.' },
+      { status: 500 }
+    )
   }
 
   const { product_variation_id, delta, reason, notes } = parsed.data
@@ -56,21 +57,27 @@ export async function POST(request: Request) {
   }
 
   // Log loss to finance_entries
-  if (delta < 0) {
-    const { error: financeError } = await admin.from('finance_entries').insert({
-      type: 'expense',
-      category: 'other_expense',
-      description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
-      amount: parseFloat((Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)),
-      reference_date: new Date().toISOString().slice(0, 10),
-      notes: notes ?? null,
-      created_by: SYSTEM_USER_ID,
-    } as any)
-  
-    if (financeError) {
-      return NextResponse.json({ error: financeError.message }, { status: 500 })
-    }
-  }
+if (delta < 0) {
+  const { error: financeError } = await admin.from('finance_entries').insert({
+    type: 'expense',
+    category: 'other_expense',
+    description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
+    amount: parseFloat((Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)),
+    reference_date: new Date().toISOString().slice(0, 10),
+    notes: notes ?? null,
+    created_by: SYSTEM_USER_ID,
+  } as any)
 
-  return NextResponse.json({ new_quantity: newQty, previous_quantity: currentQty, delta })
+  if (financeError) {
+    return NextResponse.json(
+      { error: financeError.message },
+      { status: 500 }
+    )
+  }
 }
+
+return NextResponse.json({
+  new_quantity: newQty,
+  previous_quantity: currentQty,
+  delta,
+})
