@@ -1,10 +1,5 @@
 import Link from 'next/link'
-import {
-  DollarSign,
-  TrendingUp,
-  TrendingDown,
-  Minus,
-} from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { StatCard } from '@/components/ui/stat-card'
@@ -85,15 +80,17 @@ export default async function FinanceiroPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <Button asChild variant="outline">
-            <Link href="/financeiro/fluxo-caixa">Fluxo de Caixa</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/financeiro/dre">DRE Completo</Link>
-          </Button>
-          <Button asChild>
-            <Link href="/financeiro/lancamentos/novo">Lançamento</Link>
-          </Button>
+          <Link href="/financeiro/fluxo-caixa">
+            <Button variant="outline">Fluxo de Caixa</Button>
+          </Link>
+
+          <Link href="/financeiro/dre">
+            <Button variant="outline">DRE Completo</Button>
+          </Link>
+
+          <Link href="/financeiro/lancamentos/novo">
+            <Button>Lançamento</Button>
+          </Link>
         </div>
       </div>
 
@@ -101,23 +98,27 @@ export default async function FinanceiroPage() {
         <StatCard
           title="Receita do Mês"
           value={formatCurrency(currentIncome)}
-          icon={TrendingUp}
-          trend={
-            previous ? trendPct(currentIncome, previousIncome) : undefined
-          }
+          icon={<TrendingUp className="h-4 w-4" />}
+          trend={previous ? trendPct(currentIncome, previousIncome) : undefined}
         />
 
         <StatCard
           title="CMV do Mês"
           value={formatCurrency(currentStock)}
-          icon={TrendingDown}
+          icon={<TrendingDown className="h-4 w-4" />}
           trend={previous ? trendPct(currentStock, previousStock) : undefined}
         />
 
         <StatCard
           title="Resultado Líquido"
           value={formatCurrency(currentNet)}
-          icon={currentNet >= 0 ? DollarSign : Minus}
+          icon={
+            currentNet >= 0 ? (
+              <DollarSign className="h-4 w-4" />
+            ) : (
+              <Minus className="h-4 w-4" />
+            )
+          }
           valueClassName={currentNet >= 0 ? 'text-success' : 'text-error'}
           trend={previous ? trendPct(currentNet, previousNet) : undefined}
         />
@@ -129,7 +130,13 @@ export default async function FinanceiroPage() {
               ? `${((currentNet / currentIncome) * 100).toFixed(1)}%`
               : '0,0%'
           }
-          icon={currentNet >= 0 ? TrendingUp : TrendingDown}
+          icon={
+            currentNet >= 0 ? (
+              <TrendingUp className="h-4 w-4" />
+            ) : (
+              <TrendingDown className="h-4 w-4" />
+            )
+          }
           valueClassName={currentNet >= 0 ? 'text-success' : 'text-error'}
         />
       </div>

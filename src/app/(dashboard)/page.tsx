@@ -32,21 +32,21 @@ export default async function DashboardPage() {
           title="Faturamento Hoje"
           value={formatCurrency(data.today.revenue)}
           subtitle={`${data.today.orders} pedido${data.today.orders !== 1 ? 's' : ''}`}
-          icon={TrendingUp}
+          icon={<TrendingUp className="h-4 w-4" />}
         />
 
         <StatCard
           title="Pedidos Hoje"
           value={String(data.today.orders)}
           subtitle={`Ticket médio: ${formatCurrency(todayAvgTicket)}`}
-          icon={ShoppingCart}
+          icon={<ShoppingCart className="h-4 w-4" />}
         />
 
         <StatCard
           title="Faturamento 30 dias"
           value={formatCurrency(data.month.revenue)}
           subtitle={`${data.month.orders} pedido${data.month.orders !== 1 ? 's' : ''}`}
-          icon={Users}
+          icon={<Users className="h-4 w-4" />}
         />
 
         {data.showFinancials && data.month.grossMarginPct !== null ? (
@@ -54,14 +54,14 @@ export default async function DashboardPage() {
             title="Margem Bruta"
             value={`${data.month.grossMarginPct.toFixed(1)}%`}
             subtitle="Últimos 30 dias"
-            icon={Package}
+            icon={<Package className="h-4 w-4" />}
           />
         ) : (
           <StatCard
             title="Ticket Médio"
             value={formatCurrency(data.month.avgTicket)}
             subtitle="Últimos 30 dias"
-            icon={Package}
+            icon={<Package className="h-4 w-4" />}
           />
         )}
       </div>

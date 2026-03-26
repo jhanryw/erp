@@ -99,18 +99,20 @@ export default async function MarketingPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <Button asChild variant="outline">
-            <Link href="/marketing/campanhas">Campanhas</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/marketing/custos">Ver Custos</Link>
-          </Button>
-          <Button asChild>
-            <Link href="/marketing/custos/novo">
+          <Link href="/marketing/campanhas">
+            <Button variant="outline">Campanhas</Button>
+          </Link>
+
+          <Link href="/marketing/custos">
+            <Button variant="outline">Ver Custos</Button>
+          </Link>
+
+          <Link href="/marketing/custos/novo">
+            <Button>
               <Plus className="mr-2 h-4 w-4" />
               Lançar Custo
-            </Link>
-          </Button>
+            </Button>
+          </Link>
         </div>
       </div>
 
@@ -118,17 +120,17 @@ export default async function MarketingPage() {
         <StatCard
           title="Custo Total"
           value={formatCurrency(total)}
-          icon={TrendingUp}
+          icon={<TrendingUp className="h-4 w-4" />}
         />
         <StatCard
           title="Campanhas Ativas"
           value={String(campaigns.length)}
-          icon={TrendingUp}
+          icon={<TrendingUp className="h-4 w-4" />}
         />
         <StatCard
           title="Categorias com Custo"
           value={String(Object.keys(byCategory).length)}
-          icon={TrendingUp}
+          icon={<TrendingUp className="h-4 w-4" />}
         />
       </div>
 
