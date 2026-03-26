@@ -2,13 +2,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
-if (!SYSTEM_USER_ID) {
-  throw new Error('SYSTEM_USER_ID não definido nas variáveis de ambiente.')
-}
-
 const schema = z.object({
   product_variation_id: z.number().min(1),
-  delta: z.number().int().refine((n) => n !== 0, { message: 'Delta não pode ser zero' }),
+  delta: z.number().int().refine((n) => n !== 0, {
+    message: 'Delta não pode ser zero',
+  }),
   reason: z.string().min(1),
   notes: z.string().optional(),
 })
@@ -23,14 +21,32 @@ export async function POST(request: Request) {
     )
   }
 
+  const body = await request.json()
+  const parsed = schema.safeParse(body)
+
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 }
+    )
+  }
+
   const { product_variation_id, delta, reason, notes } = parsed.data
+
   const admin = createAdminClient()
 
-  const { data: current } = await admin
+  const { data: current, error: currentError } = await admin
     .from('stock')
     .select('quantity, avg_cost')
     .eq('product_variation_id', product_variation_id)
-    .single() as unknown as { data: { quantity: number; avg_cost: number } | null }
+    .single()
+
+  if (currentError && currentError.code !== 'PGRST116') {
+    return NextResponse.json(
+      { error: currentError.message },
+      { status: 500 }
+    )
+  }
 
   const currentQty = current?.quantity ?? 0
   const newQty = currentQty + delta
@@ -53,31 +69,36 @@ export async function POST(request: Request) {
   )
 
   if (stockError) {
-    return NextResponse.json({ error: stockError.message }, { status: 500 })
-  }
-
-  // Log loss to finance_entries
-if (delta < 0) {
-  const { error: financeError } = await admin.from('finance_entries').insert({
-    type: 'expense',
-    category: 'other_expense',
-    description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
-    amount: parseFloat((Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)),
-    reference_date: new Date().toISOString().slice(0, 10),
-    notes: notes ?? null,
-    created_by: SYSTEM_USER_ID,
-  } as any)
-
-  if (financeError) {
     return NextResponse.json(
-      { error: financeError.message },
+      { error: stockError.message },
       { status: 500 }
     )
   }
-}
 
-return NextResponse.json({
-  new_quantity: newQty,
-  previous_quantity: currentQty,
-  delta,
-})
+  if (delta < 0) {
+    const { error: financeError } = await admin.from('finance_entries').insert({
+      type: 'expense',
+      category: 'other_expense',
+      description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
+      amount: parseFloat(
+        (Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)
+      ),
+      reference_date: new Date().toISOString().slice(0, 10),
+      notes: notes ?? null,
+      created_by: SYSTEM_USER_ID,
+    } as any)
+
+    if (financeError) {
+      return NextResponse.json(
+        { error: financeError.message },
+        { status: 500 }
+      )
+    }
+  }
+
+  return NextResponse.json({
+    new_quantity: newQty,
+    previous_quantity: currentQty,
+    delta,
+  })
+}
