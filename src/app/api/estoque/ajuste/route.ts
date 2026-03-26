@@ -26,95 +26,97 @@ export async function POST(request: Request) {
     )
   }
 
-  const body = await request.json()
-  const parsed = schema.safeParse(body)
+  try {
+    const body = await request.json()
+    const parsed = schema.safeParse(body)
 
-  if (!parsed.success) {
-    return NextResponse.json(
-      { error: parsed.error.flatten() },
-      { status: 400 }
-    )
-  }
+    if (!parsed.success) {
+      return NextResponse.json(
+        { error: parsed.error.flatten() },
+        { status: 400 }
+      )
+    }
 
-  const { product_variation_id, delta, reason, notes } = parsed.data
+    const { product_variation_id, delta, reason, notes } = parsed.data
+    const admin = createAdminClient()
 
-  const admin = createAdminClient()
+    const stockRes = (await admin
+      .from('stock')
+      .select('quantity, avg_cost')
+      .eq('product_variation_id', product_variation_id)
+      .maybeSingle()) as unknown as {
+      data: StockRow | null
+      error: { message: string } | null
+    }
 
-  const stockRes: {
-    data: StockRow | null
-    error: { message: string; code?: string } | null
-  } = (await admin
-    .from('stock')
-    .select('quantity, avg_cost')
-    .eq('product_variation_id', product_variation_id)
-    .maybeSingle()) as unknown as {
-    data: StockRow | null
-    error: { message: string; code?: string } | null
-  }
+    if (stockRes.error) {
+      return NextResponse.json(
+        { error: stockRes.error.message },
+        { status: 500 }
+      )
+    }
 
-  if (stockRes.error) {
-    return NextResponse.json(
-      { error: stockRes.error.message },
-      { status: 500 }
-    )
-  }
+    const currentQty = Number(stockRes.data?.quantity ?? 0)
+    const currentAvgCost = Number(stockRes.data?.avg_cost ?? 0)
+    const newQty = currentQty + delta
 
-  const currentQty = Number(stockRes.data?.quantity ?? 0)
-  const currentAvgCost = Number(stockRes.data?.avg_cost ?? 0)
-  const newQty = currentQty + delta
+    if (newQty < 0) {
+      return NextResponse.json(
+        {
+          error: `Estoque insuficiente. Atual: ${currentQty}, Ajuste: ${delta}`,
+        },
+        { status: 400 }
+      )
+    }
 
-  if (newQty < 0) {
-    return NextResponse.json(
+    const { error: stockError } = await admin.from('stock').upsert(
       {
-        error: `Estoque insuficiente. Atual: ${currentQty}, Ajuste: ${delta}`,
-      },
-      { status: 400 }
+        product_variation_id,
+        quantity: newQty,
+        avg_cost: currentAvgCost,
+        last_updated: new Date().toISOString(),
+      } as any,
+      { onConflict: 'product_variation_id' }
     )
-  }
 
-  const { error: stockError } = await admin.from('stock').upsert(
-    {
-      product_variation_id,
-      quantity: newQty,
-      avg_cost: currentAvgCost,
-      last_updated: new Date().toISOString(),
-    } as any,
-    { onConflict: 'product_variation_id' }
-  )
+    if (stockError) {
+      return NextResponse.json(
+        { error: stockError.message },
+        { status: 500 }
+      )
+    }
 
-  if (stockError) {
-    return NextResponse.json(
-      { error: stockError.message },
-      { status: 500 }
-    )
-  }
-
-  if (delta < 0) {
-    const { error: financeError } = await admin
-      .from('finance_entries')
-      .insert({
+    if (delta < 0) {
+      const { error: financeError } = await admin.from('finance_entries').insert({
         type: 'expense',
         category: 'other_expense',
         description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
-        amount: parseFloat(
-          (Math.abs(delta) * currentAvgCost).toFixed(2)
-        ),
+        amount: parseFloat((Math.abs(delta) * currentAvgCost).toFixed(2)),
         reference_date: new Date().toISOString().slice(0, 10),
         notes: notes ?? null,
         created_by: SYSTEM_USER_ID,
       } as any)
 
-    if (financeError) {
-      return NextResponse.json(
-        { error: financeError.message },
-        { status: 500 }
-      )
+      if (financeError) {
+        return NextResponse.json(
+          { error: financeError.message },
+          { status: 500 }
+        )
+      }
     }
-  }
 
-  return NextResponse.json({
-    new_quantity: newQty,
-    previous_quantity: currentQty,
-    delta,
-  })
+    return NextResponse.json({
+      new_quantity: newQty,
+      previous_quantity: currentQty,
+      delta,
+    })
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error ? error.message : 'Erro interno ao ajustar estoque.',
+      },
+      { status: 500 }
+    )
+  }
 }
