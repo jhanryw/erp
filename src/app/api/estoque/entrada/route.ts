@@ -2,6 +2,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { stockLotSchema } from '@/lib/validators'
 
+const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID!
+
+if (!SYSTEM_USER_ID) {
+  throw new Error('SYSTEM_USER_ID não definido nas variáveis de ambiente.')
+}
+
 export async function POST(request: Request) {
   const body = await request.json()
   const parsed = stockLotSchema.safeParse(body)
@@ -30,20 +36,21 @@ export async function POST(request: Request) {
   // 1. Inserir lote de estoque
   const { data: lot, error: lotError } = await admin
     .from('stock_lots')
-    .insert({
-      product_variation_id,
-      supplier_id: supplier_id ?? null,
-      entry_type,
-      quantity_original,
-      quantity_remaining: quantity_original,
-      unit_cost,
-      freight_cost,
-      tax_cost,
-      total_lot_cost,
-      cost_per_unit,
-      entry_date,
-      notes: notes ?? null,
-    } as any)
+  .insert({
+  product_variation_id,
+  supplier_id: supplier_id ?? null,
+  entry_type,
+  quantity_original,
+  quantity_remaining: quantity_original,
+  unit_cost,
+  freight_cost,
+  tax_cost,
+  total_lot_cost,
+  cost_per_unit,
+  entry_date,
+  notes: notes ?? null,
+  created_by: SYSTEM_USER_ID,
+} as any)
     .select()
     .single() as unknown as { data: { id: string } | null, error: any }
 
@@ -81,14 +88,19 @@ export async function POST(request: Request) {
   }
 
   // 3. Registrar lançamento financeiro (despesa de compra de estoque)
-  await admin.from('finance_entries').insert({
+  await admin.from('finance_entries')const { error: financeError } = await admin.from('finance_entries').insert({
     type: 'expense',
     category: 'stock_purchase',
     description: `Entrada de estoque — Lote #${lot!.id}`,
     amount: total_lot_cost,
     reference_date: entry_date,
     stock_lot_id: lot!.id,
+    created_by: SYSTEM_USER_ID,
   } as any)
+  
+  if (financeError) {
+    return NextResponse.json({ error: financeError.message }, { status: 500 })
+  }
 
   return NextResponse.json({
     lot_id: lot!.id,

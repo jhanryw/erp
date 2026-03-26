@@ -2,6 +2,12 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
+const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID!
+
+if (!SYSTEM_USER_ID) {
+  throw new Error('SYSTEM_USER_ID não definido nas variáveis de ambiente.')
+}
+
 const schema = z.object({
   product_variation_id: z.number().min(1),
   delta: z.number().int().refine((n) => n !== 0, { message: 'Delta não pode ser zero' }),
@@ -51,14 +57,19 @@ export async function POST(request: Request) {
 
   // Log loss to finance_entries
   if (delta < 0) {
-    await admin.from('finance_entries').insert({
+    await admin.from('finance_entries')const { error: financeError } = await admin.from('finance_entries').insert({
       type: 'expense',
       category: 'other_expense',
       description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
       amount: parseFloat((Math.abs(delta) * (current?.avg_cost ?? 0)).toFixed(2)),
       reference_date: new Date().toISOString().slice(0, 10),
       notes: notes ?? null,
+      created_by: SYSTEM_USER_ID,
     } as any)
+    
+    if (financeError) {
+      return NextResponse.json({ error: financeError.message }, { status: 500 })
+    }
   }
 
   return NextResponse.json({ new_quantity: newQty, previous_quantity: currentQty, delta })
