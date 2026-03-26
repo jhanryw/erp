@@ -88,7 +88,7 @@ export async function POST(request: Request) {
   }
 
   // 3. Registrar lançamento financeiro (despesa de compra de estoque)
-  await admin.from('finance_entries')const { error: financeError } = await admin.from('finance_entries').insert({
+  const { error: financeError } = await admin.from('finance_entries').insert({
     type: 'expense',
     category: 'stock_purchase',
     description: `Entrada de estoque — Lote #${lot!.id}`,
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
   if (financeError) {
     return NextResponse.json({ error: financeError.message }, { status: 500 })
   }
-
+  
   return NextResponse.json({
     lot_id: lot!.id,
     new_quantity: newQty,

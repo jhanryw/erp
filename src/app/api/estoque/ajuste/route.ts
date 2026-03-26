@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
   // Log loss to finance_entries
   if (delta < 0) {
-    await admin.from('finance_entries')const { error: financeError } = await admin.from('finance_entries').insert({
+    const { error: financeError } = await admin.from('finance_entries').insert({
       type: 'expense',
       category: 'other_expense',
       description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       notes: notes ?? null,
       created_by: SYSTEM_USER_ID,
     } as any)
-    
+  
     if (financeError) {
       return NextResponse.json({ error: financeError.message }, { status: 500 })
     }
