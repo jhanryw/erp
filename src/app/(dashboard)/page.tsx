@@ -81,10 +81,7 @@ export default async function DashboardPage() {
             <h2 className="text-lg font-semibold">Top Produtos</h2>
           </CardHeader>
           <CardContent>
-            <TopProductsWidget
-              data={data.topProducts}
-              showFinancials={data.showFinancials}
-            />
+            <TopProductsWidget products={data.topProducts} />
           </CardContent>
         </Card>
       </div>
@@ -99,7 +96,7 @@ export default async function DashboardPage() {
             </p>
           </CardHeader>
           <CardContent>
-            <StockAlertsWidget data={data.stockAlerts} />
+            <StockAlertsWidget alerts={data.stockAlerts} />
           </CardContent>
         </Card>
       )}
