@@ -103,11 +103,11 @@ export default async function VendasPage() {
 
       {sales.length === 0 ? (
         <EmptyState
-          icon={ShoppingCart}
+          icon={<ShoppingCart className="h-4 w-4" />}
           title="Nenhuma venda registrada"
           description="Registre a primeira venda do sistema."
           action={{ label: 'Nova venda', href: '/vendas/nova' }}
-        />
+      />
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">

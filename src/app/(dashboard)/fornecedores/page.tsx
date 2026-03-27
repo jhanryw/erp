@@ -84,11 +84,11 @@ export default async function FornecedoresPage() {
 
       {suppliers.length === 0 ? (
         <EmptyState
-          icon={Truck}
+          icon={<Truck className="h-4 w-4" />}
           title="Nenhum fornecedor cadastrado"
           description="Cadastre o primeiro fornecedor."
           action={{ label: 'Novo fornecedor', href: '/fornecedores/novo' }}
-        />
+      />
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">

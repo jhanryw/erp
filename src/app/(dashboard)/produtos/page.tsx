@@ -96,11 +96,11 @@ export default async function ProdutosPage() {
 
       {products.length === 0 ? (
         <EmptyState
-          icon={Package}
+          icon={<Package className="h-4 w-4" />}
           title="Nenhum produto cadastrado"
           description="Cadastre o primeiro produto do catálogo."
           action={{ label: 'Cadastrar produto', href: '/produtos/novo' }}
-        />
+      />
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">
