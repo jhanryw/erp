@@ -137,11 +137,11 @@ export default async function EstoquePage() {
 
       {data.items.length === 0 ? (
         <EmptyState
-          icon={Warehouse}
+          icon={<Warehouse className="h-4 w-4" />}
           title="Estoque vazio"
           description="Registre a primeira entrada de estoque."
           action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
-        />
+/>
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">
