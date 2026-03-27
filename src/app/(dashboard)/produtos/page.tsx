@@ -1,153 +1,210 @@
-import { createClient } from '@/lib/supabase/server'
 import Link from 'next/link'
 import Image from 'next/image'
 import { Plus, Package } from 'lucide-react'
+
+import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader } from '@/components/ui/card'
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { DeleteProductButton } from './_components/delete-product-button'
 
 export const dynamic = 'force-dynamic'
 
-async function getProducts() {
-  const supabase = createClient()
-  const { data } = await supabase
+type ProductCategory = {
+  id: number
+  name: string
+}
+
+type ProductSupplier = {
+  id: number
+  name: string
+}
+
+type ProductRow = {
+  id: number
+  name: string
+  sku: string
+  base_cost: number
+  base_price: number
+  margin_pct: number
+  photo_url: string | null
+  active: boolean
+  origin: string | null
+  categories: ProductCategory | ProductCategory[] | null
+  suppliers: ProductSupplier | ProductSupplier[] | null
+}
+
+async function getProducts(): Promise<ProductRow[]> {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
     .from('products')
     .select(`
-      id, name, sku, base_cost, base_price, margin_pct, photo_url, active, origin,
+      id,
+      name,
+      sku,
+      base_cost,
+      base_price,
+      margin_pct,
+      photo_url,
+      active,
+      origin,
       categories:category_id (id, name),
       suppliers:supplier_id (id, name)
     `)
-    .order('name', { ascending: true }) as unknown as { data: any[] | null, error: any }
+    .order('name', { ascending: true })
 
-  return data ?? []
+  if (error) {
+    console.error('Erro ao listar produtos:', error.message)
+    return []
+  }
+
+  return (data ?? []) as unknown as ProductRow[]
 }
 
 export default async function ProdutosPage() {
   const products = await getProducts()
 
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">Produtos</h2>
-          <p className="text-sm text-text-muted">{products.length} produto{products.length !== 1 ? 's' : ''} cadastrado{products.length !== 1 ? 's' : ''}</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Produtos</h1>
+          <p className="text-sm text-muted-foreground">
+            {products.length} produto{products.length !== 1 ? 's' : ''} cadastrado
+            {products.length !== 1 ? 's' : ''}
+          </p>
         </div>
-        <Link href="/produtos/novo">
-          <Button size="sm">
-            <Plus className="w-4 h-4" />
+
+        <Button asChild>
+          <Link href="/produtos/novo">
+            <Plus className="mr-2 h-4 w-4" />
             Novo Produto
-          </Button>
-        </Link>
+          </Link>
+        </Button>
       </div>
 
-      <Card>
-        {products.length === 0 ? (
-          <EmptyState
-            icon={<Package className="w-6 h-6 text-text-muted" />}
-            title="Nenhum produto cadastrado"
-            description="Cadastre o primeiro produto do catálogo."
-            action={{ label: 'Cadastrar produto', href: '/produtos/novo' }}
-          />
-        ) : (
-          <>
-            <CardHeader>
-              <p className="text-xs text-text-muted">{products.length} itens</p>
+      {products.length === 0 ? (
+        <EmptyState
+          icon={Package}
+          title="Nenhum produto cadastrado"
+          description="Cadastre o primeiro produto do catálogo."
+          action={{ label: 'Cadastrar produto', href: '/produtos/novo' }}
+        />
+      ) : (
+        <>
+          <Card>
+            <CardHeader className="text-sm text-muted-foreground">
+              {products.length} itens
             </CardHeader>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Produto</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Fornecedor</TableHead>
-                  <TableHead align="right">Custo</TableHead>
-                  <TableHead align="right">Preço</TableHead>
-                  <TableHead align="right">Margem</TableHead>
-                  <TableHead align="center">Status</TableHead>
-                  <TableHead align="center">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {products.map((product) => (
-                  <TableRow
-                    key={product.id}
-                    className="group"
-                  >
-                    <TableCell>
-                      <Link
-                        href={`/produtos/${product.id}`}
-                        className="flex items-center gap-3 group-hover:text-accent"
-                      >
-                        <div className="w-9 h-9 rounded-lg bg-bg-overlay flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {product.photo_url ? (
-                            <Image
-                              src={product.photo_url}
-                              alt={product.name}
-                              width={36}
-                              height={36}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <Package className="w-4 h-4 text-text-muted" />
-                          )}
-                        </div>
-                        <span className="font-medium text-sm line-clamp-1">{product.name}</span>
-                      </Link>
-                    </TableCell>
-                    <TableCell muted>
-                      <code className="text-xs bg-bg-overlay px-1.5 py-0.5 rounded">
-                        {product.sku}
-                      </code>
-                    </TableCell>
-                    <TableCell muted>
-                      {(product.categories as any)?.name ?? '—'}
-                    </TableCell>
-                    <TableCell muted>
-                      {(product.suppliers as any)?.name ?? '—'}
-                    </TableCell>
-                    <TableCell align="right" muted>
-                      {formatCurrency(product.base_cost)}
-                    </TableCell>
-                    <TableCell align="right" className="font-medium">
-                      {formatCurrency(product.base_price)}
-                    </TableCell>
-                    <TableCell align="right">
-                      <span
-                        className={`text-sm font-semibold ${
-                          product.margin_pct >= 40
-                            ? 'text-success'
-                            : product.margin_pct >= 25
-                            ? 'text-warning'
-                            : 'text-error'
-                        }`}
-                      >
-                        {formatPercent(product.margin_pct)}
-                      </span>
-                    </TableCell>
-                    <TableCell align="center">
-                      <Badge variant={product.active ? 'success' : 'default'} size="sm">
-                        {product.active ? 'Ativo' : 'Inativo'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell align="center">
-                      <div className="flex items-center justify-center gap-1">
-                        <Link href={`/produtos/${product.id}/editar`}>
-                          <Button variant="ghost" size="sm" className="text-xs px-2">Editar</Button>
-                        </Link>
-                        <DeleteProductButton id={product.id} />
-                      </div>
-                    </TableCell>
+
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Produto</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Categoria</TableHead>
+                    <TableHead>Fornecedor</TableHead>
+                    <TableHead>Custo</TableHead>
+                    <TableHead>Preço</TableHead>
+                    <TableHead>Margem</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </>
-        )}
-      </Card>
+                </TableHeader>
+
+                <TableBody>
+                  {products.map((product) => {
+                    const category = Array.isArray(product.categories)
+                      ? product.categories[0] ?? null
+                      : product.categories ?? null
+
+                    const supplier = Array.isArray(product.suppliers)
+                      ? product.suppliers[0] ?? null
+                      : product.suppliers ?? null
+
+                    return (
+                      <TableRow key={product.id}>
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            {product.photo_url ? (
+                              <Image
+                                src={product.photo_url}
+                                alt={product.name}
+                                width={40}
+                                height={40}
+                                className="h-10 w-10 rounded-md object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
+                                <Package className="h-4 w-4 text-muted-foreground" />
+                              </div>
+                            )}
+
+                            <div className="font-medium">{product.name}</div>
+                          </div>
+                        </TableCell>
+
+                        <TableCell>
+                          <code>{product.sku}</code>
+                        </TableCell>
+
+                        <TableCell>{category?.name ?? '—'}</TableCell>
+                        <TableCell>{supplier?.name ?? '—'}</TableCell>
+                        <TableCell>{formatCurrency(product.base_cost)}</TableCell>
+                        <TableCell>{formatCurrency(product.base_price)}</TableCell>
+
+                        <TableCell>
+                          <span
+                            className={
+                              product.margin_pct >= 40
+                                ? 'text-success'
+                                : product.margin_pct >= 25
+                                ? 'text-warning'
+                                : 'text-error'
+                            }
+                          >
+                            {formatPercent(product.margin_pct)}
+                          </span>
+                        </TableCell>
+
+                        <TableCell>
+                          <Badge variant={product.active ? 'default' : 'secondary'}>
+                            {product.active ? 'Ativo' : 'Inativo'}
+                          </Badge>
+                        </TableCell>
+
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-2">
+                            <Button asChild variant="outline" size="sm">
+                              <Link href={`/produtos/editar/${product.id}`}>Editar</Link>
+                            </Button>
+                            <DeleteProductButton
+                              productId={product.id}
+                              productName={product.name}
+                            />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </Card>
+        </>
+      )}
     </div>
   )
 }
