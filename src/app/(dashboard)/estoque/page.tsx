@@ -86,53 +86,53 @@ export default async function EstoquePage() {
           <p className="text-sm text-muted-foreground">Posição atual</p>
         </div>
 
-        <Button asChild>
-          <Link href="/estoque/entrada">
+        <Link href="/estoque/entrada">
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             Registrar Entrada
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Quantidade Total"
           value={formatNumber(data.totalQty)}
-          icon={Warehouse}
+          icon={<Warehouse className="h-4 w-4" />}
         />
         <StatCard
           title="Valor em Custo"
           value={formatCurrency(data.totalCostValue)}
-          icon={DollarSign}
+          icon={<DollarSign className="h-4 w-4" />}
         />
         <StatCard
           title="Valor em Venda"
           value={formatCurrency(data.totalSaleValue)}
-          icon={Package}
+          icon={<Package className="h-4 w-4" />}
         />
         <StatCard
           title="Alertas de Estoque"
           value={formatNumber(data.alertCount)}
-          icon={AlertTriangle}
+          icon={<AlertTriangle className="h-4 w-4" />}
           valueClassName={data.alertCount > 0 ? 'text-warning' : undefined}
         />
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Button asChild variant="outline">
-          <Link href="/estoque/movimentacoes">Ver Movimentações</Link>
-        </Button>
+        <Link href="/estoque/movimentacoes">
+          <Button variant="outline">Ver Movimentações</Button>
+        </Link>
 
-        <Button asChild variant="outline">
-          <Link href="/estoque/alertas">
+        <Link href="/estoque/alertas">
+          <Button variant="outline">
             Ver Alertas
             {data.alertCount > 0 && (
               <span className="ml-2 rounded-full bg-warning/15 px-2 py-0.5 text-xs text-warning">
                 {data.alertCount}
               </span>
             )}
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       {data.items.length === 0 ? (
