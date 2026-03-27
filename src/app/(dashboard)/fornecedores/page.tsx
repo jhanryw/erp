@@ -129,7 +129,7 @@ export default async function FornecedoresPage() {
                             Editar
                           </Button>
                         </Link>
-                        <DeleteSupplierButton supplierId={s.id} supplierName={s.name} />
+                        <DeleteSupplierButton id={s.id} />
                       </div>
                     </TableCell>
                   </TableRow>
