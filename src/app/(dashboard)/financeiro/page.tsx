@@ -55,9 +55,16 @@ async function getFinancialData() {
   }
 }
 
-function trendPct(current: number, previous: number): number | undefined {
+function trendPct(
+  current: number,
+  previous: number
+): { value: number; label?: string } | undefined {
   if (!previous) return undefined
-  return ((current - previous) / previous) * 100
+
+  return {
+    value: ((current - previous) / previous) * 100,
+    label: 'vs mês anterior',
+  }
 }
 
 export default async function FinanceiroPage() {
