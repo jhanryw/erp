@@ -1,37 +1,47 @@
 'use client'
 
-import { cn } from '@/lib/utils/cn'
+import type { ReactNode } from 'react'
 import Link from 'next/link'
 import { Button } from './button'
+import { cn } from '@/lib/utils/cn'
 
 interface EmptyStateProps {
-  /** Passe como JSX: icon={<Warehouse className="w-6 h-6 text-text-muted" />}
-   *  NÃO passe como referência de componente (icon={Warehouse}) — viola RSC boundary */
-  icon: React.ReactNode
+  icon: ReactNode
   title: string
   description?: string
-  action?: {
-    label: string
-    href: string
-  }
+  action?: { label: string; href: string }
   className?: string
 }
 
-export function EmptyState({ icon, title, description, action, className }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  action,
+  className,
+}: EmptyStateProps) {
   return (
-    <div className={cn('flex flex-col items-center justify-center py-16 px-6 text-center', className)}>
-      <div className="w-12 h-12 rounded-2xl bg-bg-overlay flex items-center justify-center mb-4">
+    <div
+      className={cn(
+        'flex min-h-[240px] flex-col items-center justify-center rounded-2xl border border-border bg-bg-card p-8 text-center',
+        className
+      )}
+    >
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-bg-overlay text-text-secondary">
         {icon}
       </div>
-      <h3 className="text-sm font-medium text-text-primary mb-1">{title}</h3>
+
+      <h3 className="mb-2 text-lg font-semibold">{title}</h3>
+
       {description && (
-        <p className="text-sm text-text-secondary max-w-sm">{description}</p>
+        <p className="mb-6 max-w-md text-sm text-muted-foreground">
+          {description}
+        </p>
       )}
+
       {action && (
         <Link href={action.href}>
-          <Button className="mt-5" size="sm">
-            {action.label}
-          </Button>
+          <Button>{action.label}</Button>
         </Link>
       )}
     </div>
