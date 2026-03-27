@@ -74,12 +74,12 @@ export default async function FornecedoresPage() {
           </p>
         </div>
 
-        <Button asChild>
-          <Link href="/fornecedores/novo">
+        <Link href="/fornecedores/novo">
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             Novo Fornecedor
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       {suppliers.length === 0 ? (
@@ -124,9 +124,11 @@ export default async function FornecedoresPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Button asChild variant="outline" size="sm">
-                          <Link href={`/fornecedores/editar/${s.id}`}>Editar</Link>
-                        </Button>
+                        <Link href={`/fornecedores/editar/${s.id}`}>
+                          <Button variant="outline" size="sm">
+                            Editar
+                          </Button>
+                        </Link>
                         <DeleteSupplierButton supplierId={s.id} supplierName={s.name} />
                       </div>
                     </TableCell>

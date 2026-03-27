@@ -93,12 +93,12 @@ export default async function VendasPage() {
           </p>
         </div>
 
-        <Button asChild>
-          <Link href="/vendas/nova">
+        <Link href="/vendas/nova">
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             Nova Venda
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       {sales.length === 0 ? (
@@ -109,65 +109,63 @@ export default async function VendasPage() {
           action={{ label: 'Nova venda', href: '/vendas/nova' }}
         />
       ) : (
-        <>
-          <Card>
-            <CardHeader className="text-sm text-muted-foreground">
-              {sales.length} vendas
-            </CardHeader>
+        <Card>
+          <CardHeader className="text-sm text-muted-foreground">
+            {sales.length} vendas
+          </CardHeader>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Pedido</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Total</TableHead>
-                    <TableHead>Pagamento</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Vendedor</TableHead>
-                  </TableRow>
-                </TableHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Pedido</TableHead>
+                  <TableHead>Cliente</TableHead>
+                  <TableHead>Data</TableHead>
+                  <TableHead>Total</TableHead>
+                  <TableHead>Pagamento</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Vendedor</TableHead>
+                </TableRow>
+              </TableHeader>
 
-                <TableBody>
-                  {sales.map((sale) => {
-                    const customer = Array.isArray(sale.customers)
-                      ? sale.customers[0] ?? null
-                      : sale.customers ?? null
+              <TableBody>
+                {sales.map((sale) => {
+                  const customer = Array.isArray(sale.customers)
+                    ? sale.customers[0] ?? null
+                    : sale.customers ?? null
 
-                    const user = Array.isArray(sale.users)
-                      ? sale.users[0] ?? null
-                      : sale.users ?? null
+                  const user = Array.isArray(sale.users)
+                    ? sale.users[0] ?? null
+                    : sale.users ?? null
 
-                    return (
-                      <TableRow key={sale.id}>
-                        <TableCell className="font-medium">
-                          {sale.sale_number}
-                        </TableCell>
+                  return (
+                    <TableRow key={sale.id}>
+                      <TableCell className="font-medium">
+                        {sale.sale_number}
+                      </TableCell>
 
-                        <TableCell>{customer?.name ?? '—'}</TableCell>
+                      <TableCell>{customer?.name ?? '—'}</TableCell>
 
-                        <TableCell>{formatDate(sale.sale_date)}</TableCell>
+                      <TableCell>{formatDate(sale.sale_date)}</TableCell>
 
-                        <TableCell>{formatCurrency(sale.total)}</TableCell>
+                      <TableCell>{formatCurrency(sale.total)}</TableCell>
 
-                        <TableCell>
-                          {PAYMENT_LABELS[sale.payment_method ?? ''] ?? '—'}
-                        </TableCell>
+                      <TableCell>
+                        {PAYMENT_LABELS[sale.payment_method ?? ''] ?? '—'}
+                      </TableCell>
 
-                        <TableCell>
-                          <SaleStatusBadge status={sale.status} />
-                        </TableCell>
+                      <TableCell>
+                        <SaleStatusBadge status={sale.status} />
+                      </TableCell>
 
-                        <TableCell>{user?.name ?? '—'}</TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
-        </>
+                      <TableCell>{user?.name ?? '—'}</TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </div>
   )

@@ -96,12 +96,12 @@ export default async function ClientesPage() {
           </p>
         </div>
 
-        <Button asChild>
-          <Link href="/clientes/novo">
+        <Link href="/clientes/novo">
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             Novo Cliente
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       {customers.length === 0 ? (
@@ -112,80 +112,78 @@ export default async function ClientesPage() {
           action={{ label: 'Cadastrar cliente', href: '/clientes/novo' }}
         />
       ) : (
-        <>
-          <Card>
-            <CardHeader className="text-sm text-muted-foreground">
-              {customers.length} clientes
-            </CardHeader>
+        <Card>
+          <CardHeader className="text-sm text-muted-foreground">
+            {customers.length} clientes
+          </CardHeader>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>CPF</TableHead>
-                    <TableHead>Origem</TableHead>
-                    <TableHead>Total Gasto</TableHead>
-                    <TableHead>Compras</TableHead>
-                    <TableHead>Ticket Médio</TableHead>
-                    <TableHead>Última Compra</TableHead>
-                    <TableHead>Segmento</TableHead>
-                  </TableRow>
-                </TableHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Cliente</TableHead>
+                  <TableHead>CPF</TableHead>
+                  <TableHead>Origem</TableHead>
+                  <TableHead>Total Gasto</TableHead>
+                  <TableHead>Compras</TableHead>
+                  <TableHead>Ticket Médio</TableHead>
+                  <TableHead>Última Compra</TableHead>
+                  <TableHead>Segmento</TableHead>
+                </TableRow>
+              </TableHeader>
 
-                <TableBody>
-                  {customers.map((customer) => {
-                    const rawMetrics = customer.customer_metrics
-                    const metrics = Array.isArray(rawMetrics)
-                      ? rawMetrics[0] ?? null
-                      : rawMetrics ?? null
+              <TableBody>
+                {customers.map((customer) => {
+                  const rawMetrics = customer.customer_metrics
+                  const metrics = Array.isArray(rawMetrics)
+                    ? rawMetrics[0] ?? null
+                    : rawMetrics ?? null
 
-                    return (
-                      <TableRow key={customer.id}>
-                        <TableCell>
-                          <div className="font-medium">{customer.name}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {customer.phone ?? '—'}
-                          </div>
-                        </TableCell>
+                  return (
+                    <TableRow key={customer.id}>
+                      <TableCell>
+                        <div className="font-medium">{customer.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {customer.phone ?? '—'}
+                        </div>
+                      </TableCell>
 
-                        <TableCell>{customer.cpf ? maskCPF(customer.cpf) : '—'}</TableCell>
+                      <TableCell>{customer.cpf ? maskCPF(customer.cpf) : '—'}</TableCell>
 
-                        <TableCell>
-                          {ORIGIN_LABELS[customer.origin ?? ''] ?? '—'}
-                        </TableCell>
+                      <TableCell>
+                        {ORIGIN_LABELS[customer.origin ?? ''] ?? '—'}
+                      </TableCell>
 
-                        <TableCell>
-                          {formatCurrency(metrics?.total_spent ?? 0)}
-                        </TableCell>
+                      <TableCell>
+                        {formatCurrency(metrics?.total_spent ?? 0)}
+                      </TableCell>
 
-                        <TableCell>{metrics?.order_count ?? 0}</TableCell>
+                      <TableCell>{metrics?.order_count ?? 0}</TableCell>
 
-                        <TableCell>
-                          {formatCurrency(metrics?.avg_ticket ?? 0)}
-                        </TableCell>
+                      <TableCell>
+                        {formatCurrency(metrics?.avg_ticket ?? 0)}
+                      </TableCell>
 
-                        <TableCell>
-                          {metrics?.last_purchase_date
-                            ? formatDate(metrics.last_purchase_date)
-                            : '—'}
-                        </TableCell>
+                      <TableCell>
+                        {metrics?.last_purchase_date
+                          ? formatDate(metrics.last_purchase_date)
+                          : '—'}
+                      </TableCell>
 
-                        <TableCell>
-                          {metrics?.rfm_segment ? (
-                            <RfmBadge segment={metrics.rfm_segment} />
-                          ) : (
-                            '—'
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
-        </>
+                      <TableCell>
+                        {metrics?.rfm_segment ? (
+                          <RfmBadge segment={metrics.rfm_segment} />
+                        ) : (
+                          '—'
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </div>
   )

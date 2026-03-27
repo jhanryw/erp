@@ -86,12 +86,12 @@ export default async function ProdutosPage() {
           </p>
         </div>
 
-        <Button asChild>
-          <Link href="/produtos/novo">
+        <Link href="/produtos/novo">
+          <Button>
             <Plus className="mr-2 h-4 w-4" />
             Novo Produto
-          </Link>
-        </Button>
+          </Button>
+        </Link>
       </div>
 
       {products.length === 0 ? (
@@ -102,108 +102,108 @@ export default async function ProdutosPage() {
           action={{ label: 'Cadastrar produto', href: '/produtos/novo' }}
         />
       ) : (
-        <>
-          <Card>
-            <CardHeader className="text-sm text-muted-foreground">
-              {products.length} itens
-            </CardHeader>
+        <Card>
+          <CardHeader className="text-sm text-muted-foreground">
+            {products.length} itens
+          </CardHeader>
 
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Produto</TableHead>
-                    <TableHead>SKU</TableHead>
-                    <TableHead>Categoria</TableHead>
-                    <TableHead>Fornecedor</TableHead>
-                    <TableHead>Custo</TableHead>
-                    <TableHead>Preço</TableHead>
-                    <TableHead>Margem</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
-                  </TableRow>
-                </TableHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Produto</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead>Categoria</TableHead>
+                  <TableHead>Fornecedor</TableHead>
+                  <TableHead>Custo</TableHead>
+                  <TableHead>Preço</TableHead>
+                  <TableHead>Margem</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
 
-                <TableBody>
-                  {products.map((product) => {
-                    const category = Array.isArray(product.categories)
-                      ? product.categories[0] ?? null
-                      : product.categories ?? null
+              <TableBody>
+                {products.map((product) => {
+                  const category = Array.isArray(product.categories)
+                    ? product.categories[0] ?? null
+                    : product.categories ?? null
 
-                    const supplier = Array.isArray(product.suppliers)
-                      ? product.suppliers[0] ?? null
-                      : product.suppliers ?? null
+                  const supplier = Array.isArray(product.suppliers)
+                    ? product.suppliers[0] ?? null
+                    : product.suppliers ?? null
 
-                    return (
-                      <TableRow key={product.id}>
-                        <TableCell>
-                          <div className="flex items-center gap-3">
-                            {product.photo_url ? (
-                              <Image
-                                src={product.photo_url}
-                                alt={product.name}
-                                width={40}
-                                height={40}
-                                className="h-10 w-10 rounded-md object-cover"
-                              />
-                            ) : (
-                              <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
-                                <Package className="h-4 w-4 text-muted-foreground" />
-                              </div>
-                            )}
-
-                            <div className="font-medium">{product.name}</div>
-                          </div>
-                        </TableCell>
-
-                        <TableCell>
-                          <code>{product.sku}</code>
-                        </TableCell>
-
-                        <TableCell>{category?.name ?? '—'}</TableCell>
-                        <TableCell>{supplier?.name ?? '—'}</TableCell>
-                        <TableCell>{formatCurrency(product.base_cost)}</TableCell>
-                        <TableCell>{formatCurrency(product.base_price)}</TableCell>
-
-                        <TableCell>
-                          <span
-                            className={
-                              product.margin_pct >= 40
-                                ? 'text-success'
-                                : product.margin_pct >= 25
-                                ? 'text-warning'
-                                : 'text-error'
-                            }
-                          >
-                            {formatPercent(product.margin_pct)}
-                          </span>
-                        </TableCell>
-
-                        <TableCell>
-                          <Badge variant={product.active ? 'default' : 'secondary'}>
-                            {product.active ? 'Ativo' : 'Inativo'}
-                          </Badge>
-                        </TableCell>
-
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button asChild variant="outline" size="sm">
-                              <Link href={`/produtos/editar/${product.id}`}>Editar</Link>
-                            </Button>
-                            <DeleteProductButton
-                              productId={product.id}
-                              productName={product.name}
+                  return (
+                    <TableRow key={product.id}>
+                      <TableCell>
+                        <div className="flex items-center gap-3">
+                          {product.photo_url ? (
+                            <Image
+                              src={product.photo_url}
+                              alt={product.name}
+                              width={40}
+                              height={40}
+                              className="h-10 w-10 rounded-md object-cover"
                             />
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          </Card>
-        </>
+                          ) : (
+                            <div className="flex h-10 w-10 items-center justify-center rounded-md bg-muted">
+                              <Package className="h-4 w-4 text-muted-foreground" />
+                            </div>
+                          )}
+
+                          <div className="font-medium">{product.name}</div>
+                        </div>
+                      </TableCell>
+
+                      <TableCell>
+                        <code>{product.sku}</code>
+                      </TableCell>
+
+                      <TableCell>{category?.name ?? '—'}</TableCell>
+                      <TableCell>{supplier?.name ?? '—'}</TableCell>
+                      <TableCell>{formatCurrency(product.base_cost)}</TableCell>
+                      <TableCell>{formatCurrency(product.base_price)}</TableCell>
+
+                      <TableCell>
+                        <span
+                          className={
+                            product.margin_pct >= 40
+                              ? 'text-success'
+                              : product.margin_pct >= 25
+                              ? 'text-warning'
+                              : 'text-error'
+                          }
+                        >
+                          {formatPercent(product.margin_pct)}
+                        </span>
+                      </TableCell>
+
+                      <TableCell>
+                        <Badge variant={product.active ? 'default' : 'secondary'}>
+                          {product.active ? 'Ativo' : 'Inativo'}
+                        </Badge>
+                      </TableCell>
+
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Link href={`/produtos/editar/${product.id}`}>
+                            <Button variant="outline" size="sm">
+                              Editar
+                            </Button>
+                          </Link>
+                          <DeleteProductButton
+                            productId={product.id}
+                            productName={product.name}
+                          />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </div>
   )
