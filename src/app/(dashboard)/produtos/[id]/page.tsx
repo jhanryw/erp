@@ -35,16 +35,18 @@ type ProductRow = {
   suppliers?: { id: number; name: string } | null
 }
 
+type AttributeRow = {
+  variation_types: { name: string; slug: string } | null
+  variation_values: { value: string } | null
+}
+
 type VariationRow = {
   id: number
   sku_variation: string
-  color: string | null
-  size: string | null
-  model: string | null
-  fabric: string | null
   cost_override: number | null
   price_override: number | null
   active: boolean
+  product_variation_attributes: AttributeRow[]
 }
 
 async function getProduct(id: string) {
@@ -76,9 +78,17 @@ async function getProduct(id: string) {
 
   const { data: variations } = await supabase
     .from('product_variations')
-    .select(
-      'id, sku_variation, color, size, model, fabric, cost_override, price_override, active'
-    )
+    .select(`
+      id,
+      sku_variation,
+      cost_override,
+      price_override,
+      active,
+      product_variation_attributes (
+        variation_types:variation_type_id ( name, slug ),
+        variation_values:variation_value_id ( value )
+      )
+    `)
     .eq('product_id', productId)
     .order('sku_variation', { ascending: true })
 
@@ -129,11 +139,13 @@ export default async function ProdutoDetalhePage({
         </div>
 
         <div className="flex gap-2">
-          <Button variant="outline">
-            <Edit className="mr-2 h-4 w-4" />
-            Editar
-          </Button>
-          <DeleteProductButton id={product.id} />
+          <Link href={`/produtos/${product.id}/editar`}>
+            <Button variant="outline">
+              <Edit className="mr-2 h-4 w-4" />
+              Editar
+            </Button>
+          </Link>
+          <DeleteProductButton id={product.id} redirectAfter />
         </div>
       </div>
 
@@ -175,9 +187,7 @@ export default async function ProdutoDetalhePage({
               <TableHeader>
                 <TableRow>
                   <TableHead>SKU Variação</TableHead>
-                  <TableHead>Cor</TableHead>
-                  <TableHead>Tamanho</TableHead>
-                  <TableHead>Modelo</TableHead>
+                  <TableHead>Atributos</TableHead>
                   <TableHead>Custo</TableHead>
                   <TableHead>Preço</TableHead>
                   <TableHead>Status</TableHead>
@@ -185,31 +195,36 @@ export default async function ProdutoDetalhePage({
               </TableHeader>
 
               <TableBody>
-                {variations.map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell>
-                      <code>{v.sku_variation}</code>
-                    </TableCell>
-                    <TableCell>{v.color ?? '—'}</TableCell>
-                    <TableCell>{v.size ?? '—'}</TableCell>
-                    <TableCell>{v.model ?? '—'}</TableCell>
-                    <TableCell>
-                      {v.cost_override != null
-                        ? formatCurrency(v.cost_override)
-                        : 'base'}
-                    </TableCell>
-                    <TableCell>
-                      {v.price_override != null
-                        ? formatCurrency(v.price_override)
-                        : 'base'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={v.active ? 'default' : 'outline'}>
-                        {v.active ? 'Ativa' : 'Inativa'}
-                      </Badge>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {variations.map((v) => {
+                  const attrs = v.product_variation_attributes
+                    .map((a) => a.variation_values?.value)
+                    .filter(Boolean)
+                    .join(' / ')
+
+                  return (
+                    <TableRow key={v.id}>
+                      <TableCell>
+                        <code>{v.sku_variation}</code>
+                      </TableCell>
+                      <TableCell>{attrs || '—'}</TableCell>
+                      <TableCell>
+                        {v.cost_override != null
+                          ? formatCurrency(v.cost_override)
+                          : 'base'}
+                      </TableCell>
+                      <TableCell>
+                        {v.price_override != null
+                          ? formatCurrency(v.price_override)
+                          : 'base'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={v.active ? 'default' : 'outline'}>
+                          {v.active ? 'Ativa' : 'Inativa'}
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>
