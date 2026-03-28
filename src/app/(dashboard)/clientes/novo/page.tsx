@@ -1,23 +1,32 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
-import { useForm, Controller } from 'react-hook-form'
-import { zodResolver } from '@hookform/resolvers/zod'
-import { toast } from 'sonner'
-import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
-import { customerSchema, type CustomerFormData } from '@/lib/validators'
-import { formatCPF } from '@/lib/utils/cpf'
-import { getAuthUserId, cleanPayload, handleDbError } from '@/lib/utils/supabase-helpers'
+import { useState, type ChangeEvent } from 'react'
+import { useRouter } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
+import { ArrowLeft } from 'lucide-react'
+import { toast } from 'sonner'
+
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import { useState } from 'react'
+
+const customerFormSchema = z.object({
+  name: z.string().min(2, 'Informe o nome'),
+  cpf: z.string().length(11, 'CPF inválido'),
+  phone: z.string().min(1, 'Informe o telefone'),
+  birth_date: z.string().optional(),
+  city: z.string().optional(),
+  origin: z.string().optional(),
+  notes: z.string().optional(),
+})
+
+type CustomerFormData = z.infer<typeof customerFormSchema>
 
 export default function NovoClientePage() {
   const router = useRouter()
-  const supabase = createClient()
   const [cpfDisplay, setCpfDisplay] = useState('')
 
   const {
@@ -26,120 +35,147 @@ export default function NovoClientePage() {
     setValue,
     formState: { errors, isSubmitting },
   } = useForm<CustomerFormData>({
-    resolver: zodResolver(customerSchema),
+    resolver: zodResolver(customerFormSchema),
+    defaultValues: {
+      name: '',
+      cpf: '',
+      phone: '',
+      birth_date: '',
+      city: '',
+      origin: '',
+      notes: '',
+    },
   })
 
-  async function onSubmit(data: CustomerFormData) {
-    let userId: string
-    try {
-      userId = await getAuthUserId()
-    } catch {
-      toast.error('Você precisa estar logado para cadastrar clientes')
-      return
-    }
-
-    const payload = cleanPayload({ ...data, created_by: userId })
-
-    const { data: customer, error } = await supabase
-      .from('customers')
-      .insert(payload as any)
-      .select('id')
-      .single() as unknown as { data: { id: string } | null; error: any }
-
-    if (error) {
-      handleDbError(error, 'Erro ao cadastrar cliente')
-      return
-    }
-
-    toast.success('Cliente cadastrado com sucesso!')
-    router.push(`/clientes/${customer!.id}`)
-  }
-
-  function handleCPFChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleCPFChange(e: ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.replace(/\D/g, '').slice(0, 11)
     const formatted = raw
       .replace(/(\d{3})(\d)/, '$1.$2')
       .replace(/(\d{3})\.(\d{3})(\d)/, '$1.$2.$3')
       .replace(/(\d{3})\.(\d{3})\.(\d{3})(\d)/, '$1.$2.$3-$4')
+
     setCpfDisplay(formatted)
-    setValue('cpf', raw)
+    setValue('cpf', raw, {
+      shouldValidate: true,
+      shouldDirty: true,
+      shouldTouch: true,
+    })
+  }
+
+  async function onSubmit(data: CustomerFormData) {
+    const payload = {
+      ...data,
+      birth_date: data.birth_date || '',
+      city: data.city || '',
+      origin: data.origin || '',
+      notes: data.notes || '',
+    }
+
+    const res = await fetch('/api/clientes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+
+    const json = await res.json()
+
+    if (!res.ok) {
+      if (json.error === 'CPF já cadastrado.') {
+        toast.error('CPF já cadastrado')
+      } else {
+        toast.error('Erro ao cadastrar cliente', {
+          description:
+            typeof json.error === 'string'
+              ? json.error
+              : 'Verifique os dados informados.',
+        })
+      }
+      return
+    }
+
+    toast.success('Cliente cadastrado com sucesso!')
+    router.push(`/clientes/${json.customer.id}`)
+    router.refresh()
   }
 
   return (
-    <div className="max-w-2xl space-y-5">
-      <div className="flex items-center gap-3">
+    <div className="space-y-6 p-6">
+      <div className="flex items-center gap-4">
         <Link href="/clientes">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="w-4 h-4" />
+          <Button type="button" variant="ghost" size="sm">
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            Voltar
           </Button>
         </Link>
-        <h2 className="text-lg font-semibold text-text-primary">Novo Cliente</h2>
+
+        <div>
+          <h1 className="text-2xl font-semibold">Novo Cliente</h1>
+          <p className="text-sm text-muted-foreground">
+            Cadastre um novo cliente no sistema.
+          </p>
+        </div>
       </div>
 
-      <form onSubmit={handleSubmit(onSubmit)} className="card p-6 space-y-5">
-        {/* CPF */}
-        <div>
-          <Input
-            label="CPF"
-            required
-            value={cpfDisplay}
-            onChange={handleCPFChange}
-            placeholder="000.000.000-00"
-            error={errors.cpf?.message}
-            hint="O CPF é validado automaticamente"
-          />
-        </div>
+      <form onSubmit={handleSubmit(onSubmit)} className="grid max-w-2xl gap-4">
+        <Input
+          label="Nome"
+          placeholder="Nome completo"
+          {...register('name')}
+          error={errors.name?.message}
+          required
+        />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
-            label="Nome completo"
-            required
-            placeholder="Nome da cliente"
-            error={errors.name?.message}
-            {...register('name')}
-          />
-          <Input
-            label="Telefone / WhatsApp"
-            required
-            placeholder="(84) 99999-9999"
-            error={errors.phone?.message}
-            {...register('phone')}
-          />
-        </div>
+        <Input
+          label="CPF"
+          placeholder="000.000.000-00"
+          value={cpfDisplay}
+          onChange={handleCPFChange}
+          error={errors.cpf?.message}
+          required
+        />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
-            label="Data de nascimento"
-            type="date"
-            error={errors.birth_date?.message}
-            {...register('birth_date')}
-          />
-          <Input
-            label="Cidade"
-            placeholder="Natal"
-            {...register('city')}
-          />
-        </div>
+        <Input
+          label="Telefone"
+          placeholder="(84) 99999-9999"
+          {...register('phone')}
+          error={errors.phone?.message}
+          required
+        />
 
-        <Select label="Origem" {...register('origin')}>
+        <Input
+          label="Data de nascimento"
+          type="date"
+          {...register('birth_date')}
+          error={errors.birth_date?.message}
+        />
+
+        <Input
+          label="Cidade"
+          placeholder="Natal"
+          {...register('city')}
+          error={errors.city?.message}
+        />
+
+        <Select
+          label="Origem"
+          {...register('origin')}
+          error={errors.origin?.message}
+        >
           <option value="">Não informado</option>
           <option value="instagram">Instagram</option>
-          <option value="referral">Indicação</option>
-          <option value="paid_traffic">Tráfego Pago</option>
-          <option value="website">Site</option>
-          <option value="store">Loja Física</option>
-          <option value="other">Outro</option>
+          <option value="indicacao">Indicação</option>
+          <option value="trafego_pago">Tráfego Pago</option>
+          <option value="site">Site</option>
+          <option value="loja_fisica">Loja Física</option>
+          <option value="outro">Outro</option>
         </Select>
 
-        <div>
-          <label className="label-base">Observações</label>
-          <textarea
-            className="input-base resize-none"
-            rows={3}
-            placeholder="Informações adicionais..."
-            {...register('notes')}
-          />
-        </div>
+        <Input
+          label="Observações"
+          placeholder="Informações adicionais"
+          {...register('notes')}
+          error={errors.notes?.message}
+        />
 
         <div className="flex gap-3 pt-2">
           <Link href="/clientes" className="flex-1">
@@ -147,6 +183,7 @@ export default function NovoClientePage() {
               Cancelar
             </Button>
           </Link>
+
           <Button type="submit" loading={isSubmitting} className="flex-1">
             Cadastrar Cliente
           </Button>
