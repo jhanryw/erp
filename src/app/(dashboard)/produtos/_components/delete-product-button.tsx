@@ -5,36 +5,53 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
 
-export function DeleteProductButton({ id, redirectAfter = false }: { id: number; redirectAfter?: boolean }) {
+export function DeleteProductButton({
+  id,
+  redirectAfter = false,
+}: {
+  id: number
+  redirectAfter?: boolean
+}) {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
 
   async function handleDelete() {
-    if (!confirm(
-      'Excluir este produto?\n\nAtenção: produtos vinculados a vendas ou entradas de estoque não poderão ser excluídos.'
-    )) return
+    const confirmed = window.confirm(
+      'Excluir este produto?\n\nAtenção: produtos vinculados a vendas ou entradas de estoque podem não ser excluídos.'
+    )
+
+    if (!confirmed) return
 
     setLoading(true)
-    try {
-      const supabase = createClient()
-      const { error } = await supabase.from('products').delete().eq('id', id)
 
-      if (error) {
-        const msg = error.message.toLowerCase().includes('foreign key')
-          ? 'Produto possui vendas ou estoque vinculados e não pode ser excluído.'
-          : error.message
-        toast.error('Erro ao excluir produto', { description: msg })
+    try {
+      const res = await fetch(`/api/produtos/${id}`, {
+        method: 'DELETE',
+      })
+
+      const json = await res.json()
+
+      if (!res.ok) {
+        toast.error('Erro ao excluir produto', {
+          description: json.error ?? 'Falha inesperada ao excluir.',
+        })
         return
       }
 
-      toast.success('Produto excluído')
+      toast.success('Produto excluído com sucesso')
+
       if (redirectAfter) {
         router.push('/produtos')
-      } else {
-        window.location.reload()
+        router.refresh()
+        return
       }
+
+      router.refresh()
+    } catch (error) {
+      toast.error('Erro ao excluir produto', {
+        description: 'Não foi possível concluir a exclusão.',
+      })
     } finally {
       setLoading(false)
     }
@@ -42,13 +59,14 @@ export function DeleteProductButton({ id, redirectAfter = false }: { id: number;
 
   return (
     <Button
-      variant="ghost"
+      type="button"
+      variant="destructive"
       size="sm"
       onClick={handleDelete}
-      loading={loading}
-      className="text-error hover:text-error hover:bg-error/10"
+      disabled={loading}
     >
-      <Trash2 className="w-3.5 h-3.5" />
+      <Trash2 className="h-4 w-4 mr-2" />
+      {loading ? 'Excluindo...' : 'Excluir'}
     </Button>
   )
 }

@@ -79,8 +79,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
       return
     }
     toast.success('Produto atualizado!')
-    router.refresh()
     router.push(`/produtos/${params.id}`)
+    router.refresh()
   }
 
   if (loading) {
