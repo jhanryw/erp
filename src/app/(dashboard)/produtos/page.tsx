@@ -191,12 +191,9 @@ export default async function ProdutosPage() {
                               Editar
                             </Button>
                           </Link>
-                          <DeleteProductButton
-                            productId={product.id}
-                            productName={product.name}
-                          />
+                          <DeleteProductButton id={product.id} />
                         </div>
-                      </TableCell>
+                    </TableCell>
                     </TableRow>
                   )
                 })}
