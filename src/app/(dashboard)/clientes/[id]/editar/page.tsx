@@ -17,6 +17,7 @@ const schema = z.object({
   phone: z.string().min(1, 'Telefone obrigatório'),
   birth_date: z.string().optional(),
   city: z.string().optional(),
+  state: z.string().max(2).optional(),
   origin: z.string().optional(),
   notes: z.string().optional(),
   active: z.boolean().default(true),
@@ -46,6 +47,7 @@ export default function EditarClientePage({ params }: { params: { id: string } }
           phone: customer.phone ?? '',
           birth_date: customer.birth_date ?? '',
           city: customer.city ?? '',
+          state: customer.state ?? '',
           origin: customer.origin ?? '',
           notes: customer.notes ?? '',
           active: customer.active ?? true,
@@ -92,9 +94,10 @@ export default function EditarClientePage({ params }: { params: { id: string } }
           <Input label="Telefone / WhatsApp" required placeholder="(84) 99999-9999" error={errors.phone?.message} {...register('phone')} />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <Input label="Data de nascimento" type="date" error={errors.birth_date?.message} {...register('birth_date')} />
           <Input label="Cidade" placeholder="Natal" {...register('city')} />
+          <Input label="Estado (UF)" placeholder="RN" maxLength={2} error={errors.state?.message} {...register('state')} />
         </div>
 
         <Select label="Origem" {...register('origin')}>

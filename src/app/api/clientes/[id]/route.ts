@@ -11,7 +11,8 @@ const schema = z.object({
   phone: z.string().min(1),
   birth_date: z.preprocess(n, z.string().nullable().optional()),
   city: z.preprocess(n, z.string().nullable().optional()),
-  origin: z.preprocess(n, z.string().nullable().optional()),
+  state: z.preprocess(n, z.string().max(2).nullable().optional()),
+  origin: z.preprocess(n, z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional()),
   notes: z.preprocess(n, z.string().nullable().optional()),
   active: z.boolean().default(true),
 })
@@ -33,5 +34,54 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const admin = createAdminClient()
   const { error } = (await (admin as any).from('customers').update(parsed.data).eq('id', Number(params.id))) as { error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}
+
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  const customerId = Number(params.id)
+  if (!Number.isFinite(customerId) || customerId <= 0) {
+    return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
+  }
+
+  const admin = createAdminClient()
+
+  // Bloquear se tiver vendas vinculadas (sem CASCADE)
+  const { count: salesCount, error: salesError } = await admin
+    .from('sales')
+    .select('id', { count: 'exact', head: true })
+    .eq('customer_id', customerId)
+
+  if (salesError) return NextResponse.json({ error: salesError.message }, { status: 500 })
+
+  if (salesCount && salesCount > 0) {
+    return NextResponse.json(
+      { error: 'Cliente possui vendas registradas e não pode ser excluído.' },
+      { status: 409 }
+    )
+  }
+
+  // Bloquear se tiver transações de cashback vinculadas (sem CASCADE)
+  const { count: cbCount, error: cbError } = await admin
+    .from('cashback_transactions')
+    .select('id', { count: 'exact', head: true })
+    .eq('customer_id', customerId)
+
+  if (cbError) return NextResponse.json({ error: cbError.message }, { status: 500 })
+
+  if (cbCount && cbCount > 0) {
+    return NextResponse.json(
+      { error: 'Cliente possui transações de cashback e não pode ser excluído.' },
+      { status: 409 }
+    )
+  }
+
+  // customer_preferences, customer_metrics, customer_addresses têm ON DELETE CASCADE
+  const { error: deleteError } = await admin
+    .from('customers')
+    .delete()
+    .eq('id', customerId)
+
+  if (deleteError) return NextResponse.json({ error: deleteError.message }, { status: 500 })
+
   return NextResponse.json({ ok: true })
 }

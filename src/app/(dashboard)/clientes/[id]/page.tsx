@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Edit, ShoppingCart, Gift, Star, Palette } from 'lucide-react'
@@ -11,6 +11,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { formatCPF } from '@/lib/utils/cpf'
 import type { RfmSegment, SaleStatus, CashbackTransactionType, CashbackStatus } from '@/types/database.types'
+import { DeleteCustomerButton } from '../_components/delete-customer-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -32,7 +33,7 @@ const CASHBACK_STATUS_COLOR: Record<CashbackStatus, string> = {
 }
 
 async function getCustomer(id: string) {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const customerId = Number(id)
 
   const { data: customer } = await supabase
@@ -67,30 +68,10 @@ async function getCustomer(id: string) {
       .limit(20) as unknown as Promise<{ data: any[] }>,
   ])
 
-  // Compute preferences from sale items in recent purchases
-  let favColor: string | null = null
-  let favSize: string | null = null
-  const saleIds = (sales ?? []).map((s: any) => s.id)
-
-  if (saleIds.length > 0) {
-    const { data: items } = await supabase
-      .from('sale_items')
-      .select('quantity, product_variations(color, size)')
-      .in('sale_id', saleIds) as unknown as { data: any[] | null }
-
-    const colorMap: Record<string, number> = {}
-    const sizeMap: Record<string, number> = {}
-
-    for (const item of items ?? []) {
-      const pv = item.product_variations as any
-      const qty = item.quantity ?? 1
-      if (pv?.color) colorMap[pv.color] = (colorMap[pv.color] ?? 0) + qty
-      if (pv?.size) sizeMap[pv.size] = (sizeMap[pv.size] ?? 0) + qty
-    }
-
-    favColor = Object.entries(colorMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-    favSize = Object.entries(sizeMap).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null
-  }
+  // product_variations não tem colunas color/size diretas — ficam em product_variation_attributes
+  // Preferências desativadas até implementação correta via variation_attributes
+  const favColor: string | null = null
+  const favSize: string | null = null
 
   return {
     customer,
@@ -134,9 +115,12 @@ export default async function ClienteDetalhePage({ params }: { params: { id: str
             </div>
           </div>
         </div>
-        <Link href={`/clientes/${customer.id}/editar`}>
-          <Button variant="secondary" size="sm"><Edit className="w-3.5 h-3.5" />Editar</Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href={`/clientes/${customer.id}/editar`}>
+            <Button variant="secondary" size="sm"><Edit className="w-3.5 h-3.5 mr-1" />Editar</Button>
+          </Link>
+          <DeleteCustomerButton id={customer.id} redirectAfter />
+        </div>
       </div>
 
       {/* KPIs */}

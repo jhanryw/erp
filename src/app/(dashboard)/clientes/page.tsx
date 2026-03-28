@@ -142,10 +142,12 @@ export default async function ClientesPage() {
                   return (
                     <TableRow key={customer.id}>
                       <TableCell>
-                        <div className="font-medium">{customer.name}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {customer.phone ?? '—'}
-                        </div>
+                        <Link href={`/clientes/${customer.id}`} className="hover:underline">
+                          <div className="font-medium">{customer.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {customer.phone ?? '—'}
+                          </div>
+                        </Link>
                       </TableCell>
 
                       <TableCell>{customer.cpf ? maskCPF(customer.cpf) : '—'}</TableCell>

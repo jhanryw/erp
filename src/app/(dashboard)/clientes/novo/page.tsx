@@ -163,11 +163,11 @@ export default function NovoClientePage() {
         >
           <option value="">Não informado</option>
           <option value="instagram">Instagram</option>
-          <option value="indicacao">Indicação</option>
-          <option value="trafego_pago">Tráfego Pago</option>
-          <option value="site">Site</option>
-          <option value="loja_fisica">Loja Física</option>
-          <option value="outro">Outro</option>
+          <option value="referral">Indicação</option>
+          <option value="paid_traffic">Tráfego Pago</option>
+          <option value="website">Site</option>
+          <option value="store">Loja Física</option>
+          <option value="other">Outro</option>
         </Select>
 
         <Input

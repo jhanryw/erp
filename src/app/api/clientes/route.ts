@@ -12,7 +12,7 @@ const schema = z.object({
   phone: z.string().min(1),
   birth_date: z.preprocess(n, z.string().nullable().optional()),
   city: z.preprocess(n, z.string().nullable().optional()),
-  origin: z.preprocess(n, z.string().nullable().optional()),
+  origin: z.preprocess(n, z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional()),
   notes: z.preprocess(n, z.string().nullable().optional()),
 })
 
@@ -23,10 +23,13 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
+  const createdBy = process.env.SYSTEM_USER_ID
+  if (!createdBy) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
+
   const admin = createAdminClient()
   const { data: customer, error } = (await admin
     .from('customers')
-    .insert(parsed.data as any)
+    .insert({ ...parsed.data, created_by: createdBy } as any)
     .select('id')
     .single()) as unknown as { data: { id: string } | null; error: any }
 
