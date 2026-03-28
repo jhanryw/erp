@@ -37,7 +37,7 @@ export const supplierSchema = z.object({
   document: z.string().nullable().optional(),
   phone: z.string().nullable().optional(),
   city: z.string().nullable().optional(),
-  state: z.string().length(2).nullable().optional(),
+  state: z.preprocess(v => (v === '' || v == null ? null : v), z.string().length(2).nullable().optional()),
   notes: z.string().nullable().optional(),
   active: z.boolean().default(true),
 })

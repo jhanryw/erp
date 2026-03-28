@@ -32,6 +32,57 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 
   const admin = createAdminClient()
   const { error } = (await (admin as any).from('suppliers').update({ ...parsed.data, state: parsed.data.state || null }).eq('id', Number(params.id))) as { error: any }
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (error) {
+    const msg = error.code === '23505' ? 'CPF/CNPJ já cadastrado para outro fornecedor.' : error.message
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+  return NextResponse.json({ ok: true })
+}
+
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  const supplierId = Number(params.id)
+  if (!Number.isFinite(supplierId) || supplierId <= 0) {
+    return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
+  }
+
+  const admin = createAdminClient()
+
+  // Bloquear se houver produtos vinculados (sem CASCADE)
+  const { count: productsCount, error: productsError } = await admin
+    .from('products')
+    .select('id', { count: 'exact', head: true })
+    .eq('supplier_id', supplierId)
+
+  if (productsError) return NextResponse.json({ error: productsError.message }, { status: 500 })
+
+  if (productsCount && productsCount > 0) {
+    return NextResponse.json(
+      { error: 'Fornecedor possui produtos cadastrados e não pode ser excluído.' },
+      { status: 409 }
+    )
+  }
+
+  // Bloquear se houver lotes de estoque vinculados (sem CASCADE)
+  const { count: lotsCount, error: lotsError } = await admin
+    .from('stock_lots')
+    .select('id', { count: 'exact', head: true })
+    .eq('supplier_id', supplierId)
+
+  if (lotsError) return NextResponse.json({ error: lotsError.message }, { status: 500 })
+
+  if (lotsCount && lotsCount > 0) {
+    return NextResponse.json(
+      { error: 'Fornecedor possui entradas de estoque e não pode ser excluído.' },
+      { status: 409 }
+    )
+  }
+
+  const { error: deleteError } = await admin
+    .from('suppliers')
+    .delete()
+    .eq('id', supplierId)
+
+  if (deleteError) return NextResponse.json({ error: deleteError.message }, { status: 500 })
+
   return NextResponse.json({ ok: true })
 }

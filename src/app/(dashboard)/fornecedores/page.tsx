@@ -111,7 +111,11 @@ export default async function FornecedoresPage() {
               <TableBody>
                 {suppliers.map((s) => (
                   <TableRow key={s.id}>
-                    <TableCell className="font-medium">{s.name}</TableCell>
+                    <TableCell className="font-medium">
+                      <Link href={`/fornecedores/${s.id}`} className="hover:underline">
+                        {s.name}
+                      </Link>
+                    </TableCell>
                     <TableCell>{formatDoc(s.document)}</TableCell>
                     <TableCell>{s.phone ?? '—'}</TableCell>
                     <TableCell>
@@ -124,7 +128,7 @@ export default async function FornecedoresPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
-                        <Link href={`/fornecedores/editar/${s.id}`}>
+                        <Link href={`/fornecedores/${s.id}/editar`}>
                           <Button variant="outline" size="sm">
                             Editar
                           </Button>

@@ -1,5 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Building2, Package, Edit } from 'lucide-react'
@@ -16,11 +15,10 @@ import { formatDate } from '@/lib/utils/date'
 export const dynamic = 'force-dynamic'
 
 async function getSupplier(id: string) {
-  const supabase = createClient()
   const admin = createAdminClient()
   const supplierId = Number(id)
 
-  const { data: supplier } = await supabase
+  const { data: supplier } = await admin
     .from('suppliers')
     .select('*')
     .eq('id', supplierId)
@@ -40,7 +38,7 @@ async function getSupplier(id: string) {
       .select(`
         id, entry_date, quantity_original, total_lot_cost, cost_per_unit,
         product_variations (
-          sku_variation, color, size,
+          sku_variation,
           products (name)
         )
       `)
@@ -48,7 +46,7 @@ async function getSupplier(id: string) {
       .order('entry_date', { ascending: false })
       .limit(10) as unknown as Promise<{ data: any[] }>,
 
-    supabase
+    admin
       .from('products')
       .select('id, name, sku, base_price, base_cost, margin_pct, active')
       .eq('supplier_id', supplierId)
@@ -110,7 +108,7 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Total Comprado"
-          value={formatCurrency(performance?.total_purchased_brl ?? 0)}
+          value={formatCurrency(performance?.total_purchased_value ?? 0)}
           icon={<Building2 className="w-4 h-4" />}
         />
         <StatCard
@@ -130,15 +128,6 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
           icon={<Package className="w-4 h-4" />}
         />
       </div>
-
-      {performance?.top_product_name && (
-        <Card padding="md">
-          <p className="text-sm text-text-muted">
-            Produto destaque:{' '}
-            <span className="font-semibold text-text-primary">{performance.top_product_name}</span>
-          </p>
-        </Card>
-      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Recent lots */}
@@ -164,7 +153,6 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
                 <TableBody>
                   {recentLots.map((lot: any) => {
                     const pv = lot.product_variations
-                    const variation = [pv?.color, pv?.size].filter(Boolean).join(' / ')
                     return (
                       <TableRow key={lot.id}>
                         <TableCell>
@@ -172,7 +160,7 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
                             {pv?.products?.name ?? '—'}
                           </span>
                           <span className="block text-xs text-text-muted">
-                            {pv?.sku_variation}{variation ? ` · ${variation}` : ''}
+                            {pv?.sku_variation ?? '—'}
                           </span>
                         </TableCell>
                         <TableCell muted>{formatDate(lot.entry_date)}</TableCell>
