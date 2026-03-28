@@ -15,6 +15,21 @@ const schema = z.object({
   active: z.boolean().default(true),
 })
 
+type ProductUpdateInput = z.infer<typeof schema>
+
+type ProductIdRow = {
+  id: number
+}
+
+type VariationRow = {
+  id: number
+}
+
+type DbError = {
+  code?: string
+  message: string
+} | null
+
 function parseId(id: string) {
   const productId = Number(id)
   return Number.isFinite(productId) ? productId : null
@@ -70,19 +85,26 @@ export async function PUT(
   }
 
   const admin = createAdminClient()
+  const payload: ProductUpdateInput = {
+    name: parsed.data.name,
+    sku: parsed.data.sku,
+    category_id: parsed.data.category_id,
+    supplier_id: parsed.data.supplier_id ?? null,
+    origin: parsed.data.origin,
+    base_cost: parsed.data.base_cost,
+    base_price: parsed.data.base_price,
+    active: parsed.data.active,
+  }
 
-  const { data: updated, error } = (await (admin as any)
+  const result = await (admin as any)
     .from('products')
-    .update({
-      ...parsed.data,
-      supplier_id: parsed.data.supplier_id ?? null,
-    })
+    .update(payload)
     .eq('id', productId)
     .select('id')
-    .maybeSingle()) as {
-    data: { id: number } | null
-    error: { code?: string; message: string } | null
-  }
+    .maybeSingle()
+
+  const updated = result.data as ProductIdRow | null
+  const error = result.error as DbError
 
   if (error) {
     const msg =
@@ -114,13 +136,13 @@ export async function DELETE(
 
   const admin = createAdminClient()
 
-  const { data: variations, error: variationsError } = (await (admin as any)
+  const variationsResult = await (admin as any)
     .from('product_variations')
     .select('id')
-    .eq('product_id', productId)) as {
-    data: Array<{ id: number }> | null
-    error: { code?: string; message: string } | null
-  }
+    .eq('product_id', productId)
+
+  const variations = (variationsResult.data ?? []) as VariationRow[]
+  const variationsError = variationsResult.error as DbError
 
   if (variationsError) {
     return NextResponse.json(
@@ -129,7 +151,7 @@ export async function DELETE(
     )
   }
 
-  const variationIds = ((variations ?? []) as Array<{ id: number }>).map((v) => v.id)
+  const variationIds = variations.map((variation) => variation.id)
 
   if (variationIds.length > 0) {
     const { error: attrError } = await admin
@@ -164,7 +186,7 @@ export async function DELETE(
     if (variationDeleteError) {
       const msg =
         variationDeleteError.code === '23503'
-          ? 'Existem vendas, entradas ou outros registros vinculados a este produto.'
+          ? `Não foi possível excluir as variações. Detalhe do banco: ${variationDeleteError.message}`
           : variationDeleteError.message
 
       return NextResponse.json({ error: msg }, { status: 500 })
@@ -179,7 +201,7 @@ export async function DELETE(
   if (productDeleteError) {
     const msg =
       productDeleteError.code === '23503'
-        ? 'Este produto possui vínculos e não pode ser excluído diretamente.'
+        ? `Não foi possível excluir o produto. Detalhe do banco: ${productDeleteError.message}`
         : productDeleteError.message
 
     return NextResponse.json({ error: msg }, { status: 500 })
