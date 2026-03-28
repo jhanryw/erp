@@ -186,10 +186,10 @@ export default async function ProdutosPage() {
 
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          <Link href={`/produtos/editar/${product.id}`}>
-                            <Button variant="outline" size="sm">
-                              Editar
-                            </Button>
+                        <Link href={`/produtos/${product.id}`}>
+                          <Button variant="outline" size="sm">
+                            Ver
+                          </Button>
                           </Link>
                           <DeleteProductButton id={product.id} />
                         </div>
