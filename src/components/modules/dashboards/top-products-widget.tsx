@@ -1,5 +1,5 @@
-import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import Link from 'next/link'
+import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 
 interface TopProduct {
   product_id: number
@@ -11,51 +11,50 @@ interface TopProduct {
 
 export function TopProductsWidget({ products }: { products: TopProduct[] }) {
   if (!products.length) {
-    return (
-      <div className="p-5 text-center text-sm text-text-muted">
-        Sem vendas no período
-      </div>
-    )
+    return <div className="text-sm text-muted-foreground">Sem vendas no período</div>
   }
 
   const maxRevenue = Math.max(...products.map((p) => p.total_revenue))
 
   return (
-    <div className="divide-y divide-border/50">
+    <div className="space-y-4">
       {products.map((product, i) => {
         const pct = maxRevenue > 0 ? (product.total_revenue / maxRevenue) * 100 : 0
+
         return (
           <Link
             key={product.product_id}
             href={`/produtos/${product.product_id}`}
-            className="flex items-center gap-3 px-5 py-3.5 hover:bg-white/[0.03] transition-colors"
+            className="block rounded-xl border border-border p-4 transition hover:bg-bg-hover"
           >
-            <span className="text-xs font-bold text-text-muted w-5 text-center">
-              {i + 1}
-            </span>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-text-primary truncate">
-                {product.product_name}
-              </p>
-              <div className="flex items-center gap-2 mt-1">
-                <div className="flex-1 h-1.5 bg-bg-overlay rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-brand rounded-full"
-                    style={{ width: `${pct}%` }}
-                  />
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-bg-overlay text-xs font-semibold text-text-secondary">
+                  {i + 1}
                 </div>
-                <span className="text-[10px] text-text-muted whitespace-nowrap">
-                  {product.total_units_sold} un
-                </span>
+                <div>
+                  <div className="font-medium">{product.product_name}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {product.total_units_sold} un
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="font-medium">{formatCurrency(product.total_revenue)}</div>
+                <div className="text-xs text-muted-foreground">
+                  {product.realized_margin_pct != null
+                    ? `${formatPercent(product.realized_margin_pct)} mg`
+                    : '—'}
+                </div>
               </div>
             </div>
-            <div className="text-right flex-shrink-0">
-              <p className="text-sm font-semibold text-text-primary">
-                {formatCurrency(product.total_revenue)}
-              </p>
-              <p className="text-xs text-text-muted">
-                {product.realized_margin_pct != null ? formatPercent(product.realized_margin_pct) : '—'} mg
-              </p>
+
+            <div className="h-2 rounded-full bg-bg-overlay">
+              <div
+                className="h-2 rounded-full bg-brand"
+                style={{ width: `${pct}%` }}
+              />
             </div>
           </Link>
         )

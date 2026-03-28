@@ -1,5 +1,5 @@
-import { AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
+import { AlertTriangle } from 'lucide-react'
 
 interface StockAlert {
   product_id: number
@@ -10,24 +10,25 @@ interface StockAlert {
 
 export function StockAlertsWidget({ alerts }: { alerts: StockAlert[] }) {
   return (
-    <div className="divide-y divide-border/50">
+    <div className="space-y-3">
       {alerts.map((alert) => (
         <Link
           key={alert.product_id}
           href={`/produtos/${alert.product_id}`}
-          className="flex items-center gap-3 px-5 py-3 hover:bg-white/[0.03] transition-colors"
+          className="flex items-center justify-between rounded-xl border border-border p-4 transition hover:bg-bg-hover"
         >
-          <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0" />
-          <p className="flex-1 text-sm text-text-primary truncate">{alert.product_name}</p>
-          <span
-            className={`text-xs font-semibold px-2 py-0.5 rounded-md ${
-              alert.current_qty === 0
-                ? 'bg-error/10 text-error'
-                : 'bg-warning/10 text-warning'
-            }`}
-          >
-            {alert.current_qty === 0 ? 'Esgotado' : `${alert.current_qty} un`}
-          </span>
+          <div className="flex items-center gap-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-warning/10 text-warning">
+              <AlertTriangle className="h-4 w-4" />
+            </div>
+
+            <div>
+              <div className="font-medium">{alert.product_name}</div>
+              <div className="text-sm text-muted-foreground">
+                {alert.current_qty === 0 ? 'Esgotado' : `${alert.current_qty} un`}
+              </div>
+            </div>
+          </div>
         </Link>
       ))}
     </div>

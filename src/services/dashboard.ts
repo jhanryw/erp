@@ -81,18 +81,15 @@ export async function getDashboardData(role: UserRole): Promise<DashboardData> {
       .select('gross_revenue, total_orders')
       .eq('sale_date', today)
       .maybeSingle(),
-
     supabase
       .from('mv_daily_sales_summary')
       .select('gross_revenue, total_orders, gross_profit')
       .gte('sale_date', thirtyDaysAgo),
-
     supabase
       .from('mv_daily_sales_summary')
       .select('sale_date, gross_revenue, total_orders')
       .gte('sale_date', thirtyDaysAgo)
       .order('sale_date', { ascending: true }),
-
     supabase
       .from('mv_product_performance')
       .select(
@@ -100,7 +97,6 @@ export async function getDashboardData(role: UserRole): Promise<DashboardData> {
       )
       .order('total_revenue', { ascending: false })
       .limit(5),
-
     supabase
       .from('mv_stock_status')
       .select('product_id, product_name, current_qty, stock_value_at_price')
@@ -108,26 +104,6 @@ export async function getDashboardData(role: UserRole): Promise<DashboardData> {
       .order('current_qty', { ascending: true })
       .limit(5),
   ])
-
-  if (todaySalesRes.error) {
-    console.error('Erro ao buscar vendas do dia:', todaySalesRes.error.message)
-  }
-
-  if (monthlySalesRes.error) {
-    console.error('Erro ao buscar vendas do mês:', monthlySalesRes.error.message)
-  }
-
-  if (dailySeriesRes.error) {
-    console.error('Erro ao buscar série diária:', dailySeriesRes.error.message)
-  }
-
-  if (topProductsRes.error) {
-    console.error('Erro ao buscar top produtos:', topProductsRes.error.message)
-  }
-
-  if (stockAlertsRes.error) {
-    console.error('Erro ao buscar alertas de estoque:', stockAlertsRes.error.message)
-  }
 
   const todayData = (todaySalesRes.data ?? null) as {
     gross_revenue?: number | null
@@ -164,20 +140,17 @@ export async function getDashboardData(role: UserRole): Promise<DashboardData> {
       revenue: Number(todayData?.gross_revenue ?? 0),
       orders: Number(todayData?.total_orders ?? 0),
     },
-
     month: {
       revenue: monthRevenue,
       orders: monthOrders,
       avgTicket,
       grossMarginPct,
     },
-
     dailySeries: dailySeries.map((row) => ({
       sale_date: row.sale_date,
       gross_revenue: Number(row.gross_revenue ?? 0),
       total_orders: Number(row.total_orders ?? 0),
     })),
-
     topProducts: topProducts.map((row) => ({
       product_id: row.product_id,
       product_name: row.product_name,
@@ -187,14 +160,12 @@ export async function getDashboardData(role: UserRole): Promise<DashboardData> {
         ? Number(row.realized_margin_pct ?? 0)
         : null,
     })),
-
     stockAlerts: stockAlerts.map((row) => ({
       product_id: row.product_id,
       product_name: row.product_name,
       current_qty: Number(row.current_qty ?? 0),
       stock_value_at_price: Number(row.stock_value_at_price ?? 0),
     })),
-
     showFinancials,
   }
 }
