@@ -75,7 +75,7 @@ export async function PUT(
 
   const admin = createAdminClient()
 
-  const { error } = await admin
+  const { error } = await (admin as any)
     .from('products')
     .update({
       name: parsed.data.name,
@@ -86,8 +86,8 @@ export async function PUT(
       base_cost: parsed.data.base_cost,
       base_price: parsed.data.base_price,
       active: parsed.data.active,
-    } as any)
-    .eq('id', productId)
+    })
+    .eq('id', productId) as { error: { code: string; message: string } | null }
 
   if (error) {
     const msg =
