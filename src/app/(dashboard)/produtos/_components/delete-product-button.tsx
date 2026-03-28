@@ -48,7 +48,7 @@ export function DeleteProductButton({
       }
 
       router.refresh()
-    } catch (error) {
+    } catch  {
       toast.error('Erro ao excluir produto', {
         description: 'Não foi possível concluir a exclusão.',
       })
@@ -58,15 +58,15 @@ export function DeleteProductButton({
   }
 
   return (
-    <Button
-      type="button"
-      variant="destructive"
-      size="sm"
-      onClick={handleDelete}
-      disabled={loading}
-    >
-      <Trash2 className="h-4 w-4 mr-2" />
-      {loading ? 'Excluindo...' : 'Excluir'}
-    </Button>
+  <Button
+    type="button"
+    variant="danger"
+    size="sm"
+    onClick={handleDelete}
+    disabled={loading}
+  >
+    <Trash2 className="h-4 w-4 mr-2" />
+    {loading ? 'Excluindo...' : 'Excluir'}
+  </Button>
   )
 }

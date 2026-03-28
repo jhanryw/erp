@@ -6,8 +6,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import { ArrowLeft } from 'lucide-react'
 import Link from 'next/link'
+import { createClient } from '@/lib/supabase/client'
 import { customerSchema, type CustomerFormData } from '@/lib/validators'
 import { formatCPF } from '@/lib/utils/cpf'
+import { getAuthUserId, cleanPayload, handleDbError } from '@/lib/utils/supabase-helpers'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -15,6 +17,7 @@ import { useState } from 'react'
 
 export default function NovoClientePage() {
   const router = useRouter()
+  const supabase = createClient()
   const [cpfDisplay, setCpfDisplay] = useState('')
 
   const {
@@ -27,23 +30,29 @@ export default function NovoClientePage() {
   })
 
   async function onSubmit(data: CustomerFormData) {
-    const res = await fetch('/api/clientes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    const json = await res.json()
-    if (!res.ok) {
-      if (json.error === 'CPF já cadastrado.') {
-        toast.error('CPF já cadastrado')
-      } else {
-        toast.error('Erro ao cadastrar cliente', { description: json.error })
-      }
+    let userId: string
+    try {
+      userId = await getAuthUserId()
+    } catch {
+      toast.error('Você precisa estar logado para cadastrar clientes')
       return
     }
+
+    const payload = cleanPayload({ ...data, created_by: userId })
+
+    const { data: customer, error } = await supabase
+      .from('customers')
+      .insert(payload as any)
+      .select('id')
+      .single() as unknown as { data: { id: string } | null; error: any }
+
+    if (error) {
+      handleDbError(error, 'Erro ao cadastrar cliente')
+      return
+    }
+
     toast.success('Cliente cadastrado com sucesso!')
-    router.refresh()
-    router.push(`/clientes/${json.customer.id}`)
+    router.push(`/clientes/${customer!.id}`)
   }
 
   function handleCPFChange(e: React.ChangeEvent<HTMLInputElement>) {

@@ -71,7 +71,7 @@ export async function PUT(
 
   const admin = createAdminClient()
 
-  const { data: updated, error } = await admin
+  const { data: updated, error } = (await (admin as any)
     .from('products')
     .update({
       ...parsed.data,
@@ -79,7 +79,10 @@ export async function PUT(
     })
     .eq('id', productId)
     .select('id')
-    .maybeSingle()
+    .maybeSingle()) as {
+    data: { id: number } | null
+    error: { code?: string; message: string } | null
+  }
 
   if (error) {
     const msg =
@@ -111,10 +114,13 @@ export async function DELETE(
 
   const admin = createAdminClient()
 
-  const { data: variations, error: variationsError } = await admin
+  const { data: variations, error: variationsError } = (await (admin as any)
     .from('product_variations')
     .select('id')
-    .eq('product_id', productId)
+    .eq('product_id', productId)) as {
+    data: Array<{ id: number }> | null
+    error: { code?: string; message: string } | null
+  }
 
   if (variationsError) {
     return NextResponse.json(
@@ -123,7 +129,7 @@ export async function DELETE(
     )
   }
 
-  const variationIds = (variations ?? []).map((v) => v.id)
+  const variationIds = ((variations ?? []) as Array<{ id: number }>).map((v) => v.id)
 
   if (variationIds.length > 0) {
     const { error: attrError } = await admin
