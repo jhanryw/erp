@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { createClient } from '@/lib/supabase/client'
 
 export function CancelSaleButton({ saleId }: { saleId: number }) {
   const router = useRouter()
@@ -15,19 +14,17 @@ export function CancelSaleButton({ saleId }: { saleId: number }) {
     if (!confirm('Cancelar esta venda? O status será alterado para Cancelado e o estoque será restaurado automaticamente.')) return
     setLoading(true)
     try {
-      const supabase = createClient()
-      const { error } = await (supabase as any)
-        .from('sales')
-        .update({ status: 'cancelled' })
-        .eq('id', saleId)
-
-      if (error) {
-        toast.error('Erro ao cancelar venda', { description: error.message })
+      const res = await fetch(`/api/vendas/${saleId}/cancelar`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json()
+        toast.error('Erro ao cancelar venda', { description: err.error })
         return
       }
 
       toast.success('Venda cancelada com sucesso')
       router.refresh()
+    } catch {
+      toast.error('Erro ao cancelar venda', { description: 'Não foi possível concluir o cancelamento.' })
     } finally {
       setLoading(false)
     }

@@ -18,11 +18,12 @@ export async function POST(
     .single() as unknown as { data: any }
 
   if (!sale) return NextResponse.json({ error: 'Venda não encontrada' }, { status: 404 })
-  if (sale.status === 'returned' || sale.status === 'cancelled') {
-    return NextResponse.json({ error: 'Venda já devolvida ou cancelada' }, { status: 400 })
+
+  if (sale.status === 'cancelled' || sale.status === 'returned') {
+    return NextResponse.json({ error: 'Venda já cancelada ou devolvida' }, { status: 400 })
   }
 
-  // Restore stock for each item
+  // Restaurar estoque de cada item
   for (const item of (sale.sale_items ?? []) as any[]) {
     const { data: current } = await admin
       .from('stock')
@@ -41,19 +42,19 @@ export async function POST(
     )
   }
 
-  // Update sale status
-  await (admin.from('sales') as any).update({ status: 'returned' }).eq('id', saleId)
+  // Atualizar status
+  await (admin.from('sales') as any).update({ status: 'cancelled' }).eq('id', saleId)
 
-  // Log finance entry
+  // Registrar estorno financeiro
   await admin.from('finance_entries').insert({
     type: 'expense',
     category: 'other_expense',
-    description: `Devolução — Venda ${sale.sale_number}`,
+    description: `Cancelamento — Venda ${sale.sale_number}`,
     amount: sale.total,
     reference_date: new Date().toISOString().slice(0, 10),
     sale_id: saleId,
     created_by: systemUserId,
   } as any)
 
-  return NextResponse.json({ success: true })
+  return NextResponse.json({ ok: true })
 }

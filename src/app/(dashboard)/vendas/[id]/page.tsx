@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
@@ -33,8 +33,8 @@ const PAYMENT_LABELS: Record<string, string> = {
 }
 
 async function getSale(id: string) {
-  const supabase = createClient()
-  const { data } = await supabase
+  const admin = createAdminClient()
+  const { data } = await admin
     .from('sales')
     .select(`
       *,
@@ -43,8 +43,12 @@ async function getSale(id: string) {
       sale_items (
         id, quantity, unit_price, total_price, unit_cost,
         product_variations (
-          id, sku_variation, color, size, model, fabric,
-          products (id, name, sku)
+          id, sku_variation,
+          products (id, name, sku),
+          product_variation_attributes (
+            variation_types:variation_type_id ( name, slug ),
+            variation_values:variation_value_id ( value )
+          )
         )
       )
     `)
@@ -152,7 +156,8 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           <TableBody>
             {(sale.sale_items ?? []).map((item: any) => {
               const pv = item.product_variations
-              const variation = [pv?.color, pv?.size, pv?.model, pv?.fabric].filter(Boolean).join(' / ')
+              const attrs = (pv?.product_variation_attributes ?? []) as any[]
+              const variation = attrs.map((a: any) => a.variation_values?.value).filter(Boolean).join(' / ')
               return (
                 <TableRow key={item.id}>
                   <TableCell>

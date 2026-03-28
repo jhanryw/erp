@@ -30,6 +30,9 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
+  const systemUserId = process.env.SYSTEM_USER_ID
+  if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
+
   const { customer_id, payment_method, sale_origin, discount_amount, cashback_used, shipping_charged, notes, items } = parsed.data
   const admin = createAdminClient()
 
@@ -49,7 +52,7 @@ export async function POST(request: Request) {
     .from('sales')
     .insert({
       customer_id,
-      seller_id: null,
+      seller_id: systemUserId,
       status: 'paid',
       subtotal: parseFloat(subtotal.toFixed(2)),
       discount_amount,
@@ -90,6 +93,7 @@ export async function POST(request: Request) {
     amount: parseFloat(total.toFixed(2)),
     reference_date: new Date().toISOString().split('T')[0],
     sale_id: sale.id,
+    created_by: systemUserId,
   } as any)
 
   return NextResponse.json({ sale })

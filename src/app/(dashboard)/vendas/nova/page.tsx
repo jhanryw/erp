@@ -74,12 +74,11 @@ export default function NovaVendaPage() {
         .select(`
           id, sku_variation, price_override, cost_override,
           products:product_id (id, name, sku, base_price, base_cost),
-          stock:product_variation_id (quantity)
+          stock(quantity)
         `)
         .ilike('sku_variation', `%${debouncedProduct}%`)
-        .gt('stock.quantity', 0)
-        .limit(8)
-      return data ?? []
+        .limit(20)
+      return (data ?? []).filter((v: any) => (v.stock?.quantity ?? 0) > 0).slice(0, 8)
     },
     enabled: debouncedProduct.length >= 2,
   })
