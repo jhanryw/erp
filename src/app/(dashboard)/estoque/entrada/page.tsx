@@ -19,7 +19,7 @@ export default function EstoqueEntradaPage() {
   const supabase = createClient()
   const [loading, setLoading] = useState(false)
   const [products, setProducts] = useState<{ id: number; name: string; sku: string }[]>([])
-  const [variations, setVariations] = useState<{ id: number; sku_variation: string; color: string | null; size: string | null }[]>([])
+  const [variations, setVariations] = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([])
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
 
@@ -63,10 +63,10 @@ export default function EstoqueEntradaPage() {
     }
     supabase
       .from('product_variations')
-      .select('id, sku_variation, color, size')
+      .select('id, sku_variation, product_variation_attributes(variation_values:variation_value_id(value))')
       .eq('product_id', selectedProductId)
       .eq('active', true)
-      .then(({ data }) => setVariations(data ?? []))
+      .then(({ data }) => setVariations((data as any) ?? []))
   }, [selectedProductId])
 
   const onSubmit = async (values: StockLotFormData) => {
@@ -139,13 +139,17 @@ export default function EstoqueEntradaPage() {
                 disabled={!selectedProductId}
               >
                 <option value="">Selecione a variação...</option>
-                {variations.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    {v.sku_variation}
-                    {v.color ? ` — ${v.color}` : ''}
-                    {v.size ? ` / ${v.size}` : ''}
-                  </option>
-                ))}
+                {variations.map((v) => {
+                  const attrs = (v.product_variation_attributes ?? [])
+                    .map((a) => a.variation_values?.value)
+                    .filter(Boolean)
+                    .join(' / ')
+                  return (
+                    <option key={v.id} value={v.id}>
+                      {v.sku_variation}{attrs ? ` — ${attrs}` : ''}
+                    </option>
+                  )
+                })}
               </select>
               {errors.product_variation_id && (
                 <p className="text-xs text-error mt-1">{errors.product_variation_id.message}</p>

@@ -44,8 +44,8 @@ export default function EstoqueAjustePage() {
   const router = useRouter()
   const supabase = createClient()
 
-  const [products, setProducts] = useState<any[]>([])
-  const [variations, setVariations] = useState<any[]>([])
+  const [products, setProducts] = useState<{ id: number; name: string; sku: string }[]>([])
+  const [variations, setVariations] = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
   const [selectedProduct, setSelectedProduct] = useState<number | null>(null)
 
   const {
@@ -71,10 +71,10 @@ export default function EstoqueAjustePage() {
     }
     supabase
       .from('product_variations')
-      .select('id, sku_variation, color, size, model, fabric')
+      .select('id, sku_variation, product_variation_attributes(variation_values:variation_value_id(value))')
       .eq('product_id', selectedProduct)
       .eq('active', true)
-      .then(({ data }) => setVariations(data ?? []))
+      .then(({ data }) => setVariations((data as any) ?? []))
   }, [selectedProduct])
 
   async function onSubmit(data: FormData) {
@@ -133,10 +133,13 @@ export default function EstoqueAjustePage() {
               >
                 <option value="0">Selecione uma variação</option>
                 {variations.map((v) => {
-                  const dims = [v.color, v.size, v.model, v.fabric].filter(Boolean).join(' / ')
+                  const attrs = (v.product_variation_attributes ?? [])
+                    .map((a) => a.variation_values?.value)
+                    .filter(Boolean)
+                    .join(' / ')
                   return (
                     <option key={v.id} value={v.id}>
-                      {v.sku_variation}{dims ? ` — ${dims}` : ''}
+                      {v.sku_variation}{attrs ? ` — ${attrs}` : ''}
                     </option>
                   )
                 })}

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft, AlertTriangle, Clock, Plus } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -10,21 +10,21 @@ import { formatCurrency, formatNumber } from '@/lib/utils/currency'
 export const dynamic = 'force-dynamic'
 
 async function getAlerts() {
-  const supabase = createClient()
+  const admin = createAdminClient()
 
   const [criticos, zerados] = await Promise.all([
     // Estoque crítico (qty entre 1 e 3)
-    supabase
+    admin
       .from('mv_stock_status')
-      .select('product_variation_id, product_id, product_name, sku, color, size, current_qty, stock_value_at_cost, stock_value_at_price')
+      .select('product_variation_id, product_id, product_name, sku, current_qty, stock_value_at_cost, stock_value_at_price')
       .gt('current_qty', 0)
       .lte('current_qty', 3)
       .order('current_qty', { ascending: true }),
 
     // Zerados
-    supabase
+    admin
       .from('mv_stock_status')
-      .select('product_variation_id, product_id, product_name, sku, color, size, current_qty, stock_value_at_cost, stock_value_at_price')
+      .select('product_variation_id, product_id, product_name, sku, current_qty, stock_value_at_cost, stock_value_at_price')
       .eq('current_qty', 0)
       .order('product_name', { ascending: true })
       .limit(50),
@@ -105,7 +105,7 @@ export default async function AlertasPage() {
                   </TableCell>
                   <TableCell muted>
                     <span className="text-xs">
-                      {[item.color, item.size].filter(Boolean).join(' / ') || item.sku}
+                      {item.sku}
                     </span>
                   </TableCell>
                   <TableCell align="right">
@@ -164,7 +164,7 @@ export default async function AlertasPage() {
                   </TableCell>
                   <TableCell muted>
                     <span className="text-xs">
-                      {[item.color, item.size].filter(Boolean).join(' / ') || item.sku}
+                      {item.sku}
                     </span>
                   </TableCell>
                   <TableCell align="right">

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft, ArrowDownToLine } from 'lucide-react'
 import { Card, CardHeader } from '@/components/ui/card'
@@ -10,8 +10,8 @@ import { formatDate } from '@/lib/utils/date'
 export const dynamic = 'force-dynamic'
 
 async function getLotes() {
-  const supabase = createClient()
-  const { data } = await supabase
+  const admin = createAdminClient()
+  const { data } = await admin
     .from('stock_lots')
     .select(`
       id,
@@ -27,10 +27,10 @@ async function getLotes() {
       notes,
       product_variations (
         sku_variation,
-        color,
-        size,
-        model,
-        products ( name, sku )
+        products ( name, sku ),
+        product_variation_attributes (
+          variation_values:variation_value_id ( value )
+        )
       ),
       suppliers ( name )
     `)
@@ -84,7 +84,8 @@ export default async function MovimentacoesPage() {
               <TableBody>
                 {lotes.map((item: any) => {
                   const variation = item.product_variations
-                  const dims = [variation?.color, variation?.size, variation?.model]
+                  const attrs = ((variation?.product_variation_attributes ?? []) as any[])
+                    .map((a: any) => a.variation_values?.value)
                     .filter(Boolean)
                     .join(' / ')
                   return (
@@ -93,8 +94,8 @@ export default async function MovimentacoesPage() {
                         <span className="text-sm font-medium text-text-primary">
                           {variation?.products?.name}
                         </span>
-                        {dims && (
-                          <span className="ml-2 text-xs text-text-muted">{dims}</span>
+                        {attrs && (
+                          <span className="ml-2 text-xs text-text-muted">{attrs}</span>
                         )}
                         <p className="text-xs text-text-disabled mt-0.5">
                           {variation?.sku_variation}
