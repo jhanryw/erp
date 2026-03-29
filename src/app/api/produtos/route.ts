@@ -99,7 +99,7 @@ export async function POST(request: Request) {
         }
       }
       
-      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00', ano: productData.ano })
+      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
 
       // 2a. Criar product_variation (agora que temos o sku gerado no servidor)
       const { data: pv, error: pvError } = (await admin

@@ -218,14 +218,19 @@ export default function NovoProdutoPage() {
             <Input label="Nome do produto" required placeholder="Ex: Body de Renda Floral" error={errors.name?.message} {...register('name')} />
             <Select label="Tipo" required error={errors.tipo?.message} {...register('tipo')}>
               <option value="">Selecione...</option>
-              {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>)}
+              {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>)}
             </Select>
             <Select label="Modelo" required error={errors.modelo?.message} {...register('modelo')} disabled={!tipo}>
               <option value="">Selecione...</option>
-              {tipo && (SKU_MODELO[SKU_TIPO[tipo as keyof typeof SKU_TIPO]] || SKU_MODELO['OU']).constructor === Object && 
-                Object.keys(SKU_MODELO[SKU_TIPO[tipo as keyof typeof SKU_TIPO]] || SKU_MODELO['OU']).map(k => (
-                  <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1).replace('_', ' ')}</option>
-              ))}
+              {tipo ? (
+                (() => {
+                  const tt = SKU_TIPO[tipo as keyof typeof SKU_TIPO]
+                  const models = SKU_MODELO[tt] || { padrao: '01' }
+                  return Object.keys(models).map(k => (
+                    <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>
+                  ))
+                })()
+              ) : null}
             </Select>
             <Select label="Ano" required error={errors.ano?.message} {...register('ano')}>
               <option value="">Selecione...</option>

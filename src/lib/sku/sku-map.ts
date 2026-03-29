@@ -1,86 +1,88 @@
 export const SKU_TIPO = {
-  camiseta: 'CA',
-  calca: 'CL',
-  vestido: 'VD',
-  saia: 'SA',
-  short: 'SH',
-  casaco: 'CS',
-  jaqueta: 'JQ',
-  moletom: 'MO',
-  biquini: 'BQ',
-  maio: 'MA',
-  acessorio: 'AC',
-  bolsa: 'BO',
-  sapato: 'SP',
-  outro: 'OU'
+  sutia: '01',
+  calcinha: '02',
+  body: '03',
+  pijama: '04',
+  camisola: '05',
+  baby_doll: '06',
+  robe: '07',
+  top: '08',
+  short_doll: '09',
+  pijama_vestido: '10',
+  pijama_americano: '11',
+  pijama_com_calcinha: '12',
+  pijama_rendado: '13',
+  conjunto_calcinha_sutia: '14'
 } as const
 
 export const SKU_MODELO: Record<string, Record<string, string>> = {
-  CA: { basica: 'BS', polo: 'PL', regata: 'RG', estampada: 'ES', manga_longa: 'ML' },
-  CL: { jeans: 'JN', moletom: 'MO', alfaiataria: 'AL', legging: 'LG', pantalona: 'PT' },
-  VD: { curto: 'CU', midi: 'MD', longo: 'LO', festa: 'FE' },
-  SA: { curta: 'CU', midi: 'MD', longa: 'LO', plisada: 'PL' },
-  SH: { jeans: 'JN', moletom: 'MO', alfaiataria: 'AL', tactel: 'TC' },
-  CS: { tricot: 'TR', la: 'LA', sobretudo: 'SO' },
-  JQ: { jeans: 'JN', couro: 'PU', corta_vento: 'CV' },
-  MO: { canguru: 'CG', careca: 'CR', ziper: 'ZP' },
-  BQ: { cortininha: 'CT', tomara_caia: 'TC', asa_delta: 'AD' },
-  MA: { tradicional: 'TR', engano: 'EN', cavado: 'CV' },
-  AC: { cinto: 'CI', colar: 'CL', brinco: 'BR', pulseira: 'PU', oculos: 'OC', chapeu: 'CH' },
-  BO: { transversal: 'TR', mao: 'MA', mochila: 'MC', praia: 'PR' },
-  SP: { tenis: 'TE', sandalia: 'SA', bota: 'BO', rasteira: 'RS', salto: 'SL' },
-  OU: { padrao: 'PD', generico: 'GN' }
+  '01': { // Modelos de sutiã
+    basico_com_bojo: '01',
+    basico_sem_bojo: '02',
+    renda: '03',
+    top: '04',
+    com_aro: '05',
+    sem_aro: '06'
+  },
+  '02': { // Modelos de calcinha
+    algodao: '01',
+    poliamida: '02',
+    renda: '03',
+    sem_costura: '04',
+    cintura_alta: '05',
+    fio_dental: '06'
+  },
+  '04': { // Modelos de pijama
+    americano: '01',
+    renda: '02',
+    vestido: '03',
+    short_doll: '04'
+  },
+  '14': { // Modelos de conjunto (tipo 14)
+    basico_com_bojo: '01',
+    basico_sem_bojo: '02',
+    renda_sem_bojo: '03',
+    renda_com_bojo: '04',
+    bustie_cropped_renda: '05',
+    conjunto_com_calcinha_fio_dental: '06'
+  }
 }
 
 export const SKU_COR: Record<string, string> = {
-  preto: 'PR',
-  branco: 'BR',
-  azul: 'AZ',
-  vermelho: 'VM',
-  verde: 'VD',
-  amarelo: 'AM',
-  rosa: 'RS',
-  cinza: 'CZ',
-  marrom: 'MR',
-  bege: 'BG',
-  laranja: 'LR',
-  roxo: 'RX',
-  dourado: 'DO',
-  prata: 'PT',
-  nude: 'ND',
-  estampado: 'ES',
-  multicor: 'MC'
+  preto: '01',
+  branco: '02',
+  nude: '03',
+  vermelho: '04',
+  rosa: '05',
+  vinho: '06',
+  azul: '07',
+  verde: '08',
+  amarelo: '09',
+  roxo: '10',
+  lilas: '10',
+  bege: '11',
+  marrom: '12'
 }
 
 export const SKU_TAMANHO: Record<string, string> = {
-  pp: 'PP',
-  p: '0P',
-  m: '0M',
-  g: '0G',
-  gg: 'GG',
-  xg: 'XG',
-  x1: 'X1',
-  x2: 'X2',
-  x3: 'X3',
-  '34': '34',
-  '36': '36',
-  '38': '38',
-  '40': '40',
-  '42': '42',
-  '44': '44',
-  '46': '46',
-  '48': '48',
-  unico: 'UN'
+  p: '01',
+  m: '02',
+  g: '03',
+  gg: '04'
 }
 
-function getSafeCode(value: string | undefined | null, map: Record<string, string>, defaultCode = '00'): string {
-  if (!value) return defaultCode
-  const normalized = value.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-  if (map[normalized]) return map[normalized]
-  
-  const consonants = normalized.replace(/[aeiou\s]/g, '').toUpperCase()
-  if (consonants.length >= 2) return consonants.substring(0, 2)
-  return normalized.substring(0, 2).toUpperCase().padEnd(2, '0')
+export const SKU_ANO: Record<string, string> = {
+  '2024': '24',
+  '24': '24',
+  '2025': '25',
+  '25': '25',
+  '2026': '26',
+  '26': '26'
+}
+
+function normalizeKey(value: string | undefined | null): string {
+  if (!value) return ''
+  return value.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')
 }
 
 export interface GenerateSKUParams {
@@ -95,29 +97,45 @@ export function generateSKU(params: GenerateSKUParams): string {
   if (!params.tipo) throw new Error('Tipo é obrigatório para gerar SKU')
   if (!params.modelo) throw new Error('Modelo é obrigatório para gerar SKU')
 
-  const TT = getSafeCode(params.tipo, SKU_TIPO, 'OU')
-  const modelMap = SKU_MODELO[TT] || SKU_MODELO['OU']
-  const MM = getSafeCode(params.modelo, modelMap, 'PD')
-  
-  if (TT === '00' || MM === '00') {
-    throw new Error('Mapeamento inválido para tipo/modelo')
+  const normTipo = normalizeKey(params.tipo)
+  const TT = SKU_TIPO[normTipo as keyof typeof SKU_TIPO]
+  if (!TT) {
+    throw new Error(`Tipo de produto '${params.tipo}' não encontrado no mapa oficial`)
   }
 
-  const CC = getSafeCode(params.cor, SKU_COR, '00')
-  const TTM = getSafeCode(params.tamanho, SKU_TAMANHO, '00')
-  
-  let AA = '00'
-  if (params.ano) {
-    const anoStr = String(params.ano).trim()
-    AA = anoStr.length === 4 ? anoStr.substring(2, 4) : anoStr.substring(0, 2).padEnd(2, '0')
-  } else {
-    AA = new Date().getFullYear().toString().substring(2, 4)
+  // Modelos
+  const modelMap = SKU_MODELO[TT] || { padrao: '01' } // Fallback estrutural: se o tipo (ex: body) não tem mapa específico de modelos, usamos '01'
+  const normModelo = normalizeKey(params.modelo)
+  const MM = modelMap[normModelo]
+  if (!MM && !modelMap['padrao']) {
+    throw new Error(`Modelo '${params.modelo}' não encontrado para o tipo '${params.tipo}' no mapa oficial`)
   }
 
-  // TT-MM-CC-TT-AA (14 caracteres contando os hífens)
-  const sku = `${TT}-${MM}-${CC}-${TTM}-${AA}`
+  // Cores
+  const normCor = params.cor ? normalizeKey(params.cor) : ''
+  const CC = params.cor === undefined ? '00' : SKU_COR[normCor]
+  if (params.cor !== undefined && !CC) {
+    throw new Error(`Cor '${params.cor}' não encontrada no mapa oficial`)
+  }
+
+  // Tamanhos
+  const normTamanho = params.tamanho ? normalizeKey(params.tamanho) : ''
+  const TTM = params.tamanho === undefined ? '00' : SKU_TAMANHO[normTamanho]
+  if (params.tamanho !== undefined && !TTM) {
+    throw new Error(`Tamanho '${params.tamanho}' não encontrado no mapa oficial`)
+  }
   
-  if (sku.length !== 14) {
+  // Ano
+  const normAno = params.ano ? String(params.ano).trim() : new Date().getFullYear().toString()
+  const AA = SKU_ANO[normAno]
+  if (params.ano !== undefined && !AA) {
+    throw new Error(`Ano '${params.ano}' não suportado no mapa oficial`)
+  }
+
+  // TTMMCCTTAA (10 caracteres, estritamente numérico)
+  const sku = `${TT}${MM || '01'}${CC}${TTM}${AA}`
+  
+  if (sku.length !== 10) {
     throw new Error(`Falha na geração: formato de tamanho incorreto. Gerado: ${sku}`)
   }
 
@@ -125,5 +143,7 @@ export function generateSKU(params: GenerateSKUParams): string {
 }
 
 export function generateParentSKU(tipo: string, modelo: string, ano?: string): string {
-  return generateSKU({ tipo, modelo, cor: '00', tamanho: '00', ano })
+  // O SKU pai é formado contendo '00' para os identificadores de variante (Cor e Tamanho)
+  // Exemplo parent: TTMM0000AA
+  return generateSKU({ tipo, modelo, cor: undefined, tamanho: undefined, ano })
 }

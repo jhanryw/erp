@@ -113,7 +113,7 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     let sku_variacao = ''
     try {
       if (tipo && modelo) {
-        sku_variacao = generateSKU({ tipo, modelo, cor: corStr, tamanho: tamanhoStr, ano })
+        sku_variacao = generateSKU({ tipo, modelo, cor: corStr || undefined, tamanho: tamanhoStr || undefined, ano: ano || undefined })
       }
     } catch {
       newIssues.push({ row: rowNum, message: `Erro ao gerar SKU (campos inválidos)`, type: 'error' })

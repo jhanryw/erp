@@ -120,7 +120,7 @@ export async function POST(request: Request) {
             }
           }
 
-          const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00', ano: productData.ano })
+          const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
 
           const { data: pv, error: pvError } = (await admin
             .from('product_variations')
