@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -17,6 +18,10 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
+  // Qualquer usuário autenticado pode cadastrar clientes (operação básica)
+  const { response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 

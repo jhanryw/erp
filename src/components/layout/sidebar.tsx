@@ -9,12 +9,16 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
+import { useUserContext } from '@/components/layout/user-context'
+import { hasMinRole, ROLE_LABELS } from '@/types/roles'
+import type { AppRole } from '@/types/roles'
 
 interface NavItem {
   label: string
   href: string
   icon: React.ElementType
-  adminOnly?: boolean
+  /** Role mínimo para ver este item. Ausente = visível para todos. */
+  minRole?: AppRole
   badge?: string
 }
 
@@ -38,30 +42,31 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
   {
     title: 'Gestão',
     items: [
-      { label: 'Fornecedores', href: '/fornecedores', icon: Truck, adminOnly: true },
-      { label: 'Marketing', href: '/marketing', icon: TrendingUp, adminOnly: true },
-      { label: 'Financeiro', href: '/financeiro', icon: DollarSign, adminOnly: true },
-      { label: 'Cashback', href: '/cashback', icon: Gift, adminOnly: true },
+      { label: 'Fornecedores', href: '/fornecedores', icon: Truck,    minRole: 'gerente' },
+      { label: 'Marketing',    href: '/marketing',    icon: TrendingUp, minRole: 'gerente' },
+      { label: 'Financeiro',   href: '/financeiro',   icon: DollarSign, minRole: 'gerente' },
+      { label: 'Cashback',     href: '/cashback',     icon: Gift,       minRole: 'gerente' },
     ],
   },
   {
     title: 'Análise',
     items: [
-      { label: 'Relatórios', href: '/relatorios', icon: BarChart3, adminOnly: true },
-      { label: 'Inteligência', href: '/inteligencia', icon: Brain, adminOnly: true },
+      { label: 'Relatórios',  href: '/relatorios',  icon: BarChart3, minRole: 'gerente' },
+      { label: 'Inteligência', href: '/inteligencia', icon: Brain,    minRole: 'gerente' },
     ],
   },
   {
     title: 'Sistema',
     items: [
-      { label: 'Configurações', href: '/configuracoes', icon: Settings, adminOnly: true },
+      { label: 'Configurações', href: '/configuracoes', icon: Settings, minRole: 'admin' },
     ],
   },
 ]
 
 export function Sidebar() {
   const pathname = usePathname()
-  const { user, isAdmin, signOut } = useAuth()
+  const { signOut } = useAuth()
+  const { userName, userRole } = useUserContext()
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
@@ -83,7 +88,7 @@ export function Sidebar() {
       <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-0.5">
         {NAV_GROUPS.map((group) => {
           const visibleItems = group.items.filter(
-            (item) => !item.adminOnly || isAdmin
+            (item) => !item.minRole || hasMinRole(userRole, item.minRole)
           )
           if (visibleItems.length === 0) return null
 
@@ -134,12 +139,12 @@ export function Sidebar() {
         <div className="flex items-center gap-3 px-2 py-2 rounded-lg hover:bg-bg-hover transition-colors">
           <div className="w-7 h-7 rounded-full bg-brand/20 flex items-center justify-center flex-shrink-0">
             <span className="text-xs font-bold text-accent">
-              {user?.name?.charAt(0)?.toUpperCase() ?? 'U'}
+              {userName?.charAt(0)?.toUpperCase() ?? 'U'}
             </span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-text-primary truncate">{user?.name}</p>
-            <p className="text-[10px] text-text-muted capitalize">{user?.role}</p>
+            <p className="text-xs font-medium text-text-primary truncate">{userName}</p>
+            <p className="text-[10px] text-text-muted capitalize">{ROLE_LABELS[userRole]}</p>
           </div>
           <button
             onClick={signOut}

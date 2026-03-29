@@ -1,6 +1,8 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
+import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -26,6 +28,9 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
+  const { response: unauth } = await requireRole('gerente')
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
@@ -117,5 +122,6 @@ export async function POST(request: Request) {
     }
   }
 
+  auditLog({ userId: user.id, userRole: user.role, action: 'create', resource: 'product', resourceId: product?.id, detail: parsed.data.sku })
   return NextResponse.json({ product }, { status: 201 })
 }

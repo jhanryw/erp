@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -24,6 +25,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
+  const { response: unauth } = await requireRole('gerente')
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
@@ -40,6 +44,10 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 }
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
+  // Exclusão de fornecedor com verificação de dependências — exige admin
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   const supplierId = Number(params.id)
   if (!Number.isFinite(supplierId) || supplierId <= 0) {
     return NextResponse.json({ error: 'ID inválido' }, { status: 400 })

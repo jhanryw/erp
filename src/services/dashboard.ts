@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import type { UserRole } from '@/types/database.types'
+import type { AppRole } from '@/types/roles'
+import { hasMinRole } from '@/types/roles'
 import { formatDate } from '@/lib/utils/date'
 import { subDays } from 'date-fns'
 
@@ -62,12 +63,13 @@ type StockStatusRow = {
   stock_value_at_price: number | null
 }
 
-export async function getDashboardData(role: UserRole): Promise<DashboardData> {
+export async function getDashboardData(role: AppRole): Promise<DashboardData> {
   const supabase = createAdminClient()
 
   const today = formatDate(new Date(), 'yyyy-MM-dd')
   const thirtyDaysAgo = formatDate(subDays(new Date(), 30), 'yyyy-MM-dd')
-  const showFinancials = role === 'admin'
+  // Gerente e admin veem métricas financeiras; usuário básico vê apenas contagens
+  const showFinancials = hasMinRole(role, 'gerente')
 
   const [
     todaySalesRes,

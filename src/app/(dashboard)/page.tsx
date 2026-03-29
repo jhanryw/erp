@@ -1,7 +1,8 @@
-import type { UserRole } from '@/types/database.types'
 import { ShoppingCart, TrendingUp, Users, Package, BarChart2 } from 'lucide-react'
 import Link from 'next/link'
 
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { getDashboardData } from '@/services/dashboard'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -14,7 +15,12 @@ import { formatCurrency } from '@/lib/utils/currency'
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
-  const role: UserRole = 'admin'
+  // O layout já verifica autenticação — aqui apenas lemos o role para o serviço
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  const profile = user ? await getUserProfile(user.id, user.email) : null
+  const role = profile?.role ?? 'usuario'
+
   const data = await getDashboardData(role)
 
   const todayAvgTicket =

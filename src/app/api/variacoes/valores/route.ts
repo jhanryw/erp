@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -21,6 +22,9 @@ function toSlug(text: string) {
 }
 
 export async function POST(request: Request) {
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
@@ -45,6 +49,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   const { searchParams } = new URL(request.url)
   const id = Number(searchParams.get('id'))
   if (!id) return NextResponse.json({ error: 'ID obrigatório' }, { status: 400 })

@@ -1,31 +1,53 @@
 'use client'
 
-// ⚠️ DEV BYPASS — retorna usuário admin fixo sem consultar o Supabase Auth.
-// Para reativar: restaure a versão original com supabase.auth.getUser() e
-// a query em public.users para buscar name/role.
+/**
+ * Hook de autenticação para Client Components.
+ *
+ * Responsabilidade: gerenciar estado de sessão e sign-out.
+ *
+ * NOTA: nome e role do usuário NÃO são retornados por este hook.
+ * Esses dados vêm do Server Component (layout) via UserRoleProvider
+ * e são consumidos com useUserContext(). Isso mantém toda a
+ * autorização no servidor e evita queries client-side ao banco.
+ */
 
-import type { UserRole } from '@/types/database.types'
+import { useEffect, useState, useCallback } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import type { User } from '@supabase/supabase-js'
 
-interface AuthUser {
-  id: string
-  email: string | undefined
-  name: string
-  role: UserRole
+export interface UseAuthReturn {
+  user: User | null
+  loading: boolean
+  signOut: () => Promise<void>
 }
 
-const DEV_ADMIN: AuthUser = {
-  id: '00000000-0000-0000-0000-000000000001',
-  email: 'dev@santtorini.local',
-  name: 'Dev Admin',
-  role: 'admin',
-}
+export function useAuth(): UseAuthReturn {
+  const [user, setUser] = useState<User | null>(null)
+  const [loading, setLoading] = useState(true)
 
-export function useAuth() {
-  return {
-    user: DEV_ADMIN,
-    loading: false,
-    signOut: async () => { window.location.href = '/' },
-    isAdmin: true,
-    isSeller: false,
-  }
+  useEffect(() => {
+    const supabase = createClient()
+
+    // Carrega sessão já existente sem esperar refresh do servidor
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null)
+      setLoading(false)
+    })
+
+    // Mantém estado sincronizado com mudanças de sessão (logout em outra aba, expiração, etc.)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null)
+      setLoading(false)
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  const signOut = useCallback(async () => {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    window.location.href = '/login'
+  }, [])
+
+  return { user, loading, signOut }
 }

@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
 import { z } from 'zod'
 
 const schemaUpdate = z.object({
@@ -39,6 +40,9 @@ export async function GET(request: Request, { params }: { params: { id: string }
 }
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   try {
     const body = await request.json()
 
@@ -67,6 +71,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 }
 
 export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   try {
     const admin = createAdminClient()
 

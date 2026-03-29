@@ -7,7 +7,8 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 
 // Enums do banco
-export type UserRole = 'admin' | 'seller'
+/** @deprecated Use AppRole de @/types/roles no código novo. 'seller' é legado. */
+export type UserRole = 'admin' | 'gerente' | 'seller'
 export type ProductOrigin = 'own_brand' | 'third_party'
 export type StockEntryType = 'purchase' | 'own_production'
 export type PaymentMethod = 'pix' | 'card' | 'cash'

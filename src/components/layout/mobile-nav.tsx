@@ -9,35 +9,49 @@ import {
   BarChart3, Brain, Settings, Gift, Gem,
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
-import { useAuth } from '@/hooks/useAuth'
+import { useUserContext } from '@/components/layout/user-context'
+import { hasMinRole } from '@/types/roles'
+import type { AppRole } from '@/types/roles'
 
-const MOBILE_NAV_ITEMS = [
-  { label: 'Dashboard', href: '/', icon: LayoutDashboard },
-  { label: 'Vendas', href: '/vendas', icon: ShoppingCart },
-  { label: 'Clientes', href: '/clientes', icon: Users },
-  { label: 'Produtos', href: '/produtos', icon: Package },
-  { label: 'Estoque', href: '/estoque', icon: Warehouse },
-  { label: 'Fornecedores', href: '/fornecedores', icon: Truck, adminOnly: true },
-  { label: 'Marketing', href: '/marketing', icon: TrendingUp, adminOnly: true },
-  { label: 'Financeiro', href: '/financeiro', icon: DollarSign, adminOnly: true },
-  { label: 'Cashback', href: '/cashback', icon: Gift, adminOnly: true },
-  { label: 'Relatórios', href: '/relatorios', icon: BarChart3, adminOnly: true },
-  { label: 'Inteligência', href: '/inteligencia', icon: Brain, adminOnly: true },
-  { label: 'Configurações', href: '/configuracoes', icon: Settings, adminOnly: true },
+interface MobileNavItem {
+  label: string
+  href: string
+  icon: React.ElementType
+  /** Role mínimo para ver este item. Ausente = visível para todos. */
+  minRole?: AppRole
+}
+
+const MOBILE_NAV_ITEMS: MobileNavItem[] = [
+  { label: 'Dashboard',    href: '/',            icon: LayoutDashboard },
+  { label: 'Vendas',       href: '/vendas',       icon: ShoppingCart },
+  { label: 'Clientes',     href: '/clientes',     icon: Users },
+  { label: 'Produtos',     href: '/produtos',     icon: Package },
+  { label: 'Estoque',      href: '/estoque',      icon: Warehouse },
+  { label: 'Fornecedores', href: '/fornecedores', icon: Truck,     minRole: 'gerente' },
+  { label: 'Marketing',    href: '/marketing',    icon: TrendingUp, minRole: 'gerente' },
+  { label: 'Financeiro',   href: '/financeiro',   icon: DollarSign, minRole: 'gerente' },
+  { label: 'Cashback',     href: '/cashback',     icon: Gift,       minRole: 'gerente' },
+  { label: 'Relatórios',   href: '/relatorios',   icon: BarChart3,  minRole: 'gerente' },
+  { label: 'Inteligência', href: '/inteligencia', icon: Brain,      minRole: 'gerente' },
+  { label: 'Configurações',href: '/configuracoes',icon: Settings,   minRole: 'admin'   },
 ]
 
-// Bottom tab bar — 5 itens principais
+// Bottom tab bar — 4 itens fixos, sempre visíveis
 const BOTTOM_TABS = [
-  { label: 'Home', href: '/', icon: LayoutDashboard },
-  { label: 'Vendas', href: '/vendas', icon: ShoppingCart },
-  { label: 'Clientes', href: '/clientes', icon: Users },
+  { label: 'Home',    href: '/',       icon: LayoutDashboard },
+  { label: 'Vendas',  href: '/vendas', icon: ShoppingCart },
+  { label: 'Clientes',href: '/clientes',icon: Users },
   { label: 'Estoque', href: '/estoque', icon: Warehouse },
 ]
 
 export function MobileNav() {
   const [open, setOpen] = useState(false)
   const pathname = usePathname()
-  const { isAdmin } = useAuth()
+  const { userRole } = useUserContext()
+
+  const visibleItems = MOBILE_NAV_ITEMS.filter(
+    (item) => !item.minRole || hasMinRole(userRole, item.minRole)
+  )
 
   return (
     <>
@@ -73,7 +87,7 @@ export function MobileNav() {
             </div>
 
             <div className="flex-1 overflow-y-auto py-3 px-3 space-y-1">
-              {MOBILE_NAV_ITEMS.filter((i) => !i.adminOnly || isAdmin).map((item) => {
+              {visibleItems.map((item) => {
                 const active = item.href === '/'
                   ? pathname === '/'
                   : pathname.startsWith(item.href)
@@ -103,7 +117,7 @@ export function MobileNav() {
   )
 }
 
-// Bottom tab bar para mobile
+// Bottom tab bar para mobile — sem restrição de role (itens básicos)
 export function BottomTabBar() {
   const pathname = usePathname()
 

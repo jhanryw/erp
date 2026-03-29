@@ -1,12 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireSession } from '@/lib/supabase/session'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 
 export async function POST(
   _request: Request,
   { params }: { params: { id: string } }
 ) {
-  const { response: unauth } = await requireSession()
+  const { response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   const saleId = Number(params.id)

@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireSession } from '@/lib/supabase/session'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -23,7 +23,7 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
-  const { response: unauth } = await requireSession()
+  const { response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   let body: unknown
@@ -39,7 +39,7 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 }
 
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
-  const { response: unauth } = await requireSession()
+  const { response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   const id = Number(params.id)

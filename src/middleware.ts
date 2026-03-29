@@ -1,3 +1,18 @@
+/**
+ * Middleware de autenticação — verifica apenas se há sessão válida.
+ *
+ * Decisão de design: o middleware é responsável APENAS por autenticação.
+ * A autorização por role fica nas API routes (requireRole) e nos layouts
+ * server-side. Isso mantém public.users.role como fonte única de verdade,
+ * evita queries extras no edge e elimina risco de dessincronização com
+ * user_metadata.
+ *
+ * Fluxo:
+ *   Middleware → verifica JWT via supabase.auth.getUser()
+ *   Layout → getUserProfile() → verifica role para acesso à seção
+ *   API Route → requireRole(minRole) → verifica role para mutações
+ */
+
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
@@ -6,6 +21,8 @@ const PUBLIC_PATHS = [
   '/login',
   '/recuperar-acesso',
   '/api/auth',
+  '/api/shipping/calculate', // cálculo público (checkout de clientes)
+  '/api/shipping/cep',       // lookup de CEP (sem dados sensíveis)
 ]
 
 export async function middleware(request: NextRequest) {
@@ -19,13 +36,13 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet) {
+        setAll(cookiesToSet: { name: string; value: string; options?: Record<string, unknown> }[]) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
           supabaseResponse = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
+            supabaseResponse.cookies.set(name, value, options as never)
           )
         },
       },

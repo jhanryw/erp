@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -26,6 +27,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Configuração de cashback altera regras de negócio — exige admin
+  const { response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
