@@ -1,5 +1,5 @@
-nome_produto,tipo,modelo,categoria,fornecedor,origem,cor,tamanho,preco,custo,estoque_inicial,ativo
-Camiseta Basica,camiseta,basica,Roupas,Fornecedor A,terceiro,Preto,P,59.90,25.00,10,true
-Camiseta Basica,camiseta,basica,Roupas,Fornecedor A,terceiro,Preto,M,59.90,25.00,15,true
-Camiseta Basica,camiseta,basica,Roupas,Fornecedor A,terceiro,Branco,P,59.90,25.00,10,true
-Caneca Personalizada,acessorio,padrao,Acessorios,Fornecedor B,propria,,,39.90,12.50,50,true
+nome_produto,tipo,modelo,ano,categoria,fornecedor,origem,cor,tamanho,preco,custo,estoque_inicial,ativo
+Camiseta Basica,camiseta,basica,2024,Roupas,Fornecedor A,terceiro,Preto,P,59.90,25.00,10,true
+Camiseta Basica,camiseta,basica,2024,Roupas,Fornecedor A,terceiro,Preto,M,59.90,25.00,15,true
+Camiseta Basica,camiseta,basica,2024,Roupas,Fornecedor A,terceiro,Branco,P,59.90,25.00,10,true
+Caneca Personalizada,acessorio,padrao,2024,Acessorios,Fornecedor B,propria,,,39.90,12.50,50,true

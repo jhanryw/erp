@@ -168,7 +168,7 @@ export default function ImportarProdutosPage() {
            <p className="font-medium text-text-primary mb-2">Selecione ou arraste seu arquivo</p>
            <p className="text-sm text-text-muted text-center mb-6 max-w-md">
              Faça download do <a href="/template-importacao.csv" className="text-brand hover:underline">template em CSV</a> para garantir
-             que as colunas estejam corretas. O arquivo deve conter colunas: nome_produto, tipo, modelo, categoria, cor, tamanho, preco, custo, estoque_inicial.
+             que as colunas estejam corretas. O arquivo deve conter colunas: nome_produto, tipo, modelo, ano, categoria, cor, tamanho, preco, custo, estoque_inicial.
            </p>
 
            <input 

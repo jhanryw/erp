@@ -20,6 +20,7 @@ const schema = z.object({
   name: z.string().min(2),
   tipo: z.string().min(1),
   modelo: z.string().min(1),
+  ano: z.string().min(1),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']),
@@ -42,7 +43,7 @@ export async function POST(request: Request) {
   const admin = createAdminClient()
   const { variants, ...productData } = parsed.data
 
-  const parentSku = generateParentSKU(productData.tipo, productData.modelo)
+  const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
 
   // 1. Criar produto
   const { data: product, error: productError } = (await admin
@@ -98,7 +99,7 @@ export async function POST(request: Request) {
         }
       }
       
-      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00' })
+      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00', ano: productData.ano })
 
       // 2a. Criar product_variation (agora que temos o sku gerado no servidor)
       const { data: pv, error: pvError } = (await admin

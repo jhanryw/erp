@@ -78,7 +78,6 @@ function getSafeCode(value: string | undefined | null, map: Record<string, strin
   const normalized = value.toLowerCase().trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   if (map[normalized]) return map[normalized]
   
-  // Fallback: pega 2 primeiras consoantes, ou 2 primeiras letras uppercase
   const consonants = normalized.replace(/[aeiou\s]/g, '').toUpperCase()
   if (consonants.length >= 2) return consonants.substring(0, 2)
   return normalized.substring(0, 2).toUpperCase().padEnd(2, '0')
@@ -99,6 +98,11 @@ export function generateSKU(params: GenerateSKUParams): string {
   const TT = getSafeCode(params.tipo, SKU_TIPO, 'OU')
   const modelMap = SKU_MODELO[TT] || SKU_MODELO['OU']
   const MM = getSafeCode(params.modelo, modelMap, 'PD')
+  
+  if (TT === '00' || MM === '00') {
+    throw new Error('Mapeamento inválido para tipo/modelo')
+  }
+
   const CC = getSafeCode(params.cor, SKU_COR, '00')
   const TTM = getSafeCode(params.tamanho, SKU_TAMANHO, '00')
   
@@ -110,11 +114,11 @@ export function generateSKU(params: GenerateSKUParams): string {
     AA = new Date().getFullYear().toString().substring(2, 4)
   }
 
-  // TTMMCCTTAA (10 caracteres)
-  const sku = `${TT}${MM}${CC}${TTM}${AA}`
+  // TT-MM-CC-TT-AA (14 caracteres contando os hífens)
+  const sku = `${TT}-${MM}-${CC}-${TTM}-${AA}`
   
-  if (sku.length !== 10) {
-    throw new Error(`Falha na geração (tamanho incorreto): gerado ${sku} com ${sku.length} chars.`)
+  if (sku.length !== 14) {
+    throw new Error(`Falha na geração: formato de tamanho incorreto. Gerado: ${sku}`)
   }
 
   return sku

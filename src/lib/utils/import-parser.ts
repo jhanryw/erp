@@ -5,6 +5,7 @@ export type ImportRow = {
   nome?: string
   tipo?: string
   modelo?: string
+  ano?: string | number
   categoria?: string
   fornecedor?: string
   origem?: string
@@ -20,6 +21,7 @@ export type ParsedProduct = {
   name: string
   tipo: string
   modelo: string
+  ano: string
   category_id: number
   supplier_id?: number
   origin: string
@@ -59,6 +61,7 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     const nome_produto = String(row.nome_produto || row.nome || '')
     const tipo = String(row.tipo || '')
     const modelo = String(row.modelo || '')
+    const ano = String(row.ano || new Date().getFullYear().toString())
     const categoriaStr = String(row.categoria || '')
     const fornecedorStr = String(row.fornecedor || '')
     const origemStr = String(row.origem || 'terceiro')
@@ -110,7 +113,7 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     let sku_variacao = ''
     try {
       if (tipo && modelo) {
-        sku_variacao = generateSKU({ tipo, modelo, cor: corStr, tamanho: tamanhoStr })
+        sku_variacao = generateSKU({ tipo, modelo, cor: corStr, tamanho: tamanhoStr, ano })
       }
     } catch {
       newIssues.push({ row: rowNum, message: `Erro ao gerar SKU (campos inválidos)`, type: 'error' })
@@ -123,6 +126,7 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
         name: nome_produto,
         tipo,
         modelo,
+        ano,
         category_id,
         supplier_id,
         origin,

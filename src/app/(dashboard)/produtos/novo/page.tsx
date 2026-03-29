@@ -32,6 +32,7 @@ const formSchema = z.object({
   name:        z.string().min(2, 'Nome obrigatório'),
   tipo:        z.string().min(1, 'Tipo obrigatório'),
   modelo:      z.string().min(1, 'Modelo obrigatório'),
+  ano:         z.string().min(4, 'Ano obrigatório'),
   category_id: z.coerce.number({ invalid_type_error: 'Selecione uma categoria' }).int().positive('Selecione uma categoria'),
   supplier_id: z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().int().positive().nullable().optional()),
   origin:      z.enum(['own_brand', 'third_party']),
@@ -72,6 +73,7 @@ export default function NovoProdutoPage() {
 
   const tipo = watch('tipo')
   const modelo = watch('modelo')
+  const ano = watch('ano')
 
   // Carregar dados iniciais
   useEffect(() => {
@@ -105,7 +107,7 @@ export default function NovoProdutoPage() {
       selColors.forEach(color => {
         selSizes.forEach(size => {
           rows.push({
-            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value }),
+            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value, ano }),
             color_value_id: color.id,
             size_value_id:  size.id,
             color_label:    color.value,
@@ -119,7 +121,7 @@ export default function NovoProdutoPage() {
     } else if (hasColors) {
       selColors.forEach(color => {
         rows.push({
-          sku_variation:  generateSKU({ tipo, modelo, cor: color.value }),
+          sku_variation:  generateSKU({ tipo, modelo, cor: color.value, ano }),
           color_value_id: color.id,
           size_value_id:  null,
           color_label:    color.value,
@@ -132,7 +134,7 @@ export default function NovoProdutoPage() {
     } else {
       selSizes.forEach(size => {
         rows.push({
-          sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value }),
+          sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value, ano }),
           color_value_id: null,
           size_value_id:  size.id,
           color_label:    undefined,
@@ -147,7 +149,7 @@ export default function NovoProdutoPage() {
     replace(rows)
     setGenerated(true)
     toast.success(`${rows.length} variante${rows.length > 1 ? 's' : ''} gerada${rows.length > 1 ? 's' : ''}`)
-  }, [selColors, selSizes, tipo, modelo, replace])
+  }, [selColors, selSizes, tipo, modelo, ano, replace])
 
   function toggleColor(v: VariationValue) {
     setSelColors(prev => prev.find(c => c.id === v.id) ? prev.filter(c => c.id !== v.id) : [...prev, v])
@@ -171,7 +173,6 @@ export default function NovoProdutoPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
-        sku: generateParentSKU(data.tipo, data.modelo),
         category_id: Number(data.category_id),
         supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
         base_cost:   Number(data.base_cost),
@@ -213,9 +214,9 @@ export default function NovoProdutoPage() {
         <div className="card p-6 space-y-5">
           <h3 className="text-sm font-semibold text-text-primary border-b border-border pb-3">Informações do Produto</h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <Input label="Nome do produto" required placeholder="Ex: Body de Renda Floral" error={errors.name?.message} {...register('name')} />
-            <Select label="Tipo de Produto" required error={errors.tipo?.message} {...register('tipo')}>
+            <Select label="Tipo" required error={errors.tipo?.message} {...register('tipo')}>
               <option value="">Selecione...</option>
               {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>)}
             </Select>
@@ -225,6 +226,13 @@ export default function NovoProdutoPage() {
                 Object.keys(SKU_MODELO[SKU_TIPO[tipo as keyof typeof SKU_TIPO]] || SKU_MODELO['OU']).map(k => (
                   <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1).replace('_', ' ')}</option>
               ))}
+            </Select>
+            <Select label="Ano" required error={errors.ano?.message} {...register('ano')}>
+              <option value="">Selecione...</option>
+              <option value="2023">2023</option>
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026">2026</option>
             </Select>
           </div>
 
