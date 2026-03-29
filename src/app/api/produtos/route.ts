@@ -28,7 +28,7 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   let body: unknown

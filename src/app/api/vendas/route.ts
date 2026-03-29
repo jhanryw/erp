@@ -1,35 +1,38 @@
 export const dynamic = 'force-dynamic'
 
-import { createAdminClient } from '@/lib/supabase/admin'
-import { requireSession } from '@/lib/supabase/session'
+import { requireRole } from '@/lib/supabase/session'
+import { auditLog } from '@/lib/audit/log'
+import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 const itemSchema = z.object({
   product_variation_id: z.number().int().positive(),
-  quantity: z.number().int().positive(),
-  unit_price: z.number().positive(),
-  unit_cost: z.number().min(0),
-  discount_amount: z.number().min(0).default(0),
+  quantity:             z.number().int().positive(),
+  unit_price:           z.number().positive(),
+  unit_cost:            z.number().min(0),
+  discount_amount:      z.number().min(0).default(0),
 })
 
 const schema = z.object({
-  customer_id: z.number().int().positive(),
-  payment_method: z.enum(['pix', 'card', 'cash']),
-  sale_origin: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
-  discount_amount: z.number().min(0).default(0),
-  cashback_used: z.number().min(0).default(0),
+  customer_id:      z.number().int().positive(),
+  payment_method:   z.enum(['pix', 'card', 'cash']),
+  sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  discount_amount:  z.number().min(0).default(0),
+  cashback_used:    z.number().min(0).default(0),
   shipping_charged: z.number().min(0).default(0),
-  notes: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
-  items: z.array(itemSchema).min(1),
+  notes:            z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  items:            z.array(itemSchema).min(1),
 })
 
 export async function POST(request: Request) {
-  const { response: unauth } = await requireSession()
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   let body: unknown
-  try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
+  }
 
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
@@ -37,68 +40,35 @@ export async function POST(request: Request) {
   const systemUserId = process.env.SYSTEM_USER_ID
   if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
 
-  const { customer_id, payment_method, sale_origin, discount_amount, cashback_used, shipping_charged, notes, items } = parsed.data
-  const admin = createAdminClient()
+  // Regra 1: produtos/variações devem estar ativos (hard block para qualquer role)
+  const activeCheck = await validateProductsActive(parsed.data.items)
+  if (!activeCheck.ok) return NextResponse.json({ error: activeCheck.error }, { status: activeCheck.status })
 
-  // Verificar estoque
-  for (const item of items) {
-    const { data: stock } = (await admin.from('stock').select('quantity').eq('product_variation_id', item.product_variation_id).maybeSingle()) as unknown as { data: { quantity: number } | null }
-    if ((stock?.quantity ?? 0) < item.quantity) {
-      return NextResponse.json({ error: `Estoque insuficiente para variação #${item.product_variation_id}. Disponível: ${stock?.quantity ?? 0}` }, { status: 400 })
-    }
+  // Regra 2: validar estoque disponível
+  const stockCheck = await validateStockForSale(parsed.data.items)
+  if (!stockCheck.ok) return NextResponse.json({ error: stockCheck.error }, { status: stockCheck.status })
+
+  // Regra 3: preço abaixo do custo — bloqueia usuario, avisa gerente/admin
+  const priceCheck = checkSalePrices(parsed.data.items)
+  if (priceCheck.warnings.length > 0 && user.role === 'usuario') {
+    return NextResponse.json(
+      { error: `Venda com margem negativa requer aprovação de gerente. ${priceCheck.warnings[0]}` },
+      { status: 403 }
+    )
   }
 
-  const subtotal = items.reduce((s, i) => s + i.unit_price * i.quantity - i.discount_amount, 0)
-  const total = Math.max(0, subtotal - discount_amount - cashback_used + shipping_charged)
+  // Criar venda via service (sale + itens + estoque + finance)
+  const result = await createSale({ ...parsed.data, systemUserId })
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
-  // Inserir venda
-  const { data: sale, error: saleError } = (await admin
-    .from('sales')
-    .insert({
-      customer_id,
-      seller_id: systemUserId,
-      status: 'paid',
-      subtotal: parseFloat(subtotal.toFixed(2)),
-      discount_amount,
-      cashback_used,
-      shipping_charged,
-      total: parseFloat(total.toFixed(2)),
-      payment_method,
-      sale_origin: sale_origin ?? null,
-      notes: notes ?? null,
-      sale_date: new Date().toISOString().split('T')[0],
-    } as any)
-    .select('id, sale_number')
-    .single()) as unknown as { data: { id: number; sale_number: string } | null; error: any }
-
-  if (saleError || !sale) return NextResponse.json({ error: saleError?.message ?? 'Erro ao criar venda' }, { status: 500 })
-
-  // Inserir itens + debitar estoque
-  for (const item of items) {
-    await admin.from('sale_items').insert({
-      sale_id: sale.id,
-      product_variation_id: item.product_variation_id,
-      quantity: item.quantity,
-      unit_price: item.unit_price,
-      unit_cost: item.unit_cost,
-      discount_amount: item.discount_amount,
-      total_price: parseFloat((item.unit_price * item.quantity - item.discount_amount).toFixed(2)),
-    } as any)
-
-    const { data: currentStock } = (await admin.from('stock').select('quantity').eq('product_variation_id', item.product_variation_id).single()) as unknown as { data: { quantity: number } | null }
-    await (admin as any).from('stock').update({ quantity: (currentStock?.quantity ?? 0) - item.quantity, last_updated: new Date().toISOString() }).eq('product_variation_id', item.product_variation_id)
-  }
-
-  // Lançamento financeiro
-  await admin.from('finance_entries').insert({
-    type: 'income',
-    category: 'sale',
-    description: `Venda ${sale.sale_number}`,
-    amount: parseFloat(total.toFixed(2)),
-    reference_date: new Date().toISOString().split('T')[0],
-    sale_id: sale.id,
-    created_by: systemUserId,
-  } as any)
-
-  return NextResponse.json({ sale })
+  const sale = result.data
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'create', resource: 'sale',
+    resourceId: sale.id, detail: sale.sale_number,
+  })
+  return NextResponse.json({
+    sale,
+    ...(priceCheck.warnings.length > 0 ? { warnings: priceCheck.warnings } : {}),
+  })
 }

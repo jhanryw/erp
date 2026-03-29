@@ -1,6 +1,9 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireRole } from '@/lib/supabase/session'
+import { auditLog } from '@/lib/audit/log'
+import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -88,6 +91,9 @@ export async function PUT(
   request: Request,
   { params }: { params: { id: string } }
 ) {
+  const { user, response: unauth } = await requireRole('gerente')
+  if (unauth) return unauth
+
   const productId = parseId(params.id)
   if (!productId) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
@@ -104,7 +110,15 @@ export async function PUT(
   }
 
   const { variations_to_delete, variations_to_add, ...productFields } = parsed.data
-  const admin = createAdminClient()
+
+  // Snapshot antes para auditoria
+  const before = await getProductSnapshot(productId)
+
+  // Verificar regra de preço (warning, não bloqueio)
+  const priceCheck = await checkPriceChange(productId, productFields.base_price, productFields.base_cost)
+  const priceWarning = priceCheck.warning
+
+  const admin = createAdminClient() // admin client: escrita multi-tabela produtos+variações
 
   // ── 1. Atualizar produto base ───────────────────────────────────────────────
 
@@ -283,88 +297,43 @@ export async function PUT(
     }
   }
 
-  return NextResponse.json({ ok: true, id: productId })
+  const after = await getProductSnapshot(productId)
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'update', resource: 'product', resourceId: productId,
+    before: before ?? undefined,
+    after:  after  ?? undefined,
+  })
+  return NextResponse.json({ ok: true, id: productId, ...(priceWarning ? { warning: priceWarning } : {}) })
 }
 
 // ─── DELETE /api/produtos/[id] ────────────────────────────────────────────────
-
-type VariationRow = { id: number }
 
 export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  const { user, response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
   const productId = parseId(params.id)
   if (!productId) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
-  const admin = createAdminClient()
+  // Snapshot para auditoria (before)
+  const before = await getProductSnapshot(productId)
 
-  // 1. Buscar IDs das variações
-  const { data: variations, error: varFetchError } = await admin
-    .from('product_variations')
-    .select('id')
-    .eq('product_id', productId)
+  // Verificar regras de negócio: estoque + vendas
+  const check = await canDeleteProduct(productId)
+  if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status })
 
-  if (varFetchError) return NextResponse.json({ error: varFetchError.message }, { status: 500 })
+  // Executar exclusão em cascata via service
+  const del = await deleteProductCascade(productId, check.data.variationIds)
+  if (!del.ok) return NextResponse.json({ error: del.error }, { status: del.status })
 
-  const variationIds = ((variations ?? []) as VariationRow[]).map((v) => v.id)
-
-  if (variationIds.length > 0) {
-    // 2. Bloquear se houver itens de venda
-    const { count: saleItemsCount, error: saleCheckError } = await admin
-      .from('sale_items')
-      .select('id', { count: 'exact', head: true })
-      .in('product_variation_id', variationIds)
-
-    if (saleCheckError) return NextResponse.json({ error: saleCheckError.message }, { status: 500 })
-
-    if (saleItemsCount && saleItemsCount > 0) {
-      return NextResponse.json(
-        { error: 'Produto não pode ser excluído pois possui vendas registradas.' },
-        { status: 409 }
-      )
-    }
-
-    // 3. Excluir atributos das variações
-    const { error: attrError } = await admin
-      .from('product_variation_attributes')
-      .delete()
-      .in('product_variation_id', variationIds)
-
-    if (attrError) return NextResponse.json({ error: attrError.message }, { status: 500 })
-
-    // 4. Excluir lotes de estoque
-    const { error: lotsError } = await admin
-      .from('stock_lots')
-      .delete()
-      .in('product_variation_id', variationIds)
-
-    if (lotsError) return NextResponse.json({ error: lotsError.message }, { status: 500 })
-
-    // 5. Excluir posição de estoque atual
-    const { error: stockError } = await admin
-      .from('stock')
-      .delete()
-      .in('product_variation_id', variationIds)
-
-    if (stockError) return NextResponse.json({ error: stockError.message }, { status: 500 })
-
-    // 6. Excluir variações
-    const { error: variationsError } = await admin
-      .from('product_variations')
-      .delete()
-      .eq('product_id', productId)
-
-    if (variationsError) return NextResponse.json({ error: variationsError.message }, { status: 500 })
-  }
-
-  // 7. Excluir produto
-  const { error: productError } = await admin
-    .from('products')
-    .delete()
-    .eq('id', productId)
-
-  if (productError) return NextResponse.json({ error: productError.message }, { status: 500 })
-
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'delete', resource: 'product', resourceId: productId,
+    before: before ?? undefined,
+  })
   return NextResponse.json({ ok: true })
 }

@@ -1,126 +1,40 @@
-import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
+import { auditLog } from '@/lib/audit/log'
+import { adjustStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 const schema = z.object({
   product_variation_id: z.number().min(1),
-  delta: z.number().int().refine((n) => n !== 0, {
-    message: 'Delta não pode ser zero',
-  }),
+  delta:  z.number().int().refine((n) => n !== 0, { message: 'Delta não pode ser zero' }),
   reason: z.string().min(1),
-  notes: z.string().optional(),
+  notes:  z.string().optional(),
 })
 
-type StockRow = {
-  quantity: number | null
-  avg_cost: number | null
-}
-
 export async function POST(request: Request) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
-  const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID
-
-  if (!SYSTEM_USER_ID) {
-    return NextResponse.json(
-      { error: 'SYSTEM_USER_ID não definido nas variáveis de ambiente.' },
-      { status: 500 }
-    )
+  const systemUserId = process.env.SYSTEM_USER_ID
+  if (!systemUserId) {
+    return NextResponse.json({ error: 'SYSTEM_USER_ID não definido nas variáveis de ambiente.' }, { status: 500 })
   }
 
-  try {
-    const body = await request.json()
-    const parsed = schema.safeParse(body)
+  let body: unknown
+  try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.flatten() },
-        { status: 400 }
-      )
-    }
+  const parsed = schema.safeParse(body)
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
 
-    const { product_variation_id, delta, reason, notes } = parsed.data
-    const admin = createAdminClient()
+  const result = await adjustStock(parsed.data, systemUserId)
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
-    const stockRes = (await admin
-      .from('stock')
-      .select('quantity, avg_cost')
-      .eq('product_variation_id', product_variation_id)
-      .maybeSingle()) as unknown as {
-      data: StockRow | null
-      error: { message: string } | null
-    }
-
-    if (stockRes.error) {
-      return NextResponse.json(
-        { error: stockRes.error.message },
-        { status: 500 }
-      )
-    }
-
-    const currentQty = Number(stockRes.data?.quantity ?? 0)
-    const currentAvgCost = Number(stockRes.data?.avg_cost ?? 0)
-    const newQty = currentQty + delta
-
-    if (newQty < 0) {
-      return NextResponse.json(
-        {
-          error: `Estoque insuficiente. Atual: ${currentQty}, Ajuste: ${delta}`,
-        },
-        { status: 400 }
-      )
-    }
-
-    const { error: stockError } = await admin.from('stock').upsert(
-      {
-        product_variation_id,
-        quantity: newQty,
-        avg_cost: currentAvgCost,
-        last_updated: new Date().toISOString(),
-      } as any,
-      { onConflict: 'product_variation_id' }
-    )
-
-    if (stockError) {
-      return NextResponse.json(
-        { error: stockError.message },
-        { status: 500 }
-      )
-    }
-
-    if (delta < 0) {
-      const { error: financeError } = await admin.from('finance_entries').insert({
-        type: 'expense',
-        category: 'other_expense',
-        description: `Ajuste de estoque (${reason}): ${Math.abs(delta)} un. — var. #${product_variation_id}`,
-        amount: parseFloat((Math.abs(delta) * currentAvgCost).toFixed(2)),
-        reference_date: new Date().toISOString().slice(0, 10),
-        notes: notes ?? null,
-        created_by: SYSTEM_USER_ID,
-      } as any)
-
-      if (financeError) {
-        return NextResponse.json(
-          { error: financeError.message },
-          { status: 500 }
-        )
-      }
-    }
-
-    return NextResponse.json({
-      new_quantity: newQty,
-      previous_quantity: currentQty,
-      delta,
-    })
-  } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error ? error.message : 'Erro interno ao ajustar estoque.',
-      },
-      { status: 500 }
-    )
-  }
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'adjust', resource: 'stock_adjustment',
+    resourceId: parsed.data.product_variation_id,
+    detail: `delta:${parsed.data.delta} reason:${parsed.data.reason}`,
+    after:  { new_quantity: result.data.new_quantity, delta: result.data.delta },
+  })
+  return NextResponse.json(result.data)
 }

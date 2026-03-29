@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
+import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -15,14 +16,15 @@ const schema = z.object({
 })
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const admin = createAdminClient()
+  // GET público dentro do dashboard — autenticação já garantida pelo layout/middleware
+  const admin = createAdminClient() // admin client: contorna RLS (tabela sem policy pública)
   const { data, error } = (await admin.from('finance_entries').select('*').eq('id', Number(params.id)).single()) as unknown as { data: any; error: any }
   if (error || !data) return NextResponse.json({ error: 'Lançamento não encontrado' }, { status: 404 })
   return NextResponse.json({ entry: data })
 }
 
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   let body: unknown
@@ -31,22 +33,26 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const admin = createAdminClient()
+  const admin = createAdminClient() // admin client: necessário para bypass de RLS em finance_entries
   const { error } = (await (admin as any).from('finance_entries').update(parsed.data).eq('id', Number(params.id))) as { error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  auditLog({ userId: user.id, userRole: user.role, action: 'update', resource: 'finance_entry', resourceId: params.id, detail: `${parsed.data.type}:${parsed.data.category}` })
   return NextResponse.json({ ok: true })
 }
 
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   const id = Number(params.id)
   if (!id) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
-  const admin = createAdminClient()
+  const admin = createAdminClient() // admin client: necessário para bypass de RLS em finance_entries
   const { error, count } = await admin.from('finance_entries').delete({ count: 'exact' }).eq('id', id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!count) return NextResponse.json({ error: 'Registro não encontrado' }, { status: 404 })
+
+  auditLog({ userId: user.id, userRole: user.role, action: 'delete', resource: 'finance_entry', resourceId: id })
   return NextResponse.json({ ok: true })
 }
