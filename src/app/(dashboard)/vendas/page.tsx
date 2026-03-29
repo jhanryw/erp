@@ -141,10 +141,16 @@ export default async function VendasPage() {
                   return (
                     <TableRow key={sale.id}>
                       <TableCell className="font-medium">
-                        {sale.sale_number}
+                        <Link href={`/vendas/${sale.id}`} className="hover:underline font-mono">
+                          {sale.sale_number}
+                        </Link>
                       </TableCell>
 
-                      <TableCell>{customer?.name ?? '—'}</TableCell>
+                      <TableCell>
+                        <Link href={`/clientes/${customer?.id}`} className="hover:underline">
+                          {customer?.name ?? '—'}
+                        </Link>
+                      </TableCell>
 
                       <TableCell>{formatDate(sale.sale_date)}</TableCell>
 
