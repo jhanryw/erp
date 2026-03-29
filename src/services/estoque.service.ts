@@ -76,61 +76,25 @@ export async function adjustStock(
   input: StockAdjustInput,
   systemUserId: string
 ): Promise<ServiceOutcome<StockAdjustResult>> {
-  const admin = createAdminClient() // admin client: write multi-tabela stock + finance_entries
+  const admin = createAdminClient() // admin client: RPC SECURITY DEFINER
 
-  // Ler posição atual
-  const { data: stockData, error: stockReadError } = await admin
-    .from('stock')
-    .select('quantity, avg_cost')
-    .eq('product_variation_id', input.product_variation_id)
-    .maybeSingle() as unknown as {
-      data: { quantity: number; avg_cost: number } | null
-      error: { message: string } | null
-    }
-
-  if (stockReadError) return failure(stockReadError.message)
-
-  const currentQty = Number(stockData?.quantity ?? 0)
-  const currentAvgCost = Number(stockData?.avg_cost ?? 0)
-  const newQty = currentQty + input.delta
-
-  if (newQty < 0) {
-    return failure(
-      `Estoque insuficiente. Atual: ${currentQty}, ajuste: ${input.delta}.`,
-      400
-    )
+  const { data, error } = await (admin as any).rpc('rpc_stock_adjust', {
+    p_product_variation_id: input.product_variation_id,
+    p_delta: input.delta,
+    p_reason: input.reason,
+    p_notes: input.notes ?? null,
+    p_system_user_id: systemUserId,
+  }) as unknown as {
+    data: StockAdjustResult | null
+    error: { code: string; message: string } | null
   }
 
-  // Atualizar posição
-  const { error: upsertError } = await admin.from('stock').upsert(
-    {
-      product_variation_id: input.product_variation_id,
-      quantity: newQty,
-      avg_cost: currentAvgCost,
-      last_updated: new Date().toISOString(),
-    } as any,
-    { onConflict: 'product_variation_id' }
-  )
-
-  if (upsertError) return failure(upsertError.message)
-
-  // Saída → lançamento de despesa (custo médio × unidades retiradas)
-  if (input.delta < 0) {
-    const amount = parseFloat((Math.abs(input.delta) * currentAvgCost).toFixed(2))
-    const { error: financeError } = await admin.from('finance_entries').insert({
-      type:           'expense',
-      category:       'other_expense',
-      description:    `Ajuste de estoque (${input.reason}): ${Math.abs(input.delta)} un. — var. #${input.product_variation_id}`,
-      amount,
-      reference_date: new Date().toISOString().slice(0, 10),
-      notes:          input.notes ?? null,
-      created_by:     systemUserId,
-    } as any)
-
-    if (financeError) return failure(financeError.message)
+  if (error) {
+    const status = error.code === 'P0001' ? 400 : 500
+    return failure(error.message, status)
   }
 
-  return success({ new_quantity: newQty, previous_quantity: currentQty, delta: input.delta })
+  return success(data!)
 }
 
 // ─── Entrada de lote ──────────────────────────────────────────────────────────
@@ -149,88 +113,28 @@ export async function createStockEntry(
   input: StockEntryInput,
   systemUserId: string
 ): Promise<ServiceOutcome<StockEntryResult>> {
-  const admin = createAdminClient() // admin client: write multi-tabela stock_lots + stock + finance_entries
+  const admin = createAdminClient() // admin client: RPC SECURITY DEFINER
 
-  const freightCost = input.freight_cost ?? 0
-  const taxCost = input.tax_cost ?? 0
-  const totalLotCost = input.unit_cost * input.quantity_original + freightCost + taxCost
-  const costPerUnit = totalLotCost / input.quantity_original
+  const { data, error } = await (admin as any).rpc('rpc_stock_entry', {
+    p_product_variation_id: input.product_variation_id,
+    p_supplier_id: input.supplier_id ?? null,
+    p_entry_type: input.entry_type,
+    p_quantity_original: input.quantity_original,
+    p_unit_cost: input.unit_cost,
+    p_freight_cost: input.freight_cost ?? 0,
+    p_tax_cost: input.tax_cost ?? 0,
+    p_entry_date: input.entry_date,
+    p_notes: input.notes ?? null,
+    p_system_user_id: systemUserId,
+  }) as unknown as {
+    data: StockEntryResult | null
+    error: { code: string; message: string } | null
+  }
 
-  // 1. Criar lote de estoque
-  const { data: lot, error: lotError } = await admin
-    .from('stock_lots')
-    .insert({
-      product_variation_id: input.product_variation_id,
-      supplier_id:          input.supplier_id ?? null,
-      entry_type:           input.entry_type,
-      quantity_original:    input.quantity_original,
-      quantity_remaining:   input.quantity_original,
-      unit_cost:            input.unit_cost,
-      freight_cost:         freightCost,
-      tax_cost:             taxCost,
-      total_lot_cost:       totalLotCost,
-      cost_per_unit:        costPerUnit,
-      entry_date:           input.entry_date,
-      notes:                input.notes ?? null,
-      created_by:           systemUserId,
-    } as any)
-    .select('id')
-    .single() as unknown as {
-      data: { id: string } | null
-      error: { message: string } | null
-    }
+  if (error) {
+    const status = error.code === 'P0001' ? 400 : 500
+    return failure(error.message, status)
+  }
 
-  if (lotError || !lot) return failure(lotError?.message ?? 'Erro ao criar lote de estoque.')
-
-  // 2. Atualizar posição de estoque (custo médio ponderado)
-  const { data: currentStock, error: stockReadError } = await admin
-    .from('stock')
-    .select('quantity, avg_cost')
-    .eq('product_variation_id', input.product_variation_id)
-    .maybeSingle() as unknown as {
-      data: { quantity: number; avg_cost: number } | null
-      error: { message: string } | null
-    }
-
-  if (stockReadError) return failure(stockReadError.message)
-
-  const prevQty      = Number(currentStock?.quantity ?? 0)
-  const prevAvgCost  = Number(currentStock?.avg_cost ?? 0)
-  const newQty       = prevQty + input.quantity_original
-  const newAvgCost   = newQty > 0
-    ? (prevQty * prevAvgCost + input.quantity_original * costPerUnit) / newQty
-    : costPerUnit
-
-  const { error: stockError } = await admin.from('stock').upsert(
-    {
-      product_variation_id: input.product_variation_id,
-      quantity:             newQty,
-      avg_cost:             newAvgCost,
-      last_updated:         new Date().toISOString(),
-    } as any,
-    { onConflict: 'product_variation_id' }
-  )
-
-  if (stockError) return failure(stockError.message)
-
-  // 3. Lançamento financeiro (custo total da entrada)
-  const { error: financeError } = await admin.from('finance_entries').insert({
-    type:           'expense',
-    category:       'stock_purchase',
-    description:    `Entrada de estoque — Lote #${lot.id}`,
-    amount:         totalLotCost,
-    reference_date: input.entry_date,
-    stock_lot_id:   lot.id,
-    created_by:     systemUserId,
-  } as any)
-
-  if (financeError) return failure(financeError.message)
-
-  return success({
-    lot_id:         lot.id,
-    new_quantity:   newQty,
-    new_avg_cost:   newAvgCost,
-    total_lot_cost: totalLotCost,
-    cost_per_unit:  costPerUnit,
-  })
+  return success(data!)
 }
