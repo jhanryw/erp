@@ -86,12 +86,20 @@ export default async function ProdutosPage() {
           </p>
         </div>
 
-        <Link href="/produtos/novo">
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Novo Produto
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/produtos/importar">
+            <Button variant="outline">
+              Importar
+            </Button>
+          </Link>
+
+          <Link href="/produtos/novo">
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Produto
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {products.length === 0 ? (

@@ -1,0 +1,5 @@
+nome_produto,sku_pai,sku_variacao,categoria,fornecedor,origem,cor,tamanho,preco,custo,estoque_inicial,ativo
+Camiseta Basica,CAMB,CAMB-PR-P,Roupas,Fornecedor A,terceiro,Preto,P,59.90,25.00,10,true
+Camiseta Basica,CAMB,CAMB-PR-M,Roupas,Fornecedor A,terceiro,Preto,M,59.90,25.00,15,true
+Camiseta Basica,CAMB,CAMB-BR-P,Roupas,Fornecedor A,terceiro,Branco,P,59.90,25.00,10,true
+Caneca Personalizada,CANC,CANC-01,Acessorios,Fornecedor B,propria,,,39.90,12.50,50,true
