@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireSession } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -22,6 +23,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 }
 
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
+  const { response: unauth } = await requireSession()
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
@@ -35,6 +39,9 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 }
 
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
+  const { response: unauth } = await requireSession()
+  if (unauth) return unauth
+
   const id = Number(params.id)
   if (!id) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
   const admin = createAdminClient()

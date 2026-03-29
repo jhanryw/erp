@@ -123,6 +123,10 @@ export default async function EstoquePage() {
           <Button variant="outline">Ver Movimentações</Button>
         </Link>
 
+        <Link href="/estoque/ajuste">
+          <Button variant="outline">Ajuste de Estoque</Button>
+        </Link>
+
         <Link href="/estoque/alertas">
           <Button variant="outline">
             Ver Alertas

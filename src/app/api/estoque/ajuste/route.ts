@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireSession } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -17,6 +18,9 @@ type StockRow = {
 }
 
 export async function POST(request: Request) {
+  const { response: unauth } = await requireSession()
+  if (unauth) return unauth
+
   const SYSTEM_USER_ID = process.env.SYSTEM_USER_ID
 
   if (!SYSTEM_USER_ID) {

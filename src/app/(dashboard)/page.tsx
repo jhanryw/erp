@@ -1,9 +1,11 @@
 import type { UserRole } from '@/types/database.types'
-import { ShoppingCart, TrendingUp, Users, Package } from 'lucide-react'
+import { ShoppingCart, TrendingUp, Users, Package, BarChart2 } from 'lucide-react'
+import Link from 'next/link'
 
 import { getDashboardData } from '@/services/dashboard'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { DailySalesChart } from '@/components/modules/dashboards/daily-sales-chart'
 import { TopProductsWidget } from '@/components/modules/dashboards/top-products-widget'
 import { StockAlertsWidget } from '@/components/modules/dashboards/stock-alerts-widget'
@@ -20,11 +22,19 @@ export default async function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-        <p className="text-sm text-muted-foreground">
-          Visão geral dos principais indicadores do ERP
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+          <p className="text-sm text-muted-foreground">
+            Visão geral dos principais indicadores do ERP
+          </p>
+        </div>
+        <Link href="/dashboard">
+          <Button variant="outline" size="sm">
+            <BarChart2 className="mr-2 h-4 w-4" />
+            Dashboard Executivo
+          </Button>
+        </Link>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

@@ -107,6 +107,10 @@ export default async function FinanceiroPage() {
             <Button variant="outline">DRE Completo</Button>
           </Link>
 
+          <Link href="/financeiro/lancamentos">
+            <Button variant="outline">Ver Lançamentos</Button>
+          </Link>
+
           <Link href="/financeiro/lancamentos/novo">
             <Button>Lançamento</Button>
           </Link>

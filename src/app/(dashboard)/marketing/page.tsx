@@ -21,17 +21,25 @@ import { formatDate } from '@/lib/utils/date'
 export const dynamic = 'force-dynamic'
 
 const CATEGORY_LABELS: Record<string, string> = {
+  // Categorias ativas
   paid_traffic: 'Tráfego Pago',
   influencers: 'Influenciadores',
   events: 'Eventos',
   photos: 'Fotos/Conteúdo',
   gifts: 'Brindes',
   packaging: 'Embalagens',
-  rent: 'Aluguel',
-  salaries: 'Salários',
-  operational: 'Operacional',
-  taxes: 'Impostos',
+  content: 'Produção de Conteúdo',
+  design: 'Design',
+  tools: 'Ferramentas',
+  crm_automation: 'CRM / Automação',
+  website_landing_page: 'Site / Landing Page',
+  agency_freelancer: 'Agência / Freelancer',
   other: 'Outros',
+  // Categorias legadas (dados históricos)
+  rent: 'Aluguel (legado)',
+  salaries: 'Salários (legado)',
+  operational: 'Operacional (legado)',
+  taxes: 'Impostos (legado)',
 }
 
 type MarketingCostRow = {
@@ -99,10 +107,6 @@ export default async function MarketingPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <Link href="/marketing/campanhas">
-            <Button variant="outline">Campanhas</Button>
-          </Link>
-
           <Link href="/marketing/custos">
             <Button variant="outline">Ver Custos</Button>
           </Link>

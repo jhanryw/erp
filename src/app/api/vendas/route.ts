@@ -25,6 +25,9 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
+  const { response: unauth } = await requireSession()
+  if (unauth) return unauth
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
