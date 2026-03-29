@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { Plus, TrendingUp } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -13,21 +13,28 @@ import { DeleteCostButton } from './_components/delete-cost-button'
 export const dynamic = 'force-dynamic'
 
 const CATEGORY_LABELS: Record<string, string> = {
-  paid_traffic: 'Tráfego Pago',
-  influencers: 'Influenciadores',
-  events: 'Eventos',
-  photos: 'Fotos/Conteúdo',
-  gifts: 'Brindes',
-  packaging: 'Embalagens',
-  rent: 'Aluguel',
-  salaries: 'Salários',
-  operational: 'Operacional',
-  taxes: 'Impostos',
-  other: 'Outros',
+  paid_traffic:         'Tráfego Pago',
+  content:              'Conteúdo',
+  design:               'Design',
+  photos:               'Vídeo / Fotografia',
+  influencers:          'Influenciadores',
+  tools:                'Ferramentas de Marketing',
+  crm_automation:       'CRM / Automação',
+  website_landing_page: 'Site / Landing Page',
+  events:               'Eventos / Ações Promocionais',
+  gifts:                'Impressos / Brindes',
+  packaging:            'Embalagem',
+  agency_freelancer:    'Agência / Freelancer',
+  other:                'Outras Despesas de Marketing',
+  // legado
+  rent:                 'Aluguel (legado)',
+  salaries:             'Salários (legado)',
+  operational:          'Operacional (legado)',
+  taxes:                'Impostos (legado)',
 }
 
 async function getCosts() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const { data } = await supabase
     .from('marketing_costs')
     .select('id, category, description, amount, cost_date, is_recurring, notes')

@@ -12,23 +12,35 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 
-const CATEGORY_LABELS: Record<string, string> = {
-  paid_traffic: 'Tráfego Pago',
-  influencers: 'Influenciadores',
-  events: 'Eventos',
-  photos: 'Fotos / Conteúdo',
-  gifts: 'Brindes',
-  packaging: 'Embalagens',
-  rent: 'Aluguel',
-  salaries: 'Salários',
-  operational: 'Operacional',
-  taxes: 'Impostos',
-  other: 'Outros',
+const ACTIVE_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'paid_traffic',        label: 'Tráfego Pago' },
+  { value: 'content',             label: 'Conteúdo' },
+  { value: 'design',              label: 'Design' },
+  { value: 'photos',              label: 'Vídeo / Fotografia' },
+  { value: 'influencers',         label: 'Influenciadores' },
+  { value: 'tools',               label: 'Ferramentas de Marketing' },
+  { value: 'crm_automation',      label: 'CRM / Automação' },
+  { value: 'website_landing_page',label: 'Site / Landing Page' },
+  { value: 'events',              label: 'Eventos / Ações Promocionais' },
+  { value: 'gifts',               label: 'Impressos / Brindes' },
+  { value: 'packaging',           label: 'Embalagem' },
+  { value: 'agency_freelancer',   label: 'Agência / Freelancer' },
+  { value: 'other',               label: 'Outras Despesas de Marketing' },
+]
+
+const LEGACY_LABELS: Record<string, string> = {
+  rent: 'Aluguel (legado)',
+  salaries: 'Salários (legado)',
+  operational: 'Operacional (legado)',
+  taxes: 'Impostos (legado)',
 }
+
+const LEGACY_CATEGORIES = new Set(Object.keys(LEGACY_LABELS))
 
 export default function EditarCustoMarketingPage({ params }: { params: { id: string } }) {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
+  const [legacyCategory, setLegacyCategory] = useState<string | null>(null)
 
   const {
     register,
@@ -47,6 +59,9 @@ export default function EditarCustoMarketingPage({ params }: { params: { id: str
           toast.error('Custo não encontrado')
           router.push('/marketing/custos')
           return
+        }
+        if (LEGACY_CATEGORIES.has(cost.category)) {
+          setLegacyCategory(cost.category)
         }
         reset({
           category: cost.category,
@@ -102,10 +117,20 @@ export default function EditarCustoMarketingPage({ params }: { params: { id: str
       <form onSubmit={handleSubmit(onSubmit)} className="card p-6 space-y-5">
         <Select label="Categoria" required error={errors.category?.message} {...register('category')}>
           <option value="">Selecione a categoria</option>
-          {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+          {legacyCategory && (
+            <option value={legacyCategory} disabled>
+              {LEGACY_LABELS[legacyCategory]} — troque para salvar
+            </option>
+          )}
+          {ACTIVE_CATEGORIES.map(({ value, label }) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </Select>
+        {legacyCategory && (
+          <p className="text-xs text-yellow-600 -mt-3">
+            ⚠️ Este custo usa uma categoria legada. Selecione uma categoria de marketing válida para salvar.
+          </p>
+        )}
 
         <Input
           label="Descrição"

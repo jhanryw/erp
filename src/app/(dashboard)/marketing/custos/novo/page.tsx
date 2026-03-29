@@ -12,19 +12,21 @@ import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { toISODate } from '@/lib/utils/date'
 
-const CATEGORY_LABELS: Record<string, string> = {
-  paid_traffic: 'Tráfego Pago',
-  influencers: 'Influenciadores',
-  events: 'Eventos',
-  photos: 'Fotos / Conteúdo',
-  gifts: 'Brindes',
-  packaging: 'Embalagens',
-  rent: 'Aluguel',
-  salaries: 'Salários',
-  operational: 'Operacional',
-  taxes: 'Impostos',
-  other: 'Outros',
-}
+const ACTIVE_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'paid_traffic',        label: 'Tráfego Pago' },
+  { value: 'content',             label: 'Conteúdo' },
+  { value: 'design',              label: 'Design' },
+  { value: 'photos',              label: 'Vídeo / Fotografia' },
+  { value: 'influencers',         label: 'Influenciadores' },
+  { value: 'tools',               label: 'Ferramentas de Marketing' },
+  { value: 'crm_automation',      label: 'CRM / Automação' },
+  { value: 'website_landing_page',label: 'Site / Landing Page' },
+  { value: 'events',              label: 'Eventos / Ações Promocionais' },
+  { value: 'gifts',               label: 'Impressos / Brindes' },
+  { value: 'packaging',           label: 'Embalagem' },
+  { value: 'agency_freelancer',   label: 'Agência / Freelancer' },
+  { value: 'other',               label: 'Outras Despesas de Marketing' },
+]
 
 export default function NovoCustoMarketingPage() {
   const router = useRouter()
@@ -80,7 +82,7 @@ export default function NovoCustoMarketingPage() {
           {...register('category')}
         >
           <option value="">Selecione a categoria</option>
-          {Object.entries(CATEGORY_LABELS).map(([value, label]) => (
+          {ACTIVE_CATEGORIES.map(({ value, label }) => (
             <option key={value} value={value}>{label}</option>
           ))}
         </Select>

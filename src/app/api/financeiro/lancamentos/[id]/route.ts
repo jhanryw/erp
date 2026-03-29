@@ -32,3 +32,14 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }
+
+export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id)
+  if (!id) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
+
+  const admin = createAdminClient()
+  const { error, count } = await admin.from('finance_entries').delete({ count: 'exact' }).eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!count) return NextResponse.json({ error: 'Registro não encontrado' }, { status: 404 })
+  return NextResponse.json({ ok: true })
+}

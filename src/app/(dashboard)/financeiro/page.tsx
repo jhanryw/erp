@@ -87,8 +87,20 @@ export default async function FinanceiroPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <Link href="/financeiro/fluxo-caixa">
+          <Link href="/financeiro/fluxo">
             <Button variant="outline">Fluxo de Caixa</Button>
+          </Link>
+
+          <Link href="/financeiro/lucro">
+            <Button variant="outline">Lucro por Venda</Button>
+          </Link>
+
+          <Link href="/financeiro/ranking">
+            <Button variant="outline">Ranking de Produtos</Button>
+          </Link>
+
+          <Link href="/financeiro/clientes">
+            <Button variant="outline">Lucro por Cliente</Button>
           </Link>
 
           <Link href="/financeiro/dre">

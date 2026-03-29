@@ -92,8 +92,10 @@ export const stockLotSchema = z.object({
 })
 
 // ─── Custo de Marketing ───────────────────────────────────────────────────────
+// Categorias legado (rent, salaries, operational, taxes) não são aceitas em novas entradas.
+// Permanecem no enum do banco para compatibilidade com dados históricos.
 export const marketingCostSchema = z.object({
-  category: z.enum(['paid_traffic', 'influencers', 'events', 'photos', 'gifts', 'packaging', 'rent', 'salaries', 'operational', 'taxes', 'other']),
+  category: z.enum(['paid_traffic', 'content', 'design', 'photos', 'influencers', 'tools', 'crm_automation', 'website_landing_page', 'events', 'gifts', 'packaging', 'agency_freelancer', 'other']),
   description: z.string().min(2, 'Descrição obrigatória'),
   amount: z.coerce.number().positive('Valor deve ser > 0'),
   cost_date: z.string(),

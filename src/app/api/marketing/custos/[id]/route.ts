@@ -5,7 +5,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 const schema = z.object({
-  category: z.enum(['paid_traffic','influencers','events','photos','gifts','packaging','rent','salaries','operational','taxes','other']),
+  category: z.enum(['paid_traffic','content','design','photos','influencers','tools','crm_automation','website_landing_page','events','gifts','packaging','agency_freelancer','other']),
   description: z.string().min(2),
   amount: z.coerce.number().positive(),
   cost_date: z.string().min(1),
@@ -31,5 +31,15 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const admin = createAdminClient()
   const { error } = (await (admin as any).from('marketing_costs').update({ ...parsed.data, campaign_id: parsed.data.campaign_id ?? null }).eq('id', Number(params.id))) as { error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json({ ok: true })
+}
+
+export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
+  const id = Number(params.id)
+  if (!id) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
+  const admin = createAdminClient()
+  const { error, count } = await admin.from('marketing_costs').delete({ count: 'exact' }).eq('id', id)
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if (!count) return NextResponse.json({ error: 'Custo não encontrado' }, { status: 404 })
   return NextResponse.json({ ok: true })
 }

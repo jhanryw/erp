@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { Plus, DollarSign } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -27,8 +27,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 }
 
 async function getEntries() {
-  const supabase = createClient()
-  const { data } = await supabase
+  const admin = createAdminClient()
+  const { data } = await admin
     .from('finance_entries')
     .select('id, type, category, description, amount, reference_date, notes')
     .order('reference_date', { ascending: false })
