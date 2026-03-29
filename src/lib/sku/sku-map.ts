@@ -104,10 +104,13 @@ export function generateSKU(params: GenerateSKUParams): string {
   }
 
   // Modelos
-  const modelMap = SKU_MODELO[TT] || { padrao: '01' } // Fallback estrutural: se o tipo (ex: body) não tem mapa específico de modelos, usamos '01'
+  const modelMap = SKU_MODELO[TT]
+  if (!modelMap) {
+    throw new Error(`Não existem modelos definidos no mapa oficial para o tipo '${params.tipo}'`)
+  }
   const normModelo = normalizeKey(params.modelo)
   const MM = modelMap[normModelo]
-  if (!MM && !modelMap['padrao']) {
+  if (!MM) {
     throw new Error(`Modelo '${params.modelo}' não encontrado para o tipo '${params.tipo}' no mapa oficial`)
   }
 

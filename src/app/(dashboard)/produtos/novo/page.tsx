@@ -225,7 +225,9 @@ export default function NovoProdutoPage() {
               {tipo ? (
                 (() => {
                   const tt = SKU_TIPO[tipo as keyof typeof SKU_TIPO]
-                  const models = SKU_MODELO[tt] || { padrao: '01' }
+                  const models = SKU_MODELO[tt]
+                  if (!models) return <option value="" disabled>Sem modelos disponíveis para este tipo</option>
+                  
                   return Object.keys(models).map(k => (
                     <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>
                   ))
