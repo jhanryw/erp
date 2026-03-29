@@ -6,8 +6,9 @@ import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
+import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+
 const variantSchema = z.object({
-  sku_variation: z.string().min(1),
   color_value_id: z.number().int().positive().nullable().optional(),
   size_value_id: z.number().int().positive().nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
@@ -17,7 +18,8 @@ const variantSchema = z.object({
 
 const productSchema = z.object({
   name: z.string().min(2),
-  sku: z.string().min(2).max(50),
+  tipo: z.string().min(1),
+  modelo: z.string().min(1),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']),
@@ -52,11 +54,14 @@ export async function POST(request: Request) {
     const { variants, ...productData } = item
 
     try {
+      const parentSku = generateParentSKU(productData.tipo, productData.modelo)
+
       // 1. Criar produto
       const { data: product, error: productError } = (await admin
         .from('products')
         .insert({
           ...productData,
+          sku: parentSku,
           supplier_id: productData.supplier_id ?? null,
           subcategory_id: null,
           collection_id: null,
@@ -66,7 +71,7 @@ export async function POST(request: Request) {
 
       if (productError) {
         throw new Error(
-          `Produto ${item.sku}: ` +
+          `Produto ${productData.name}: ` +
             (productError.code === '23505'
               ? 'SKU já cadastrado.'
               : productError.code === '23503'
@@ -78,34 +83,20 @@ export async function POST(request: Request) {
       // 2. Criar variantes (se houver)
       if (variants && variants.length > 0 && product) {
         for (const v of variants) {
-          const { data: pv, error: pvError } = (await admin
-            .from('product_variations')
-            .insert({
-              product_id: product.id,
-              sku_variation: v.sku_variation,
-              cost_override: v.cost_override ?? null,
-              price_override: v.price_override ?? null,
-              active: true,
-            } as any)
-            .select('id')
-            .single()) as unknown as { data: { id: number } | null; error: any }
-
-          if (pvError || !pv) {
-            throw new Error(`Erro ao criar variante ${v.sku_variation}: ${pvError?.message}`)
-          }
-
           const attrs: any[] = []
+          let colorValue = ''
+          let sizeValue = ''
 
           if (v.color_value_id) {
             const { data: colorType } = (await admin
               .from('variation_values')
-              .select('variation_type_id')
+              .select('variation_type_id, value')
               .eq('id', v.color_value_id)
-              .single()) as unknown as { data: { variation_type_id: number } | null }
+              .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
 
             if (colorType) {
+              colorValue = colorType.value
               attrs.push({
-                product_variation_id: pv.id,
                 variation_type_id: colorType.variation_type_id,
                 variation_value_id: v.color_value_id,
               })
@@ -115,24 +106,47 @@ export async function POST(request: Request) {
           if (v.size_value_id) {
             const { data: sizeType } = (await admin
               .from('variation_values')
-              .select('variation_type_id')
+              .select('variation_type_id, value')
               .eq('id', v.size_value_id)
-              .single()) as unknown as { data: { variation_type_id: number } | null }
+              .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
 
             if (sizeType) {
+              sizeValue = sizeType.value
               attrs.push({
-                product_variation_id: pv.id,
                 variation_type_id: sizeType.variation_type_id,
                 variation_value_id: v.size_value_id,
               })
             }
           }
 
-          if (attrs.length > 0) {
-            await admin.from('product_variation_attributes').insert(attrs as any)
+          const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00' })
+
+          const { data: pv, error: pvError } = (await admin
+            .from('product_variations')
+            .insert({
+              product_id: product.id,
+              sku_variation: varSku,
+              cost_override: v.cost_override ?? null,
+              price_override: v.price_override ?? null,
+              active: true,
+            } as any)
+            .select('id')
+            .single()) as unknown as { data: { id: number } | null; error: any }
+
+          if (pvError || !pv) {
+            throw new Error(`Erro ao criar variante: ${pvError?.message}`)
           }
 
-          // 3. Criar registro de estoque
+          if (attrs.length > 0) {
+            const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
+            await admin.from('product_variation_attributes').insert(finalAttrs as any)
+          }
+
+          // 3. Criar registro de estoque (Opção B confirmada)
+          // Documentação: O saldo inicial é inserido diretamente na tabela 'stock' 
+          // sem passar por 'rpc_stock_entry' (Options A). Isso é um comportamento intencional 
+          // para caracterizar "carga inicial pré-operação" sem poluir os lotes de 
+          // entrada formal e o audit financeiro. Entradas futuras usarão o fluxo normal.
           await admin.from('stock').insert({
             product_variation_id: pv.id,
             quantity: v.initial_stock,

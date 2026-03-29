@@ -6,8 +6,9 @@ import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
+import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+
 const variantSchema = z.object({
-  sku_variation: z.string().min(1),
   color_value_id: z.number().int().positive().nullable().optional(),
   size_value_id: z.number().int().positive().nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
@@ -17,7 +18,8 @@ const variantSchema = z.object({
 
 const schema = z.object({
   name: z.string().min(2),
-  sku: z.string().min(2).max(50),
+  tipo: z.string().min(1),
+  modelo: z.string().min(1),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']),
@@ -40,10 +42,12 @@ export async function POST(request: Request) {
   const admin = createAdminClient()
   const { variants, ...productData } = parsed.data
 
+  const parentSku = generateParentSKU(productData.tipo, productData.modelo)
+
   // 1. Criar produto
   const { data: product, error: productError } = (await admin
     .from('products')
-    .insert({ ...productData, supplier_id: productData.supplier_id ?? null, subcategory_id: null, collection_id: null } as any)
+    .insert({ ...productData, sku: parentSku, supplier_id: productData.supplier_id ?? null, subcategory_id: null, collection_id: null } as any)
     .select('id')
     .single()) as unknown as { data: { id: number } | null; error: any }
 
@@ -55,37 +59,22 @@ export async function POST(request: Request) {
   // 2. Criar variantes (se houver)
   if (variants && variants.length > 0 && product) {
     for (const v of variants) {
-      // 2a. Criar product_variation
-      const { data: pv, error: pvError } = (await admin
-        .from('product_variations')
-        .insert({
-          product_id: product.id,
-          sku_variation: v.sku_variation,
-          cost_override: v.cost_override ?? null,
-          price_override: v.price_override ?? null,
-          active: true,
-        } as any)
-        .select('id')
-        .single()) as unknown as { data: { id: number } | null; error: any }
-
-      if (pvError || !pv) {
-        return NextResponse.json({ error: `Erro ao criar variante ${v.sku_variation}: ${pvError?.message}` }, { status: 500 })
-      }
-
-      // 2b. Criar atributos da variante (cor e tamanho)
+      // 2b/a. Buscar atributos para compor o SKU e associar (cor e tamanho)
       const attrs: any[] = []
+      let colorValue = ''
+      let sizeValue = ''
 
       if (v.color_value_id) {
-        // buscar variation_type_id para cor
         const { data: colorType } = (await admin
           .from('variation_values')
-          .select('variation_type_id')
+          .select('variation_type_id, value')
           .eq('id', v.color_value_id)
-          .single()) as unknown as { data: { variation_type_id: number } | null }
+          .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
 
         if (colorType) {
+          colorValue = colorType.value
           attrs.push({
-            product_variation_id: pv.id,
+            // placeholder, ID será repassado no final
             variation_type_id: colorType.variation_type_id,
             variation_value_id: v.color_value_id,
           })
@@ -95,24 +84,47 @@ export async function POST(request: Request) {
       if (v.size_value_id) {
         const { data: sizeType } = (await admin
           .from('variation_values')
-          .select('variation_type_id')
+          .select('variation_type_id, value')
           .eq('id', v.size_value_id)
-          .single()) as unknown as { data: { variation_type_id: number } | null }
+          .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
 
         if (sizeType) {
+          sizeValue = sizeType.value
           attrs.push({
-            product_variation_id: pv.id,
+            // placeholder
             variation_type_id: sizeType.variation_type_id,
             variation_value_id: v.size_value_id,
           })
         }
       }
+      
+      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || '00', tamanho: sizeValue || '00' })
 
-      if (attrs.length > 0) {
-        await admin.from('product_variation_attributes').insert(attrs as any)
+      // 2a. Criar product_variation (agora que temos o sku gerado no servidor)
+      const { data: pv, error: pvError } = (await admin
+        .from('product_variations')
+        .insert({
+          product_id: product.id,
+          sku_variation: varSku,
+          cost_override: v.cost_override ?? null,
+          price_override: v.price_override ?? null,
+          active: true,
+        } as any)
+        .select('id')
+        .single()) as unknown as { data: { id: number } | null; error: any }
+
+      if (pvError || !pv) {
+        return NextResponse.json({ error: `Erro ao criar variante: ${pvError?.message}` }, { status: 500 })
       }
 
-      // 2c. Criar registro de estoque
+      if (attrs.length > 0) {
+        const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
+        await admin.from('product_variation_attributes').insert(finalAttrs as any)
+      }
+
+      // 2c. Criar registro de estoque (Opção B - Carga Inicial Direta)
+      // Como na importação, o saldo inicial (se houver) vai direto para a tabela `stock`
+      // sem gerar histórico de entrada financeira formal. Entradas futuras usarão RPC.
       await admin.from('stock').insert({
         product_variation_id: pv.id,
         quantity: v.initial_stock,
@@ -122,6 +134,6 @@ export async function POST(request: Request) {
     }
   }
 
-  auditLog({ userId: user.id, userRole: user.role, action: 'create', resource: 'product', resourceId: product?.id, detail: parsed.data.sku })
+  auditLog({ userId: user.id, userRole: user.role, action: 'create', resource: 'product', resourceId: product?.id, detail: parentSku })
   return NextResponse.json({ product }, { status: 201 })
 }

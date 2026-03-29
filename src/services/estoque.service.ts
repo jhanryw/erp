@@ -2,10 +2,8 @@
  * Service de Estoque — lógica de negócio desacoplada de HTTP.
  *
  * Responsabilidade: ajustes manuais e entradas de lote com cálculo de
- * custo médio ponderado. Ambas as operações são transações lógicas
- * (não DB transactions — Supabase não expõe BEGIN/COMMIT via REST).
- *
- * Evolução: migrar para RPC PL/pgSQL transacional para garantir atomicidade.
+ * custo médio ponderado. Ambas as operações são transações seguras
+ * (atomicidade garantida por RPC PL/pgSQL no banco de dados).
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -67,10 +65,7 @@ function failure(error: string, status = 500): { ok: false; error: string; statu
  * - Resultado não pode ser negativo (checked aqui).
  * - Saídas geram lançamento financeiro de despesa (custo médio × unidades retiradas).
  *
- * Transação lógica: stock upsert → finance_entry (somente em saída).
- * Risco de falha parcial: se finance_entry falhar após stock upsert,
- * o estoque estará correto mas sem lançamento financeiro.
- * Evolução: migrar para RPC PL/pgSQL transacional.
+ * Transação atômica via Supabase RPC (rpc_stock_adjust).
  */
 export async function adjustStock(
   input: StockAdjustInput,
@@ -105,9 +100,7 @@ export async function adjustStock(
  * Custo médio ponderado:
  *   new_avg = (prev_qty × prev_avg + new_qty × cost_per_unit) / (prev_qty + new_qty)
  *
- * Transação lógica: stock_lot insert → stock upsert → finance_entry.
- * Risco de falha parcial: lote pode ficar órfão se stock/finance falharem.
- * Evolução: migrar para RPC PL/pgSQL transacional.
+ * Transação atômica via Supabase RPC (rpc_stock_entry).
  */
 export async function createStockEntry(
   input: StockEntryInput,

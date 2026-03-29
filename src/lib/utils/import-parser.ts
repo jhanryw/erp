@@ -1,9 +1,10 @@
+import { generateSKU, generateParentSKU } from './../sku/sku-map'
+
 export type ImportRow = {
   nome_produto?: string
   nome?: string
-  sku_pai?: string
-  sku?: string
-  sku_variacao?: string
+  tipo?: string
+  modelo?: string
   categoria?: string
   fornecedor?: string
   origem?: string
@@ -17,7 +18,8 @@ export type ImportRow = {
 
 export type ParsedProduct = {
   name: string
-  sku: string
+  tipo: string
+  modelo: string
   category_id: number
   supplier_id?: number
   origin: string
@@ -55,8 +57,8 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     const rowNum = index + 2 // considerando cabeçalho na linha 1
 
     const nome_produto = String(row.nome_produto || row.nome || '')
-    const sku_pai = String(row.sku_pai || row.sku || '')
-    const sku_variacao = String(row.sku_variacao || sku_pai)
+    const tipo = String(row.tipo || '')
+    const modelo = String(row.modelo || '')
     const categoriaStr = String(row.categoria || '')
     const fornecedorStr = String(row.fornecedor || '')
     const origemStr = String(row.origem || 'terceiro')
@@ -68,7 +70,7 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     const ativo = String(row.ativo).toLowerCase() === 'false' ? false : true
 
     if (!nome_produto) newIssues.push({ row: rowNum, message: 'Nome do produto vazio', type: 'error' })
-    if (!sku_pai) newIssues.push({ row: rowNum, message: 'SKU pai vazio', type: 'error' })
+    if (!tipo || !modelo) newIssues.push({ row: rowNum, message: 'Tipo e Modelo são obrigatórios', type: 'error' })
     if (isNaN(pPreco) || pPreco <= 0) newIssues.push({ row: rowNum, message: 'Preço inválido ou vazio', type: 'error' })
     if (isNaN(pCusto) || pCusto < 0) newIssues.push({ row: rowNum, message: 'Custo inválido', type: 'error' })
     if (isNaN(estoque) || estoque < 0) newIssues.push({ row: rowNum, message: 'Estoque não pode ser negativo', type: 'error' })
@@ -105,10 +107,22 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
 
     const origin = origemStr.toLowerCase().includes('propria') || origemStr.toLowerCase().includes('própria') ? 'own_brand' : 'third_party'
 
-    if (!productMap.has(sku_pai)) {
-      productMap.set(sku_pai, {
+    let sku_variacao = ''
+    try {
+      if (tipo && modelo) {
+        sku_variacao = generateSKU({ tipo, modelo, cor: corStr, tamanho: tamanhoStr })
+      }
+    } catch {
+      newIssues.push({ row: rowNum, message: `Erro ao gerar SKU (campos inválidos)`, type: 'error' })
+    }
+
+    const mapKey = `${tipo}-${modelo}`
+    
+    if (!productMap.has(mapKey)) {
+      productMap.set(mapKey, {
         name: nome_produto,
-        sku: sku_pai,
+        tipo,
+        modelo,
         category_id,
         supplier_id,
         origin,
@@ -119,12 +133,12 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
       })
     }
 
-    const product = productMap.get(sku_pai)!
+    const product = productMap.get(mapKey)!
     
     const exists = product.variants.some(v => v.sku_variation === sku_variacao)
     if (exists) {
-      newIssues.push({ row: rowNum, message: `SKU Variação '${sku_variacao}' duplicado no arquivo`, type: 'error' })
-    } else {
+      newIssues.push({ row: rowNum, message: `Combinação de Cor/Tamanho gera SKU duplicado '${sku_variacao}'`, type: 'error' })
+    } else if (sku_variacao) {
       product.variants.push({
         sku_variation: sku_variacao,
         color_value_id,

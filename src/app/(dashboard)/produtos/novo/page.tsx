@@ -30,7 +30,8 @@ const variantRowSchema = z.object({
 
 const formSchema = z.object({
   name:        z.string().min(2, 'Nome obrigatório'),
-  sku:         z.string().min(2, 'SKU obrigatório').max(50),
+  tipo:        z.string().min(1, 'Tipo obrigatório'),
+  modelo:      z.string().min(1, 'Modelo obrigatório'),
   category_id: z.coerce.number({ invalid_type_error: 'Selecione uma categoria' }).int().positive('Selecione uma categoria'),
   supplier_id: z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().int().positive().nullable().optional()),
   origin:      z.enum(['own_brand', 'third_party']),
@@ -42,17 +43,12 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>
 
+import { SKU_TIPO, SKU_MODELO, generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function slugToLabel(slug: string) {
   return slug.toUpperCase().replace(/-/g, '')
-}
-
-function buildSku(baseSku: string, colorSlug?: string, sizeSlug?: string) {
-  const parts = [baseSku.toUpperCase()]
-  if (colorSlug) parts.push(slugToLabel(colorSlug))
-  if (sizeSlug)  parts.push(slugToLabel(sizeSlug))
-  return parts.join('-')
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
@@ -74,7 +70,8 @@ export default function NovoProdutoPage() {
 
   const { fields, replace } = useFieldArray({ control, name: 'variants' })
 
-  const baseSku = watch('sku')
+  const tipo = watch('tipo')
+  const modelo = watch('modelo')
 
   // Carregar dados iniciais
   useEffect(() => {
@@ -97,13 +94,18 @@ export default function NovoProdutoPage() {
       return
     }
 
+    if (!tipo || !modelo) {
+      toast.error('Preencha o Tipo e o Modelo do produto antes de gerar SKUs')
+      return
+    }
+
     const rows: FormData['variants'] = []
 
     if (hasColors && hasSizes) {
       selColors.forEach(color => {
         selSizes.forEach(size => {
           rows.push({
-            sku_variation:  buildSku(baseSku || 'SKU', color.slug, size.slug),
+            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value }),
             color_value_id: color.id,
             size_value_id:  size.id,
             color_label:    color.value,
@@ -117,7 +119,7 @@ export default function NovoProdutoPage() {
     } else if (hasColors) {
       selColors.forEach(color => {
         rows.push({
-          sku_variation:  buildSku(baseSku || 'SKU', color.slug),
+          sku_variation:  generateSKU({ tipo, modelo, cor: color.value }),
           color_value_id: color.id,
           size_value_id:  null,
           color_label:    color.value,
@@ -130,7 +132,7 @@ export default function NovoProdutoPage() {
     } else {
       selSizes.forEach(size => {
         rows.push({
-          sku_variation:  buildSku(baseSku || 'SKU', undefined, size.slug),
+          sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value }),
           color_value_id: null,
           size_value_id:  size.id,
           color_label:    undefined,
@@ -145,7 +147,7 @@ export default function NovoProdutoPage() {
     replace(rows)
     setGenerated(true)
     toast.success(`${rows.length} variante${rows.length > 1 ? 's' : ''} gerada${rows.length > 1 ? 's' : ''}`)
-  }, [selColors, selSizes, baseSku, replace])
+  }, [selColors, selSizes, tipo, modelo, replace])
 
   function toggleColor(v: VariationValue) {
     setSelColors(prev => prev.find(c => c.id === v.id) ? prev.filter(c => c.id !== v.id) : [...prev, v])
@@ -169,6 +171,7 @@ export default function NovoProdutoPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
+        sku: generateParentSKU(data.tipo, data.modelo),
         category_id: Number(data.category_id),
         supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
         base_cost:   Number(data.base_cost),
@@ -210,9 +213,19 @@ export default function NovoProdutoPage() {
         <div className="card p-6 space-y-5">
           <h3 className="text-sm font-semibold text-text-primary border-b border-border pb-3">Informações do Produto</h3>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Input label="Nome do produto" required placeholder="Ex: Body de Renda Floral" error={errors.name?.message} {...register('name')} />
-            <Input label="SKU base" required placeholder="Ex: BODY-RD-001" hint="Usado como prefixo nos SKUs das variantes" error={errors.sku?.message} {...register('sku')} />
+            <Select label="Tipo de Produto" required error={errors.tipo?.message} {...register('tipo')}>
+              <option value="">Selecione...</option>
+              {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1)}</option>)}
+            </Select>
+            <Select label="Modelo" required error={errors.modelo?.message} {...register('modelo')} disabled={!tipo}>
+              <option value="">Selecione...</option>
+              {tipo && (SKU_MODELO[SKU_TIPO[tipo as keyof typeof SKU_TIPO]] || SKU_MODELO['OU']).constructor === Object && 
+                Object.keys(SKU_MODELO[SKU_TIPO[tipo as keyof typeof SKU_TIPO]] || SKU_MODELO['OU']).map(k => (
+                  <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.slice(1).replace('_', ' ')}</option>
+              ))}
+            </Select>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -356,7 +369,8 @@ export default function NovoProdutoPage() {
                       {/* SKU */}
                       <td className="px-4 py-2">
                         <input
-                          className="input-base text-xs font-mono py-1.5 w-full"
+                          readOnly
+                          className="input-base text-xs font-mono py-1.5 w-full bg-bg-overlay/50 cursor-not-allowed text-text-muted"
                           {...register(`variants.${idx}.sku_variation`)}
                         />
                         {errors.variants?.[idx]?.sku_variation && (
