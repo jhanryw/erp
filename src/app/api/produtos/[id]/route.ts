@@ -4,13 +4,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
+import { generateSKU } from '@/lib/sku/sku-map'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
 const variantToAddSchema = z.object({
-  sku_variation: z.string().min(1, 'SKU da variação obrigatório'),
+  // sku_variation AUSENTE INTENCIONALMENTE: gerado no servidor via generateSKU()
+  // Nunca aceito do cliente — mesma regra do POST /api/produtos
   color_value_id: z.number().int().positive().nullable().optional(),
   size_value_id: z.number().int().positive().nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
@@ -215,44 +217,53 @@ export async function PUT(
   }
 
   // ── 3. Adicionar novas variações ────────────────────────────────────────────
-  // Mesma lógica do POST /api/produtos, sem initial_stock (novas variações começam com 0)
+  // SKU gerado no servidor via generateSKU() — nunca aceito do cliente.
+  // Mesma lógica do POST /api/produtos, sem initial_stock (novas variações começam com 0).
 
   if (variations_to_add && variations_to_add.length > 0) {
-    for (const v of variations_to_add) {
 
-      // Inserir variação
-      const { data: pv, error: pvError } = await admin
-        .from('product_variations')
-        .insert({
-          product_id: productId,
-          sku_variation: v.sku_variation,
-          cost_override: v.cost_override ?? null,
-          price_override: v.price_override ?? null,
-          active: true,
-        } as any)
-        .select('id')
-        .single() as unknown as { data: { id: number } | null; error: any }
-
-      if (pvError || !pv) {
-        const msg = pvError?.code === '23505'
-          ? `SKU de variação "${v.sku_variation}" já existe.`
-          : pvError?.message ?? 'Erro ao criar variação.'
-        return NextResponse.json({ error: msg }, { status: 500 })
+    // Buscar tipo/modelo/ano do produto para gerar SKUs corretamente.
+    // Esses campos são necessários pelo generateSKU() e ficam gravados no produto.
+    const { data: productMeta, error: metaError } = await admin
+      .from('products')
+      .select('tipo, modelo, ano')
+      .eq('id', productId)
+      .single() as unknown as {
+        data: { tipo: string; modelo: string; ano: string } | null
+        error: { message: string } | null
       }
 
-      // Montar atributos (cor e/ou tamanho)
+    if (metaError || !productMeta) {
+      return NextResponse.json({ error: 'Produto não encontrado para geração de SKU.' }, { status: 404 })
+    }
+
+    if (!productMeta.tipo || !productMeta.modelo || !productMeta.ano) {
+      return NextResponse.json(
+        { error: 'Produto não possui tipo/modelo/ano definidos. Não é possível gerar SKU para novas variações.' },
+        { status: 422 }
+      )
+    }
+
+    for (const v of variations_to_add) {
+
+      // Resolver valor textual de cor e tamanho a partir dos IDs (igual ao POST)
+      let colorValue: string | undefined
+      let sizeValue:  string | undefined
+
       const attrs: { product_variation_id: number; variation_type_id: number; variation_value_id: number }[] = []
 
       if (v.color_value_id) {
         const { data: colorType } = await admin
           .from('variation_values')
-          .select('variation_type_id')
+          .select('variation_type_id, value')
           .eq('id', v.color_value_id)
-          .single() as unknown as { data: { variation_type_id: number } | null }
+          .single() as unknown as { data: { variation_type_id: number; value: string } | null }
 
         if (colorType) {
+          colorValue = colorType.value
+          // attrs preenchido após termos o pv.id
           attrs.push({
-            product_variation_id: pv.id,
+            product_variation_id: 0, // placeholder — substituído abaixo
             variation_type_id: colorType.variation_type_id,
             variation_value_id: v.color_value_id,
           })
@@ -262,23 +273,63 @@ export async function PUT(
       if (v.size_value_id) {
         const { data: sizeType } = await admin
           .from('variation_values')
-          .select('variation_type_id')
+          .select('variation_type_id, value')
           .eq('id', v.size_value_id)
-          .single() as unknown as { data: { variation_type_id: number } | null }
+          .single() as unknown as { data: { variation_type_id: number; value: string } | null }
 
         if (sizeType) {
+          sizeValue = sizeType.value
           attrs.push({
-            product_variation_id: pv.id,
+            product_variation_id: 0, // placeholder — substituído abaixo
             variation_type_id: sizeType.variation_type_id,
             variation_value_id: v.size_value_id,
           })
         }
       }
 
+      // Gerar SKU no servidor — nunca usa valor vindo do cliente
+      let varSku: string
+      try {
+        varSku = generateSKU({
+          tipo:    productMeta.tipo,
+          modelo:  productMeta.modelo,
+          cor:     colorValue,
+          tamanho: sizeValue,
+          ano:     productMeta.ano,
+        })
+      } catch (err) {
+        return NextResponse.json(
+          { error: `Erro ao gerar SKU da variação: ${err instanceof Error ? err.message : String(err)}` },
+          { status: 422 }
+        )
+      }
+
+      // Inserir variação com SKU gerado pelo servidor
+      const { data: pv, error: pvError } = await admin
+        .from('product_variations')
+        .insert({
+          product_id:    productId,
+          sku_variation: varSku,
+          cost_override: v.cost_override ?? null,
+          price_override: v.price_override ?? null,
+          active: true,
+        } as any)
+        .select('id')
+        .single() as unknown as { data: { id: number } | null; error: any }
+
+      if (pvError || !pv) {
+        const msg = pvError?.code === '23505'
+          ? `SKU de variação "${varSku}" já existe neste produto.`
+          : pvError?.message ?? 'Erro ao criar variação.'
+        return NextResponse.json({ error: msg }, { status: 500 })
+      }
+
+      // Inserir atributos (cor/tamanho) com o ID real da variação
       if (attrs.length > 0) {
+        const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
         const { error: attrError } = await admin
           .from('product_variation_attributes')
-          .insert(attrs as any)
+          .insert(finalAttrs as any)
 
         if (attrError) return NextResponse.json({ error: attrError.message }, { status: 500 })
       }
@@ -288,8 +339,8 @@ export async function PUT(
         .from('stock')
         .insert({
           product_variation_id: pv.id,
-          quantity: 0,
-          avg_cost: v.cost_override ?? productFields.base_cost,
+          quantity:     0,
+          avg_cost:     v.cost_override ?? productFields.base_cost,
           last_updated: new Date().toISOString(),
         } as any)
 
