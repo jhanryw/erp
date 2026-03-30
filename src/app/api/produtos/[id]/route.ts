@@ -21,7 +21,7 @@ const variantToAddSchema = z.object({
 
 const putSchema = z.object({
   name: z.string().min(2),
-  sku: z.string().min(2).max(50),
+  sku: z.string().regex(/^\d{10}$/, 'SKU deve conter exatamente 10 dígitos numéricos'),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']),
@@ -116,6 +116,30 @@ export async function PUT(
   // Snapshot antes para auditoria
   const before = await getProductSnapshot(productId)
 
+  // ── Detecção e validação de alteração de SKU ────────────────────────────────
+
+  const oldSku = before ? (before as Record<string, unknown>).sku as string | undefined : undefined
+  const skuChanged = oldSku !== undefined && productFields.sku !== oldSku
+
+  if (skuChanged) {
+    // Unicidade: garantir que nenhum outro produto usa o mesmo SKU
+    const { data: skuConflict, error: skuConflictError } = await createAdminClient()
+      .from('products')
+      .select('id')
+      .eq('sku', productFields.sku)
+      .neq('id', productId)
+      .maybeSingle() as unknown as { data: { id: number } | null; error: { message: string } | null }
+
+    if (skuConflictError) return NextResponse.json({ error: skuConflictError.message }, { status: 500 })
+
+    if (skuConflict) {
+      return NextResponse.json(
+        { error: `SKU "${productFields.sku}" já está em uso por outro produto.` },
+        { status: 409 }
+      )
+    }
+  }
+
   // Verificar regra de preço (warning, não bloqueio)
   const priceCheck = await checkPriceChange(productId, productFields.base_price, productFields.base_cost)
   const priceWarning = priceCheck.warning
@@ -135,6 +159,7 @@ export async function PUT(
       base_cost: productFields.base_cost,
       base_price: productFields.base_price,
       active: productFields.active,
+      ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
     .eq('id', productId) as { error: { code: string; message: string } | null }
 
@@ -143,7 +168,8 @@ export async function PUT(
       updateError.code === '23505' ? 'SKU já cadastrado para outro produto.' :
       updateError.code === '23503' ? 'Categoria ou fornecedor inválido.' :
       updateError.message
-    return NextResponse.json({ error: msg }, { status: 500 })
+    const status = updateError.code === '23505' ? 409 : 500
+    return NextResponse.json({ error: msg }, { status })
   }
 
   // ── 2. Remover variações ────────────────────────────────────────────────────
@@ -349,6 +375,19 @@ export async function PUT(
   }
 
   const after = await getProductSnapshot(productId)
+
+  // Auditoria específica de alteração de SKU — rastreabilidade obrigatória
+  if (skuChanged) {
+    auditLog({
+      userId: user.id, userRole: user.role,
+      action: 'sku_manual_override', resource: 'product', resourceId: productId,
+      before: { sku: oldSku },
+      after:  { sku: productFields.sku },
+      detail: `SKU alterado manualmente: ${oldSku} → ${productFields.sku}`,
+    })
+  }
+
+  // Auditoria geral da atualização do produto
   auditLog({
     userId: user.id, userRole: user.role,
     action: 'update', resource: 'product', resourceId: productId,

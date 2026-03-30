@@ -18,6 +18,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 export type AuditAction =
   | 'create' | 'update' | 'delete'
   | 'cancel' | 'return' | 'adjust'
+  | 'sku_manual_override'
 
 export type AuditResource =
   | 'product' | 'product_variation'
