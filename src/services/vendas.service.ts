@@ -243,8 +243,24 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
  * Idempotência: RAISE EXCEPTION se venda já está cancelled/returned.
  * Migração aplicada: 002_rpc_transactions.sql
  */
-export async function cancelSale(saleId: number, systemUserId: string): Promise<ServiceOutcome> {
+export async function cancelSale(
+  saleId: number,
+  systemUserId: string,
+  companyId: number | null
+): Promise<ServiceOutcome> {
   const admin = createAdminClient()
+
+  // Cross-tenant guard: verificar que a venda pertence à empresa do usuário
+  if (companyId != null) {
+    const { data: saleRow } = await admin
+      .from('sales')
+      .select('company_id')
+      .eq('id', saleId)
+      .single() as unknown as { data: { company_id: number } | null }
+
+    if (!saleRow) return failure('Venda não encontrada.', 404)
+    if (saleRow.company_id !== companyId) return failure('Acesso negado.', 403)
+  }
 
   const { error } = await (admin as any)
     .rpc('rpc_cancel_sale', {
@@ -266,8 +282,24 @@ export async function cancelSale(saleId: number, systemUserId: string): Promise<
  * Idêntico ao cancelSale em estrutura; apenas muda o status final e a descrição.
  * Migração aplicada: 002_rpc_transactions.sql
  */
-export async function returnSale(saleId: number, systemUserId: string): Promise<ServiceOutcome> {
+export async function returnSale(
+  saleId: number,
+  systemUserId: string,
+  companyId: number | null
+): Promise<ServiceOutcome> {
   const admin = createAdminClient()
+
+  // Cross-tenant guard: verificar que a venda pertence à empresa do usuário
+  if (companyId != null) {
+    const { data: saleRow } = await admin
+      .from('sales')
+      .select('company_id')
+      .eq('id', saleId)
+      .single() as unknown as { data: { company_id: number } | null }
+
+    if (!saleRow) return failure('Venda não encontrada.', 404)
+    if (saleRow.company_id !== companyId) return failure('Acesso negado.', 403)
+  }
 
   const { error } = await (admin as any)
     .rpc('rpc_return_sale', {
