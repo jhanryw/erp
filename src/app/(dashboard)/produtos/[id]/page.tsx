@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { DeleteProductButton } from '../_components/delete-product-button'
+import { NuvemshopSendButton } from '../_components/nuvemshop-send-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -139,6 +140,7 @@ export default async function ProdutoDetalhePage({
         </div>
 
         <div className="flex gap-2">
+          <NuvemshopSendButton produtoId={product.id} />
           <Link href={`/produtos/${product.id}/editar`}>
             <Button variant="outline">
               <Edit className="mr-2 h-4 w-4" />

@@ -17,6 +17,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { DeleteProductButton } from './_components/delete-product-button'
+import { NuvemshopBulkButton } from './_components/nuvemshop-bulk-button'
 
 export const dynamic = 'force-dynamic'
 
@@ -87,6 +88,8 @@ export default async function ProdutosPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <NuvemshopBulkButton />
+
           <Link href="/produtos/importar">
             <Button variant="outline">
               Importar

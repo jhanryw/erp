@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export async function POST(request: Request) {
-  // ── 1. Autenticação ───────────────────────────────────────────────────────
+  // ── Auth ───────────────────────────────────────────────────────────────────
   const token = request.headers.get('x-nuvemshop-token')
   if (!token || token !== process.env.NUVEMSHOP_WEBHOOK_SECRET) {
     return NextResponse.json({ error: 'Não autorizado.' }, { status: 401 })
@@ -18,15 +18,20 @@ export async function POST(request: Request) {
   try {
     const admin = createAdminClient()
 
-    const externalId  = String(body.id ?? '')
-    const status      = String(body.status ?? '')
-    const total       = Number(body.total ?? 0)
-    const customer    = (body.customer ?? {}) as Record<string, unknown>
+    const externalId    = String(body.id ?? '')
+    const rawStatus     = String(body.status ?? '')
+    const total         = Number(body.total ?? 0)
+    const customer      = (body.customer ?? {}) as Record<string, unknown>
     const customerName  = String(customer.name ?? '')
     const customerEmail = String(customer.email ?? '')
-    const products    = Array.isArray(body.products) ? body.products as Record<string, unknown>[] : []
+    const products      = Array.isArray(body.products)
+      ? (body.products as Record<string, unknown>[])
+      : []
 
-    // ── 2. Idempotência ───────────────────────────────────────────────────────
+    // 'paid' → 'pronto' (pronto para fluxo operacional, sem NF)
+    const status = rawStatus === 'paid' ? 'pronto' : rawStatus
+
+    // ── Verificar se pedido já existe ──────────────────────────────────────────
     const { data: existing } = await (admin as any)
       .from('pedidos')
       .select('id')
@@ -35,19 +40,30 @@ export async function POST(request: Request) {
       .maybeSingle() as { data: { id: number } | null }
 
     if (existing) {
-      return NextResponse.json({ duplicated: true })
+      // ── UPDATE: atualizar dados do pedido (sem recriar itens) ────────────────
+      const { error: updateError } = await (admin as any)
+        .from('pedidos')
+        .update({ status, total, customer_name: customerName, customer_email: customerEmail })
+        .eq('id', existing.id) as { error: { message: string } | null }
+
+      if (updateError) {
+        console.error('[webhook/nuvemshop/order] Erro ao atualizar pedido', updateError.message)
+        return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
+      }
+
+      return NextResponse.json({ ok: true, pedido_id: existing.id, updated: true })
     }
 
-    // ── 3. Inserir pedido ─────────────────────────────────────────────────────
+    // ── INSERT: criar novo pedido ──────────────────────────────────────────────
     const { data: pedido, error: pedidoError } = await (admin as any)
       .from('pedidos')
       .insert({
-        external_id:     externalId,
-        source:          'nuvemshop',
+        external_id:    externalId,
+        source:         'nuvemshop',
         status,
         total,
-        customer_name:   customerName,
-        customer_email:  customerEmail,
+        customer_name:  customerName,
+        customer_email: customerEmail,
       })
       .select('id')
       .single() as { data: { id: number } | null; error: { message: string } | null }
@@ -57,7 +73,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
     }
 
-    // ── 4. Inserir itens ──────────────────────────────────────────────────────
+    // ── Inserir itens (apenas na criação) ─────────────────────────────────────
     if (products.length > 0) {
       const itens = products.map((p) => ({
         pedido_id:           pedido.id,
@@ -77,7 +93,7 @@ export async function POST(request: Request) {
       }
     }
 
-    return NextResponse.json({ ok: true, pedido_id: pedido.id })
+    return NextResponse.json({ ok: true, pedido_id: pedido.id, created: true })
   } catch (err) {
     console.error('[webhook/nuvemshop/order] Exceção não tratada', err)
     return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
