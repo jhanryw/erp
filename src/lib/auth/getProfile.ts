@@ -10,55 +10,46 @@ export interface UserProfile {
   company_id: number | null
 }
 
-/**
- * Busca o perfil completo do usuário pela tabela public.users.
- * Usa o client admin (service role) para garantir leitura independente de RLS.
- *
- * ⚠️  Para uso exclusivo em Server Components e API Routes.
- *     Nunca importe este módulo em Client Components.
- */
 export async function getUserProfile(userId: string, email?: string): Promise<UserProfile> {
-  try {
-    const admin = createAdminClient()
-    const { data } = (await admin
-      .from('users')
-      .select('name, role, company_id')
-      .eq('id', userId)
-      .single()) as unknown as { data: { name: string | null; role: string | null; company_id: number | null } | null }
+  const admin = createAdminClient()
 
-    return {
-      id: userId,
-      name: data?.name ?? email?.split('@')[0] ?? 'Usuário',
+  const { data, error } = await admin
+    .from('users')
+    .select('name, role, company_id')
+    .eq('id', userId)
+    .single()
+
+  if (error) {
+    console.error('Erro ao buscar perfil em public.users:', {
+      userId,
       email,
-      role: normalizeRole(data?.role),
-      company_id: data?.company_id ?? null,
-    }
-  } catch {
-    // Fallback seguro: retorna role mínimo para evitar escalada indevida de privilégios
-    return {
-      id: userId,
-      name: email?.split('@')[0] ?? 'Usuário',
-      email,
-      role: 'usuario',
-      company_id: null,
-    }
+      error,
+    })
+    throw error
+  }
+
+  return {
+    id: userId,
+    name: data?.name ?? email?.split('@')[0] ?? 'Usuário',
+    email,
+    role: normalizeRole(data?.role),
+    company_id: data?.company_id ?? null,
   }
 }
 
-/**
- * Retorna apenas o role do usuário — otimizado para uso em requireRole().
- * Evita buscar campos desnecessários quando só o role é relevante.
- */
 export async function getUserRole(userId: string): Promise<AppRole> {
-  try {
-    const admin = createAdminClient()
-    const { data } = (await admin
-      .from('users')
-      .select('role')
-      .eq('id', userId)
-      .single()) as unknown as { data: { role: string | null } | null }
-    return normalizeRole(data?.role)
-  } catch {
-    return 'usuario' // fallback seguro
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .single()
+
+  if (error) {
+    console.error('Erro ao buscar role em public.users:', { userId, error })
+    throw error
   }
+
+  return normalizeRole(data?.role)
 }
