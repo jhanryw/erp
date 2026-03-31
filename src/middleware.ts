@@ -24,6 +24,7 @@ const PUBLIC_PATHS = [
   '/api/shipping/calculate', // cálculo público (checkout de clientes)
   '/api/shipping/cep',       // lookup de CEP (sem dados sensíveis)
   '/api/integrations/nuvemshop/callback',
+  '/api/webhooks/',          // webhooks externos (Nuvemshop, etc.) — sem sessão
 ]
 
 export async function middleware(request: NextRequest) {
