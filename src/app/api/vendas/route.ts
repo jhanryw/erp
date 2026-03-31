@@ -37,9 +37,6 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const systemUserId = process.env.SYSTEM_USER_ID
-  if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
-
   // Regra 1: produtos/variações devem estar ativos (hard block para qualquer role)
   const activeCheck = await validateProductsActive(parsed.data.items)
   if (!activeCheck.ok) return NextResponse.json({ error: activeCheck.error }, { status: activeCheck.status })
@@ -58,7 +55,7 @@ export async function POST(request: Request) {
   }
 
   // Criar venda via service (sale + itens + estoque + finance)
-  const result = await createSale({ ...parsed.data, systemUserId })
+  const result = await createSale({ ...parsed.data, systemUserId: user.id })
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
   const sale = result.data

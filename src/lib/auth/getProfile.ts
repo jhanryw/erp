@@ -7,6 +7,7 @@ export interface UserProfile {
   name: string
   email?: string
   role: AppRole
+  company_id: number | null
 }
 
 /**
@@ -21,15 +22,16 @@ export async function getUserProfile(userId: string, email?: string): Promise<Us
     const admin = createAdminClient()
     const { data } = (await admin
       .from('users')
-      .select('name, role')
+      .select('name, role, company_id')
       .eq('id', userId)
-      .single()) as unknown as { data: { name: string | null; role: string | null } | null }
+      .single()) as unknown as { data: { name: string | null; role: string | null; company_id: number | null } | null }
 
     return {
       id: userId,
       name: data?.name ?? email?.split('@')[0] ?? 'Usuário',
       email,
       role: normalizeRole(data?.role),
+      company_id: data?.company_id ?? null,
     }
   } catch {
     // Fallback seguro: retorna role mínimo para evitar escalada indevida de privilégios
@@ -38,6 +40,7 @@ export async function getUserProfile(userId: string, email?: string): Promise<Us
       name: email?.split('@')[0] ?? 'Usuário',
       email,
       role: 'usuario',
+      company_id: null,
     }
   }
 }

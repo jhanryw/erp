@@ -25,11 +25,10 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const systemUserId = process.env.SYSTEM_USER_ID
-  if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   const admin = createAdminClient()
-  const { error } = await admin.from('finance_entries').insert({ ...parsed.data, created_by: systemUserId } as any)
+  const { error } = await admin.from('finance_entries').insert({ ...parsed.data, created_by: user.id, company_id: user.company_id } as any)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

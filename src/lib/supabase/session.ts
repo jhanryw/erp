@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { getUserRole } from '@/lib/auth/getProfile'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import type { AppRole } from '@/types/roles'
 import { hasMinRole } from '@/types/roles'
 
@@ -8,6 +8,7 @@ export interface SessionUser {
   id: string
   email?: string
   role: AppRole
+  company_id: number | null
 }
 
 /**
@@ -34,10 +35,10 @@ export async function requireSession(): Promise<
     }
   }
 
-  const role = await getUserRole(user.id)
+  const profile = await getUserProfile(user.id, user.email)
 
   return {
-    user: { id: user.id, email: user.email, role },
+    user: { id: user.id, email: user.email, role: profile.role, company_id: profile.company_id },
     response: null,
   }
 }

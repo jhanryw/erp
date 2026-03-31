@@ -15,6 +15,9 @@ const schema = z.object({
 })
 
 export async function GET() {
+  const { response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+
   const admin = createAdminClient()
   const { data, error } = await admin
     .from('cashback_config')

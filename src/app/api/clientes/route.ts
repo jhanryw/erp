@@ -29,10 +29,7 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const systemUserId = process.env.SYSTEM_USER_ID
-  if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
-
-  const result = await createCustomer(parsed.data, systemUserId)
+  const result = await createCustomer(parsed.data, user.id, user.company_id)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
   auditLog({

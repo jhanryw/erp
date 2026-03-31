@@ -105,13 +105,14 @@ export async function getCustomerSnapshot(customerId: number): Promise<Record<st
  */
 export async function createCustomer(
   input: CustomerInput & { cpf: string },
-  createdBy: string
+  createdBy: string,
+  companyId: number | null
 ): Promise<ServiceOutcome<{ id: number | string }>> {
   const admin = createAdminClient() // admin client: INSERT em customers
 
   const { data, error } = await admin
     .from('customers')
-    .insert({ ...input, created_by: createdBy } as any)
+    .insert({ ...input, created_by: createdBy, company_id: companyId } as any)
     .select('id')
     .single() as unknown as {
       data: { id: number | string } | null
