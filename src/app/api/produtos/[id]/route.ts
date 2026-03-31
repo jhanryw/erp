@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
 import { generateSKU } from '@/lib/sku/sku-map'
+import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -360,17 +361,16 @@ export async function PUT(
         if (attrError) return NextResponse.json({ error: attrError.message }, { status: 500 })
       }
 
-      // Criar registro de estoque com quantidade 0
-      const { error: stockError } = await admin
-        .from('stock')
-        .insert({
-          product_variation_id: pv.id,
-          quantity:     0,
-          avg_cost:     v.cost_override ?? productFields.base_cost,
-          last_updated: new Date().toISOString(),
-        } as any)
-
-      if (stockError) return NextResponse.json({ error: stockError.message }, { status: 500 })
+      // Inicializar estoque via RPC (quantity=0 para novas variações adicionadas via PUT)
+      // O trigger bloqueia INSERT direto na tabela stock — obrigatório usar RPC.
+      const stockInit = await initializeStock({
+        product_variation_id: pv.id,
+        quantity:             0,
+        avg_cost:             v.cost_override ?? productFields.base_cost,
+      }, user.id)
+      if (!stockInit.ok) {
+        return NextResponse.json({ error: stockInit.error }, { status: stockInit.status })
+      }
     }
   }
 

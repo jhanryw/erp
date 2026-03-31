@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
@@ -143,17 +144,16 @@ export async function POST(request: Request) {
             await admin.from('product_variation_attributes').insert(finalAttrs as any)
           }
 
-          // 3. Criar registro de estoque (Opção B confirmada)
-          // Documentação: O saldo inicial é inserido diretamente na tabela 'stock' 
-          // sem passar por 'rpc_stock_entry' (Options A). Isso é um comportamento intencional 
-          // para caracterizar "carga inicial pré-operação" sem poluir os lotes de 
-          // entrada formal e o audit financeiro. Entradas futuras usarão o fluxo normal.
-          await admin.from('stock').insert({
+          // 3. Carga inicial via RPC — rastreável como tipo 'initial' em stock_movements.
+          // Sem stock_lot nem finance_entry (carga pré-operação). Trigger bloqueia insert direto.
+          const stockInit = await initializeStock({
             product_variation_id: pv.id,
             quantity: v.initial_stock,
             avg_cost: v.cost_override ?? productData.base_cost,
-            last_updated: new Date().toISOString(),
-          } as any)
+          }, user.id)
+          if (!stockInit.ok) {
+            throw new Error(`Erro ao inicializar estoque: ${stockInit.error}`)
+          }
         }
       }
 

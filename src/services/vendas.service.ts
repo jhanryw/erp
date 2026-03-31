@@ -110,39 +110,6 @@ export async function getSaleForMutation(saleId: number): Promise<ServiceOutcome
   })
 }
 
-/**
- * Restaura estoque de um conjunto de itens (usado em cancelamento/devolução).
- */
-export async function restoreStock(
-  items: { product_variation_id: number; quantity: number; unit_cost: number }[]
-): Promise<ServiceOutcome> {
-  const admin = createAdminClient()
-
-  for (const item of items) {
-    const { data: current } = await admin
-      .from('stock')
-      .select('quantity, avg_cost')
-      .eq('product_variation_id', item.product_variation_id)
-      .single() as unknown as {
-        data: { quantity: number; avg_cost: number } | null
-      }
-
-    const { error } = await admin.from('stock').upsert(
-      {
-        product_variation_id: item.product_variation_id,
-        quantity: (current?.quantity ?? 0) + item.quantity,
-        avg_cost: current?.avg_cost ?? item.unit_cost,
-        last_updated: new Date().toISOString(),
-      } as any,
-      { onConflict: 'product_variation_id' }
-    )
-
-    if (error) return failure(error.message)
-  }
-
-  return success(undefined)
-}
-
 // ─── Validações de regras de negócio ─────────────────────────────────────────
 
 /**

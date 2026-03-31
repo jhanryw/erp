@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
@@ -123,15 +124,16 @@ export async function POST(request: Request) {
         await admin.from('product_variation_attributes').insert(finalAttrs as any)
       }
 
-      // 2c. Criar registro de estoque (Opção B - Carga Inicial Direta)
-      // Como na importação, o saldo inicial (se houver) vai direto para a tabela `stock`
-      // sem gerar histórico de entrada financeira formal. Entradas futuras usarão RPC.
-      await admin.from('stock').insert({
+      // 2c. Carga inicial via RPC — gera movimento 'initial' se quantity > 0,
+      // sem stock_lot nem finance_entry (pré-operação). Trigger bloqueia insert direto.
+      const stockInit = await initializeStock({
         product_variation_id: pv.id,
         quantity: v.initial_stock,
         avg_cost: v.cost_override ?? productData.base_cost,
-        last_updated: new Date().toISOString(),
-      } as any)
+      }, user.id)
+      if (!stockInit.ok) {
+        return NextResponse.json({ error: stockInit.error }, { status: stockInit.status })
+      }
     }
   }
 

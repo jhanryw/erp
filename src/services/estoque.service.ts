@@ -1,9 +1,11 @@
 /**
  * Service de Estoque — lógica de negócio desacoplada de HTTP.
  *
- * Responsabilidade: ajustes manuais e entradas de lote com cálculo de
- * custo médio ponderado. Ambas as operações são transações seguras
- * (atomicidade garantida por RPC PL/pgSQL no banco de dados).
+ * Responsabilidade: ajustes manuais, entradas de lote e carga inicial.
+ * Todas as operações passam por RPCs PL/pgSQL que:
+ *   - São ACID (transação atômica, sem race condition)
+ *   - Registram cada movimentação em stock_movements
+ *   - Bloqueiam escrita direta na tabela stock via trigger
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -45,6 +47,14 @@ export interface StockEntryResult {
   cost_per_unit: number
 }
 
+export interface StockInitializeInput {
+  product_variation_id: number
+  /** Quantidade inicial — 0 é válido (cria o registro sem movimento) */
+  quantity: number
+  /** Custo médio inicial (cost_override ou base_cost do produto) */
+  avg_cost: number
+}
+
 // ─── Helpers internos ─────────────────────────────────────────────────────────
 
 function success<T>(data: T): { ok: true; data: T; error?: never; status?: never } {
@@ -53,6 +63,41 @@ function success<T>(data: T): { ok: true; data: T; error?: never; status?: never
 
 function failure(error: string, status = 500): { ok: false; error: string; status: number; data?: never } {
   return { ok: false, error, status }
+}
+
+// ─── Carga inicial de estoque ─────────────────────────────────────────────────
+
+/**
+ * Cria o registro de estoque inicial para uma nova variação de produto.
+ *
+ * Diferente de rpc_stock_entry (que registra compra formal com custo médio):
+ * - Não cria stock_lot (não é uma compra rastreável por NF)
+ * - Não lança finance_entry (não poluir o fluxo financeiro com estoque pré-operação)
+ * - Cria movimento tipo 'initial' em stock_movements se quantity > 0
+ * - Cria o registro de estoque zerado se quantity = 0
+ *
+ * Transação atômica via rpc_stock_initialize (SECURITY DEFINER).
+ */
+export async function initializeStock(
+  input: StockInitializeInput,
+  systemUserId: string
+): Promise<ServiceOutcome<void>> {
+  const admin = createAdminClient()
+
+  const { error } = await (admin as any).rpc('rpc_stock_initialize', {
+    p_product_variation_id: input.product_variation_id,
+    p_quantity:             input.quantity,
+    p_avg_cost:             input.avg_cost,
+    p_system_user_id:       systemUserId,
+  }) as unknown as {
+    error: { code: string; message: string } | null
+  }
+
+  if (error) {
+    return failure(error.message, error.code === 'P0001' ? 400 : 500)
+  }
+
+  return success(undefined as void)
 }
 
 // ─── Ajuste manual de estoque ─────────────────────────────────────────────────
