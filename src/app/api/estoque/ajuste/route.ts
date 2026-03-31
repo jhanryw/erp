@@ -1,5 +1,6 @@
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
+import { logError } from '@/lib/errors/log'
 import { adjustStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -21,15 +22,30 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
 
-  const result = await adjustStock(parsed.data, user.id)
-  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+  try {
+    const result = await adjustStock(parsed.data, user.id)
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
-  auditLog({
-    userId: user.id, userRole: user.role,
-    action: 'adjust', resource: 'stock_adjustment',
-    resourceId: parsed.data.product_variation_id,
-    detail: `delta:${parsed.data.delta} reason:${parsed.data.reason}`,
-    after:  { new_quantity: result.data.new_quantity, delta: result.data.delta },
-  })
-  return NextResponse.json(result.data)
+    auditLog({
+      userId: user.id, userRole: user.role,
+      action: 'adjust', resource: 'stock_adjustment',
+      resourceId: parsed.data.product_variation_id,
+      detail: `delta:${parsed.data.delta} reason:${parsed.data.reason}`,
+      after:  { new_quantity: result.data.new_quantity, delta: result.data.delta },
+    })
+    return NextResponse.json(result.data)
+  } catch (err) {
+    logError({
+      route: 'POST /api/estoque/ajuste',
+      err,
+      context: {
+        user_id:              user.id,
+        company_id:           user.company_id,
+        product_variation_id: parsed.data.product_variation_id,
+        delta:                parsed.data.delta,
+        reason:               parsed.data.reason,
+      },
+    })
+    return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
+  }
 }
