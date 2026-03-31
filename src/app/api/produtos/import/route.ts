@@ -37,6 +37,8 @@ export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   let body: unknown
   try {
     body = await request.json()
@@ -67,6 +69,7 @@ export async function POST(request: Request) {
           supplier_id: productData.supplier_id ?? null,
           subcategory_id: null,
           collection_id: null,
+          company_id: user.company_id,
         } as any)
         .select('id')
         .single()) as unknown as { data: { id: number } | null; error: any }
@@ -75,7 +78,7 @@ export async function POST(request: Request) {
         throw new Error(
           `Produto ${productData.name}: ` +
             (productError.code === '23505'
-              ? 'SKU já cadastrado.'
+              ? 'SKU já cadastrado para esta empresa.'
               : productError.code === '23503'
               ? 'Categoria ou fornecedor inválido.'
               : productError.message)

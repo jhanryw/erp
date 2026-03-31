@@ -87,13 +87,14 @@ export async function canDeleteCustomer(customerId: number): Promise<ServiceOutc
 /**
  * Retorna snapshot do cliente para auditoria (before/after).
  */
-export async function getCustomerSnapshot(customerId: number): Promise<Record<string, unknown> | null> {
+export async function getCustomerSnapshot(customerId: number, companyId?: number | null): Promise<Record<string, unknown> | null> {
   const admin = createAdminClient()
-  const { data } = await admin
+  let query = admin
     .from('customers')
     .select('id, name, cpf, phone, city, active')
     .eq('id', customerId)
-    .single() as unknown as { data: Record<string, unknown> | null }
+  if (companyId != null) query = (query as any).eq('company_id', companyId)
+  const { data } = await (query as any).single() as unknown as { data: Record<string, unknown> | null }
   return data
 }
 
@@ -132,14 +133,15 @@ export async function createCustomer(
  */
 export async function updateCustomer(
   customerId: number,
-  input: Partial<CustomerInput>
+  input: Partial<CustomerInput>,
+  companyId?: number | null
 ): Promise<ServiceOutcome> {
   const admin = createAdminClient() // admin client: UPDATE em customers
 
-  const { error } = await (admin as any)
-    .from('customers')
-    .update(input)
-    .eq('id', customerId) as { error: { message: string } | null }
+  let query = (admin as any).from('customers').update(input).eq('id', customerId)
+  if (companyId != null) query = query.eq('company_id', companyId)
+
+  const { error } = await query as { error: { message: string } | null }
 
   if (error) return failure(error.message)
   return success(undefined)

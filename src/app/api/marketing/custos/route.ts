@@ -16,8 +16,10 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
@@ -25,14 +27,12 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const systemUserId = process.env.SYSTEM_USER_ID
-  if (!systemUserId) return NextResponse.json({ error: 'SYSTEM_USER_ID não configurado.' }, { status: 500 })
-
   const admin = createAdminClient()
   const { error } = await admin.from('marketing_costs').insert({
     ...parsed.data,
     campaign_id: parsed.data.campaign_id ?? null,
-    created_by: systemUserId,
+    created_by: user.id,
+    company_id: user.company_id,
   } as any)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })

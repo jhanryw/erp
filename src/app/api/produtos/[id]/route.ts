@@ -47,15 +47,21 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
+  const { user, response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   const productId = parseId(params.id)
   if (!productId) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
   const admin = createAdminClient()
 
-  const { data: product, error: productError } = await admin
+  const { data: product, error: productError } = await (admin as any)
     .from('products')
     .select('id, name, sku, category_id, supplier_id, origin, base_cost, base_price, active, photo_url')
     .eq('id', productId)
+    .eq('company_id', user.company_id)
     .single()
 
   if (productError || !product) {
@@ -97,6 +103,8 @@ export async function PUT(
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   const productId = parseId(params.id)
   if (!productId) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
@@ -114,8 +122,9 @@ export async function PUT(
 
   const { variations_to_delete, variations_to_add, ...productFields } = parsed.data
 
-  // Snapshot antes para auditoria
-  const before = await getProductSnapshot(productId)
+  // Snapshot antes para auditoria — também verifica que o produto pertence à empresa
+  const before = await getProductSnapshot(productId, user.company_id)
+  if (!before) return NextResponse.json({ error: 'Produto não encontrado' }, { status: 404 })
 
   // ── Detecção e validação de alteração de SKU ────────────────────────────────
 
@@ -123,11 +132,12 @@ export async function PUT(
   const skuChanged = oldSku !== undefined && productFields.sku !== oldSku
 
   if (skuChanged) {
-    // Unicidade: garantir que nenhum outro produto usa o mesmo SKU
+    // Unicidade: garantir que nenhum outro produto na mesma empresa usa o mesmo SKU
     const { data: skuConflict, error: skuConflictError } = await createAdminClient()
       .from('products')
       .select('id')
       .eq('sku', productFields.sku)
+      .eq('company_id', user.company_id)
       .neq('id', productId)
       .maybeSingle() as unknown as { data: { id: number } | null; error: { message: string } | null }
 
@@ -374,7 +384,7 @@ export async function PUT(
     }
   }
 
-  const after = await getProductSnapshot(productId)
+  const after = await getProductSnapshot(productId, user.company_id)
 
   // Auditoria específica de alteração de SKU — rastreabilidade obrigatória
   if (skuChanged) {
@@ -406,11 +416,14 @@ export async function DELETE(
   const { user, response: unauth } = await requireRole('admin')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   const productId = parseId(params.id)
   if (!productId) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
 
-  // Snapshot para auditoria (before)
-  const before = await getProductSnapshot(productId)
+  // Snapshot para auditoria — também verifica ownership
+  const before = await getProductSnapshot(productId, user.company_id)
+  if (!before) return NextResponse.json({ error: 'Produto não encontrado' }, { status: 404 })
 
   // Verificar regras de negócio: estoque + vendas
   const check = await canDeleteProduct(productId)

@@ -22,11 +22,16 @@ const schema = z.object({
 // ─── GET /api/fornecedores ────────────────────────────────────────────────────
 
 export async function GET() {
-  // Lista pública no escopo do dashboard — autenticação garantida pelo middleware
-  const admin = createAdminClient() // admin client: contorna RLS (tabela sem policy pública)
+  const { user, response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
+  const admin = createAdminClient()
   const { data, error } = await admin
     .from('suppliers')
     .select('id, name')
+    .eq('company_id', user.company_id)
     .eq('active', true)
     .order('name') as unknown as { data: { id: number; name: string }[] | null; error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -39,13 +44,15 @@ export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const result = await createSupplier(parsed.data)
+  const result = await createSupplier(parsed.data, user.company_id)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
   auditLog({

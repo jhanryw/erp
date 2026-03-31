@@ -22,12 +22,17 @@ const putSchema = z.object({
 // ─── GET /api/fornecedores/[id] ───────────────────────────────────────────────
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  // GET público no escopo do dashboard — autenticação garantida pelo middleware
-  const admin = createAdminClient() // admin client: contorna RLS (tabela sem policy pública)
+  const { user, response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
+  const admin = createAdminClient()
   const { data, error } = await admin
     .from('suppliers')
     .select('*')
     .eq('id', Number(params.id))
+    .eq('company_id', user.company_id)
     .single() as unknown as { data: any; error: any }
   if (error || !data) return NextResponse.json({ error: 'Fornecedor não encontrado' }, { status: 404 })
   return NextResponse.json({ supplier: data })
@@ -50,8 +55,12 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const parsed = putSchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const before = await getSupplierSnapshot(supplierId)
-  const result = await updateSupplier(supplierId, parsed.data)
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
+  const before = await getSupplierSnapshot(supplierId, user.company_id)
+  if (!before) return NextResponse.json({ error: 'Fornecedor não encontrado' }, { status: 404 })
+
+  const result = await updateSupplier(supplierId, parsed.data, user.company_id)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
   const after = await getSupplierSnapshot(supplierId)
@@ -75,14 +84,17 @@ export async function DELETE(_req: Request, { params }: { params: { id: string }
     return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
   }
 
-  const before = await getSupplierSnapshot(supplierId)
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
+  const before = await getSupplierSnapshot(supplierId, user.company_id)
+  if (!before) return NextResponse.json({ error: 'Fornecedor não encontrado' }, { status: 404 })
 
   // Verificar regras de negócio via service (produtos + stock_lots FK guards)
   const check = await canDeleteSupplier(supplierId)
   if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status })
 
-  const admin = createAdminClient() // admin client: DELETE fornecedor
-  const { error } = await admin.from('suppliers').delete().eq('id', supplierId)
+  const admin = createAdminClient()
+  const { error } = await admin.from('suppliers').delete().eq('id', supplierId).eq('company_id', user.company_id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   auditLog({

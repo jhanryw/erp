@@ -27,8 +27,10 @@ const MOVEMENT_TYPES = ['entry', 'sale', 'return', 'adjust', 'initial'] as const
 type MovementType = typeof MOVEMENT_TYPES[number]
 
 export async function GET(request: Request) {
-  const { response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   const { searchParams } = new URL(request.url)
 
@@ -78,6 +80,7 @@ export async function GET(request: Request) {
       product_variations ( sku_variation ),
       products ( name, sku )
     `, { count: 'exact' })
+    .eq('company_id', user.company_id)
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 

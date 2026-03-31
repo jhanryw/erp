@@ -19,12 +19,18 @@ const schemaCreate = z.object({
 })
 
 export async function GET() {
+  const { user, response: unauth } = await requireRole('admin')
+  if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   try {
     const admin = createAdminClient()
 
     const { data: origins, error } = await (admin as any)
       .from('shipping_origins')
       .select('*')
+      .eq('company_id', user.company_id)
       .order('is_active', { ascending: false })
 
     if (error) throw error
@@ -37,8 +43,10 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const { response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('admin')
   if (unauth) return unauth
+
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   try {
     const body = await request.json()
@@ -63,6 +71,7 @@ export async function POST(request: Request) {
         state: parsed.data.state,
         latitude: parsed.data.latitude,
         longitude: parsed.data.longitude,
+        company_id: user.company_id,
       })
       .select()
       .single()

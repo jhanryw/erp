@@ -35,6 +35,8 @@ export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
@@ -49,13 +51,14 @@ export async function POST(request: Request) {
   // 1. Criar produto
   const { data: product, error: productError } = (await admin
     .from('products')
-    .insert({ ...productData, sku: parentSku, supplier_id: productData.supplier_id ?? null, subcategory_id: null, collection_id: null } as any)
+    .insert({ ...productData, sku: parentSku, supplier_id: productData.supplier_id ?? null, subcategory_id: null, collection_id: null, company_id: user.company_id } as any)
     .select('id')
     .single()) as unknown as { data: { id: number } | null; error: any }
 
   if (productError) {
-    const msg = productError.code === '23505' ? 'SKU já cadastrado.' : productError.code === '23503' ? 'Categoria ou fornecedor inválido.' : productError.message
-    return NextResponse.json({ error: msg }, { status: 500 })
+    const msg = productError.code === '23505' ? 'SKU já cadastrado para esta empresa.' : productError.code === '23503' ? 'Categoria ou fornecedor inválido.' : productError.message
+    const status = productError.code === '23505' ? 409 : 500
+    return NextResponse.json({ error: msg }, { status })
   }
 
   // 2. Criar variantes (se houver)

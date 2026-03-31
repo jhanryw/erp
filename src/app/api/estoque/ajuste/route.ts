@@ -15,18 +15,13 @@ export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
-  const systemUserId = process.env.SYSTEM_USER_ID
-  if (!systemUserId) {
-    return NextResponse.json({ error: 'SYSTEM_USER_ID não definido nas variáveis de ambiente.' }, { status: 500 })
-  }
-
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
 
-  const result = await adjustStock(parsed.data, systemUserId)
+  const result = await adjustStock(parsed.data, user.id)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
   auditLog({

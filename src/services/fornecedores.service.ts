@@ -82,13 +82,11 @@ export async function canDeleteSupplier(supplierId: number): Promise<ServiceOutc
 /**
  * Retorna snapshot do fornecedor para auditoria (before/after).
  */
-export async function getSupplierSnapshot(supplierId: number): Promise<Record<string, unknown> | null> {
+export async function getSupplierSnapshot(supplierId: number, companyId?: number | null): Promise<Record<string, unknown> | null> {
   const admin = createAdminClient()
-  const { data } = await admin
-    .from('suppliers')
-    .select('id, name, document, active')
-    .eq('id', supplierId)
-    .single() as unknown as { data: Record<string, unknown> | null }
+  let query = admin.from('suppliers').select('id, name, document, active').eq('id', supplierId)
+  if (companyId != null) query = (query as any).eq('company_id', companyId)
+  const { data } = await (query as any).single() as unknown as { data: Record<string, unknown> | null }
   return data
 }
 
@@ -98,12 +96,12 @@ export async function getSupplierSnapshot(supplierId: number): Promise<Record<st
  * Cria um novo fornecedor.
  * Retorna conflito (409) se CNPJ/CPF já existir.
  */
-export async function createSupplier(input: SupplierInput): Promise<ServiceOutcome<{ id: number }>> {
+export async function createSupplier(input: SupplierInput, companyId: number | null): Promise<ServiceOutcome<{ id: number }>> {
   const admin = createAdminClient() // admin client: INSERT em suppliers
 
   const { data, error } = await admin
     .from('suppliers')
-    .insert(input as any)
+    .insert({ ...input, company_id: companyId } as any)
     .select('id')
     .single() as unknown as {
       data: { id: number } | null
@@ -123,14 +121,15 @@ export async function createSupplier(input: SupplierInput): Promise<ServiceOutco
  */
 export async function updateSupplier(
   supplierId: number,
-  input: Partial<SupplierInput>
+  input: Partial<SupplierInput>,
+  companyId?: number | null
 ): Promise<ServiceOutcome> {
   const admin = createAdminClient() // admin client: UPDATE em suppliers
 
-  const { error } = await (admin as any)
-    .from('suppliers')
-    .update({ ...input, state: input.state || null })
-    .eq('id', supplierId) as { error: { code: string; message: string } | null }
+  let query = (admin as any).from('suppliers').update({ ...input, state: input.state || null }).eq('id', supplierId)
+  if (companyId != null) query = query.eq('company_id', companyId)
+
+  const { error } = await query as { error: { code: string; message: string } | null }
 
   if (error) {
     const msg = error.code === '23505' ? 'CPF/CNPJ já cadastrado para outro fornecedor.' : error.message
