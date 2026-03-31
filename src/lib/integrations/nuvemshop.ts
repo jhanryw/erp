@@ -18,13 +18,16 @@ function baseUrl() {
   return `https://api.tiendanube.com/v1/${storeId}`
 }
 
+const APP_AGENT =
+  process.env.NUVEMSHOP_APP_AGENT ?? 'ERP Integration (suporte@seudominio.com)'
+
 function authHeaders(): Record<string, string> {
   const token = process.env.NUVEMSHOP_ACCESS_TOKEN
   if (!token) throw new Error('NUVEMSHOP_ACCESS_TOKEN não definida.')
   return {
     Authentication:  `bearer ${token}`,
     'Content-Type':  'application/json',
-    'User-Agent':    'qarvon (contato@qarvon.com)',
+    'User-Agent':    APP_AGENT,
   }
 }
 
