@@ -19,7 +19,7 @@ function baseUrl() {
 }
 
 const APP_AGENT =
-  process.env.NUVEMSHOP_APP_AGENT ?? 'ERP Integration (suporte@seudominio.com)'
+  process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
 
 function authHeaders(): Record<string, string> {
   const token = process.env.NUVEMSHOP_ACCESS_TOKEN
