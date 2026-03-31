@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { DollarSign, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
@@ -68,6 +69,7 @@ function trendPct(
 }
 
 export default async function FinanceiroPage() {
+  await requirePageRole('gerente')
   const { current, previous, months } = await getFinancialData()
 
   const currentIncome = Number(current?.total_income ?? 0)

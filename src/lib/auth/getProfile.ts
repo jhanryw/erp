@@ -18,47 +18,49 @@ export interface UserProfile {
  *     Nunca importe este módulo em Client Components.
  */
 export async function getUserProfile(userId: string, email?: string): Promise<UserProfile> {
-  try {
-    const admin = createAdminClient()
-    const { data } = (await admin
-      .from('users')
-      .select('name, role, company_id')
-      .eq('id', userId)
-      .single()) as unknown as { data: { name: string | null; role: string | null; company_id: number | null } | null }
+  const admin = createAdminClient()
+  const { data, error } = (await admin
+    .from('users')
+    .select('name, role, company_id')
+    .eq('id', userId)
+    .single()) as unknown as {
+    data: { name: string | null; role: string | null; company_id: number | null } | null
+    error: { message: string } | null
+  }
 
-    return {
-      id: userId,
-      name: data?.name ?? email?.split('@')[0] ?? 'Usuário',
-      email,
-      role: normalizeRole(data?.role),
-      company_id: data?.company_id ?? null,
-    }
-  } catch {
-    // Fallback seguro: retorna role mínimo para evitar escalada indevida de privilégios
-    return {
-      id: userId,
-      name: email?.split('@')[0] ?? 'Usuário',
-      email,
-      role: 'usuario',
-      company_id: null,
-    }
+  if (error || !data) {
+    console.error('[getUserProfile] Falha ao buscar perfil do usuário', { userId, error: error?.message })
+    throw new Error(`getUserProfile falhou para userId=${userId}: ${error?.message ?? 'registro não encontrado'}`)
+  }
+
+  return {
+    id: userId,
+    name: data.name ?? email?.split('@')[0] ?? 'Usuário',
+    email,
+    role: normalizeRole(data.role),
+    company_id: data.company_id ?? null,
   }
 }
 
 /**
- * Retorna apenas o role do usuário — otimizado para uso em requireRole().
+ * Retorna apenas o role do usuário — otimizado para uso em requirePageRole().
  * Evita buscar campos desnecessários quando só o role é relevante.
  */
 export async function getUserRole(userId: string): Promise<AppRole> {
-  try {
-    const admin = createAdminClient()
-    const { data } = (await admin
-      .from('users')
-      .select('role')
-      .eq('id', userId)
-      .single()) as unknown as { data: { role: string | null } | null }
-    return normalizeRole(data?.role)
-  } catch {
-    return 'usuario' // fallback seguro
+  const admin = createAdminClient()
+  const { data, error } = (await admin
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .single()) as unknown as {
+    data: { role: string | null } | null
+    error: { message: string } | null
   }
+
+  if (error || !data) {
+    console.error('[getUserRole] Falha ao buscar role do usuário', { userId, error: error?.message })
+    throw new Error(`getUserRole falhou para userId=${userId}: ${error?.message ?? 'registro não encontrado'}`)
+  }
+
+  return normalizeRole(data.role)
 }

@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Gift, Settings } from 'lucide-react'
 
@@ -106,6 +107,7 @@ async function getCashbackData() {
 }
 
 export default async function CashbackPage() {
+  await requirePageRole('gerente')
   const { pendingTotal, availableTotal, usedTotal, expiredTotal, transactions } =
     await getCashbackData()
 

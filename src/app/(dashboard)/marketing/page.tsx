@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Plus, TrendingUp } from 'lucide-react'
 import { subDays } from 'date-fns'
@@ -96,6 +97,7 @@ async function getMarketingData() {
 }
 
 export default async function MarketingPage() {
+  await requirePageRole('gerente')
   const { costs, campaigns, total, byCategory } = await getMarketingData()
 
   return (

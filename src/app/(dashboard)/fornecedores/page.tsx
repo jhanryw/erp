@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Plus, Truck } from 'lucide-react'
 
@@ -62,6 +63,7 @@ function formatDoc(doc: string | null): string {
 }
 
 export default async function FornecedoresPage() {
+  await requirePageRole('gerente')
   const suppliers = await getSuppliers()
 
   return (

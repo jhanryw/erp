@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { BarChart3, Users, Package, Truck, DollarSign, Warehouse, FileText, ArrowRight } from 'lucide-react'
 
@@ -13,7 +14,8 @@ const REPORTS = [
   { href: '/relatorios/marketing', icon: FileText, title: 'Marketing', description: 'CAC, ROI, investimento por canal e campanha.', formats: ['Excel', 'PDF'] },
 ]
 
-export default function RelatoriosPage() {
+export default async function RelatoriosPage() {
+  await requirePageRole('gerente')
   return (
     <div className="space-y-5">
       <div>

@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ArrowRight } from 'lucide-react'
 
@@ -48,7 +49,8 @@ const MODULES = [
   },
 ]
 
-export default function InteligenciaPage() {
+export default async function InteligenciaPage() {
+  await requirePageRole('gerente')
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">

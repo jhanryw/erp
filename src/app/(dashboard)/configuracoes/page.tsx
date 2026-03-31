@@ -1,3 +1,4 @@
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck } from 'lucide-react'
 
@@ -14,6 +15,7 @@ const SETTINGS_SECTIONS = [
 ]
 
 export default async function ConfiguracoesPage() {
+  await requirePageRole('admin')
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-3">

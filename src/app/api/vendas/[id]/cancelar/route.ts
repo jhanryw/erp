@@ -11,10 +11,12 @@ export async function POST(
   const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   const saleId = Number(params.id)
 
   try {
-    const result = await cancelSale(saleId, user.id)
+    const result = await cancelSale(saleId, user.id, user.company_id)
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
     auditLog({
