@@ -29,6 +29,8 @@ export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+
   let body: unknown
   try { body = await request.json() } catch {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
@@ -38,11 +40,11 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   // Regra 1: produtos/variações devem estar ativos (hard block para qualquer role)
-  const activeCheck = await validateProductsActive(parsed.data.items)
+  const activeCheck = await validateProductsActive(parsed.data.items, user.company_id)
   if (!activeCheck.ok) return NextResponse.json({ error: activeCheck.error }, { status: activeCheck.status })
 
   // Regra 2: validar estoque disponível
-  const stockCheck = await validateStockForSale(parsed.data.items)
+  const stockCheck = await validateStockForSale(parsed.data.items, user.company_id)
   if (!stockCheck.ok) return NextResponse.json({ error: stockCheck.error }, { status: stockCheck.status })
 
   // Regra 3: preço abaixo do custo — bloqueia usuario, avisa gerente/admin

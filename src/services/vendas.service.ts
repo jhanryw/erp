@@ -51,8 +51,25 @@ function failure(error: string, status = 500): { ok: false; error: string; statu
  * Verifica disponibilidade de estoque para todos os itens de uma venda.
  * Retorna erro no primeiro item com estoque insuficiente.
  */
-export async function validateStockForSale(items: SaleItem[]): Promise<ServiceOutcome> {
+export async function validateStockForSale(items: SaleItem[], companyId: number | null): Promise<ServiceOutcome> {
   const admin = createAdminClient()
+  const variationIds = items.map((i) => i.product_variation_id)
+
+  // Verify all variations belong to the company
+  if (companyId != null) {
+    const { data: owned } = await admin
+      .from('product_variations')
+      .select('id, products!inner(company_id)')
+      .in('id', variationIds) as unknown as {
+        data: { id: number; products: { company_id: number } }[] | null
+      }
+
+    const ownedIds = new Set((owned ?? []).filter((v) => v.products.company_id === companyId).map((v) => v.id))
+    const foreign = variationIds.find((id) => !ownedIds.has(id))
+    if (foreign != null) {
+      return failure(`Variação #${foreign} não pertence à empresa.`, 403)
+    }
+  }
 
   for (const item of items) {
     const { data: stock } = await admin
@@ -119,21 +136,24 @@ export async function getSaleForMutation(saleId: number): Promise<ServiceOutcome
  * A inativação de produto é uma decisão consciente do gerente;
  * tentar vendê-lo é sempre um erro operacional.
  */
-export async function validateProductsActive(items: SaleItem[]): Promise<ServiceOutcome> {
+export async function validateProductsActive(items: SaleItem[], companyId: number | null): Promise<ServiceOutcome> {
   const admin = createAdminClient()
   const variationIds = items.map((i) => i.product_variation_id)
 
   const { data: variations, error } = await admin
     .from('product_variations')
-    .select('id, active, products!inner(id, name, active)')
+    .select('id, active, products!inner(id, name, active, company_id)')
     .in('id', variationIds) as unknown as {
-      data: { id: number; active: boolean; products: { id: number; name: string; active: boolean } }[] | null
+      data: { id: number; active: boolean; products: { id: number; name: string; active: boolean; company_id: number } }[] | null
       error: { message: string } | null
     }
 
   if (error) return failure(error.message)
 
   for (const v of variations ?? []) {
+    if (companyId != null && v.products.company_id !== companyId) {
+      return failure(`Variação #${v.id} não pertence à empresa.`, 403)
+    }
     if (!v.active) {
       return failure(`Variação #${v.id} está inativa e não pode ser vendida.`, 400)
     }
