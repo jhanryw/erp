@@ -126,3 +126,60 @@ export async function mapProductToNuvemshop(
 
   if (error) throw new Error(`mapProductToNuvemshop: ${error.message}`)
 }
+
+// ─── mapVariantToNuvemshop ────────────────────────────────────────────────────
+
+/**
+ * Persiste o relacionamento variação interna ↔ variante externa na produto_map.
+ * Usa ON CONFLICT DO NOTHING para ser idempotente.
+ */
+export async function mapVariantToNuvemshop(
+  produtoId:          number,
+  productVariationId: number,
+  externalProductId:  string,
+  externalVariantId:  string
+): Promise<void> {
+  const admin = createAdminClient()
+
+  const { error } = (await (admin as any)
+    .from('produto_map')
+    .upsert(
+      {
+        produto_id:           produtoId,
+        product_variation_id: productVariationId,
+        external_id:          externalProductId,
+        external_variant_id:  externalVariantId,
+        source:               'nuvemshop',
+      },
+      { onConflict: 'source,external_variant_id', ignoreDuplicates: true }
+    )
+  ) as { error: { message: string } | null }
+
+  if (error) throw new Error(`mapVariantToNuvemshop: ${error.message}`)
+}
+
+// ─── updateVariantStock ───────────────────────────────────────────────────────
+
+/**
+ * Sincroniza o estoque de uma variante na Nuvemshop via PUT.
+ * Chamado após cada baixa de estoque no ERP para manter os canais alinhados.
+ */
+export async function updateVariantStock(
+  externalProductId: string,
+  externalVariantId: string,
+  newQuantity:       number
+): Promise<void> {
+  const res = await fetch(
+    `${baseUrl()}/products/${externalProductId}/variants/${externalVariantId}`,
+    {
+      method:  'PUT',
+      headers: authHeaders(),
+      body:    JSON.stringify({ stock: newQuantity }),
+    }
+  )
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Nuvemshop updateVariantStock ${res.status}: ${text}`)
+  }
+}
