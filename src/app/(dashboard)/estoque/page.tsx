@@ -86,12 +86,20 @@ export default async function EstoquePage() {
           <p className="text-sm text-muted-foreground">Posição atual</p>
         </div>
 
-        <Link href="/estoque/entrada">
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Registrar Entrada
-          </Button>
-        </Link>
+        <div className="flex gap-2">
+          <Link href="/estoque/entrada/matriz">
+            <Button variant="outline">
+              <Plus className="mr-2 h-4 w-4" />
+              Entrada em Matriz
+            </Button>
+          </Link>
+          <Link href="/estoque/entrada">
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Registrar Entrada
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
