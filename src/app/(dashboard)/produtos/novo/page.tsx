@@ -103,47 +103,54 @@ export default function NovoProdutoPage() {
 
     const rows: FormData['variants'] = []
 
-    if (hasColors && hasSizes) {
-      selColors.forEach(color => {
+    try {
+      if (hasColors && hasSizes) {
+        selColors.forEach(color => {
+          selSizes.forEach(size => {
+            rows.push({
+              sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value, ano }),
+              color_value_id: color.id,
+              size_value_id:  size.id,
+              color_label:    color.value,
+              size_label:     size.value,
+              price_override: null,
+              cost_override:  null,
+              initial_stock:  0,
+            })
+          })
+        })
+      } else if (hasColors) {
+        selColors.forEach(color => {
+          rows.push({
+            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, ano }),
+            color_value_id: color.id,
+            size_value_id:  null,
+            color_label:    color.value,
+            size_label:     undefined,
+            price_override: null,
+            cost_override:  null,
+            initial_stock:  0,
+          })
+        })
+      } else {
         selSizes.forEach(size => {
           rows.push({
-            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value, ano }),
-            color_value_id: color.id,
+            sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value, ano }),
+            color_value_id: null,
             size_value_id:  size.id,
-            color_label:    color.value,
+            color_label:    undefined,
             size_label:     size.value,
             price_override: null,
             cost_override:  null,
             initial_stock:  0,
           })
         })
+      }
+    } catch (err) {
+      toast.error('Não foi possível gerar a matriz de variantes', {
+        description: err instanceof Error ? err.message : 'Verifique se os valores de cor/tamanho estão no mapa de SKUs.',
       })
-    } else if (hasColors) {
-      selColors.forEach(color => {
-        rows.push({
-          sku_variation:  generateSKU({ tipo, modelo, cor: color.value, ano }),
-          color_value_id: color.id,
-          size_value_id:  null,
-          color_label:    color.value,
-          size_label:     undefined,
-          price_override: null,
-          cost_override:  null,
-          initial_stock:  0,
-        })
-      })
-    } else {
-      selSizes.forEach(size => {
-        rows.push({
-          sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value, ano }),
-          color_value_id: null,
-          size_value_id:  size.id,
-          color_label:    undefined,
-          size_label:     size.value,
-          price_override: null,
-          cost_override:  null,
-          initial_stock:  0,
-        })
-      })
+      return
     }
 
     replace(rows)

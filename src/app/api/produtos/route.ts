@@ -62,81 +62,90 @@ export async function POST(request: Request) {
   }
 
   // 2. Criar variantes (se houver)
+  // Wrapped em try/catch: qualquer falha aqui (generateSKU, pvError, stockInit)
+  // faz o produto recém-criado ser removido para evitar estado parcial no banco.
   if (variants && variants.length > 0 && product) {
-    for (const v of variants) {
-      // 2b/a. Buscar atributos para compor o SKU e associar (cor e tamanho)
-      const attrs: any[] = []
-      let colorValue = ''
-      let sizeValue = ''
+    try {
+      for (const v of variants) {
+        // 2b/a. Buscar atributos para compor o SKU e associar (cor e tamanho)
+        const attrs: any[] = []
+        let colorValue = ''
+        let sizeValue = ''
 
-      if (v.color_value_id) {
-        const { data: colorType } = (await admin
-          .from('variation_values')
-          .select('variation_type_id, value')
-          .eq('id', v.color_value_id)
-          .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
+        if (v.color_value_id) {
+          const { data: colorType } = (await admin
+            .from('variation_values')
+            .select('variation_type_id, value')
+            .eq('id', v.color_value_id)
+            .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
 
-        if (colorType) {
-          colorValue = colorType.value
-          attrs.push({
-            // placeholder, ID será repassado no final
-            variation_type_id: colorType.variation_type_id,
-            variation_value_id: v.color_value_id,
-          })
+          if (colorType) {
+            colorValue = colorType.value
+            attrs.push({
+              variation_type_id: colorType.variation_type_id,
+              variation_value_id: v.color_value_id,
+            })
+          }
+        }
+
+        if (v.size_value_id) {
+          const { data: sizeType } = (await admin
+            .from('variation_values')
+            .select('variation_type_id, value')
+            .eq('id', v.size_value_id)
+            .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
+
+          if (sizeType) {
+            sizeValue = sizeType.value
+            attrs.push({
+              variation_type_id: sizeType.variation_type_id,
+              variation_value_id: v.size_value_id,
+            })
+          }
+        }
+
+        // Pode lançar se colorValue/sizeValue não estiverem no mapa de SKUs
+        const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
+
+        const { data: pv, error: pvError } = (await admin
+          .from('product_variations')
+          .insert({
+            product_id: product.id,
+            sku_variation: varSku,
+            cost_override: v.cost_override ?? null,
+            price_override: v.price_override ?? null,
+            active: true,
+          } as any)
+          .select('id')
+          .single()) as unknown as { data: { id: number } | null; error: any }
+
+        if (pvError || !pv) {
+          throw new Error(`Erro ao criar variante (SKU ${varSku}): ${pvError?.message}`)
+        }
+
+        if (attrs.length > 0) {
+          const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
+          await admin.from('product_variation_attributes').insert(finalAttrs as any)
+        }
+
+        // 2c. Carga inicial via RPC — gera movimento 'initial' se quantity > 0,
+        // sem stock_lot nem finance_entry (pré-operação). Trigger bloqueia insert direto.
+        const stockInit = await initializeStock({
+          product_variation_id: pv.id,
+          quantity: v.initial_stock,
+          avg_cost: v.cost_override ?? productData.base_cost,
+        }, user.id)
+        if (!stockInit.ok) {
+          throw new Error(stockInit.error ?? 'Erro ao inicializar estoque da variante.')
         }
       }
-
-      if (v.size_value_id) {
-        const { data: sizeType } = (await admin
-          .from('variation_values')
-          .select('variation_type_id, value')
-          .eq('id', v.size_value_id)
-          .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
-
-        if (sizeType) {
-          sizeValue = sizeType.value
-          attrs.push({
-            // placeholder
-            variation_type_id: sizeType.variation_type_id,
-            variation_value_id: v.size_value_id,
-          })
-        }
-      }
-      
-      const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
-
-      // 2a. Criar product_variation (agora que temos o sku gerado no servidor)
-      const { data: pv, error: pvError } = (await admin
-        .from('product_variations')
-        .insert({
-          product_id: product.id,
-          sku_variation: varSku,
-          cost_override: v.cost_override ?? null,
-          price_override: v.price_override ?? null,
-          active: true,
-        } as any)
-        .select('id')
-        .single()) as unknown as { data: { id: number } | null; error: any }
-
-      if (pvError || !pv) {
-        return NextResponse.json({ error: `Erro ao criar variante: ${pvError?.message}` }, { status: 500 })
-      }
-
-      if (attrs.length > 0) {
-        const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
-        await admin.from('product_variation_attributes').insert(finalAttrs as any)
-      }
-
-      // 2c. Carga inicial via RPC — gera movimento 'initial' se quantity > 0,
-      // sem stock_lot nem finance_entry (pré-operação). Trigger bloqueia insert direto.
-      const stockInit = await initializeStock({
-        product_variation_id: pv.id,
-        quantity: v.initial_stock,
-        avg_cost: v.cost_override ?? productData.base_cost,
-      }, user.id)
-      if (!stockInit.ok) {
-        return NextResponse.json({ error: stockInit.error }, { status: stockInit.status })
-      }
+    } catch (variantErr) {
+      // Rollback: remover o produto recém-criado para não deixar estado parcial.
+      // A FK em product_variations cascateia para variantes e stock já criados.
+      await (admin as any).from('products').delete().eq('id', product.id)
+      console.error('[POST /api/produtos] Rollback executado — produto removido por falha nas variantes', variantErr)
+      const msg = variantErr instanceof Error ? variantErr.message : 'Erro ao criar variantes do produto.'
+      return NextResponse.json({ error: msg }, { status: 500 })
     }
   }
 
