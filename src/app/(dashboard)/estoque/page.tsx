@@ -87,6 +87,12 @@ export default async function EstoquePage() {
         </div>
 
         <div className="flex gap-2">
+          <Link href="/estoque/entrada/lote">
+            <Button variant="outline">
+              <Plus className="mr-2 h-4 w-4" />
+              Entrada em Lote
+            </Button>
+          </Link>
           <Link href="/estoque/entrada/matriz">
             <Button variant="outline">
               <Plus className="mr-2 h-4 w-4" />

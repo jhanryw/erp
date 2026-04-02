@@ -12,13 +12,19 @@ import { z } from 'zod'
 const itemSchema = z.object({
   product_variation_id: z.number().int().positive(),
   quantity: z.number().int().positive(),
+  /** Custo unitário por item — sobrepõe o unit_cost global quando informado. */
+  unit_cost: z.number().min(0).optional(),
 })
 
 const massaSchema = z.object({
   items: z.array(itemSchema).min(1, 'Informe ao menos uma variação.'),
   supplier_id: z.coerce.number().nullable().optional(),
   entry_type: z.enum(['purchase', 'own_production']),
-  unit_cost: z.coerce.number().min(0),
+  /**
+   * Custo unitário global (usado quando o item não traz unit_cost próprio).
+   * Obrigatório se nenhum item tiver unit_cost próprio.
+   */
+  unit_cost: z.coerce.number().min(0).default(0),
   freight_cost_total: z.coerce.number().min(0).default(0),
   tax_cost_total: z.coerce.number().min(0).default(0),
   entry_date: z.string().min(1, 'Data de entrada obrigatória.'),
@@ -77,9 +83,11 @@ export async function POST(request: Request) {
   let hasError = false
 
   for (const item of activeItems) {
-    // Proportional cost distribution
+    // Proportional cost distribution (rateio global entre todas as unidades do lote)
     const freightShare = totalQty > 0 ? (item.quantity / totalQty) * freight_cost_total : 0
     const taxShare = totalQty > 0 ? (item.quantity / totalQty) * tax_cost_total : 0
+    // Per-item unit_cost takes precedence over the global one
+    const effectiveUnitCost = item.unit_cost ?? unit_cost
 
     const result = await createStockEntry(
       {
@@ -87,7 +95,7 @@ export async function POST(request: Request) {
         supplier_id: supplier_id ?? null,
         entry_type,
         quantity_original: item.quantity,
-        unit_cost,
+        unit_cost: effectiveUnitCost,
         freight_cost: freightShare,
         tax_cost: taxShare,
         entry_date,
