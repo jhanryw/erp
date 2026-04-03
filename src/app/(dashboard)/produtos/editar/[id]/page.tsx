@@ -8,7 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
 
-import { productSchema, type ProductFormData } from '@/lib/validators'
+import { productEditSchema, type ProductEditFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -54,8 +54,8 @@ export default function EditarProdutoPage({
     watch,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<ProductFormData>({
-    resolver: zodResolver(productSchema),
+  } = useForm<ProductEditFormData>({
+    resolver: zodResolver(productEditSchema),
   })
 
   const baseCost = Number(watch('base_cost')) || 0
@@ -111,18 +111,24 @@ export default function EditarProdutoPage({
     load()
   }, [params.id, reset, router])
 
-  async function onSubmit(data: ProductFormData) {
+  async function onSubmit(data: ProductEditFormData) {
+    // Montar payload sem campos undefined (PUT parcial — backend faz merge com o banco)
+    const payload: Record<string, unknown> = {}
+    if (data.name        !== undefined) payload.name        = data.name
+    if (data.sku         !== undefined) payload.sku         = data.sku
+    if (data.category_id !== undefined) payload.category_id = Number(data.category_id)
+    if (data.origin      !== undefined) payload.origin      = data.origin
+    if (data.base_cost   !== undefined) payload.base_cost   = Number(data.base_cost)
+    if (data.base_price  !== undefined) payload.base_price  = Number(data.base_price)
+    if (data.active      !== undefined) payload.active      = data.active
+    // supplier_id: null é intencional (remover fornecedor), undefined = não enviado
+    if ('supplier_id' in data) payload.supplier_id = data.supplier_id ? Number(data.supplier_id) : null
+
     try {
       const res = await fetch(`/api/produtos/${params.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...data,
-          category_id: Number(data.category_id),
-          supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
-          base_cost: Number(data.base_cost),
-          base_price: Number(data.base_price),
-        }),
+        body: JSON.stringify(payload),
       })
 
       const json = await res.json()

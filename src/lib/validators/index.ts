@@ -104,7 +104,14 @@ export const marketingCostSchema = z.object({
   notes: z.string().nullable().optional(),
 })
 
+// ─── Edição de Produto ────────────────────────────────────────────────────────
+// Todos os campos opcionais: permite PUT parcial — só os campos enviados são
+// atualizados. O backend faz merge com os valores atuais do banco.
+// NÃO inclui variações: gerenciamento de variações é feito por endpoint separado.
+export const productEditSchema = productSchema.partial()
+
 export type ProductFormData = z.infer<typeof productSchema>
+export type ProductEditFormData = z.infer<typeof productEditSchema>
 export type ProductVariationFormData = z.infer<typeof productVariationSchema>
 export type SupplierFormData = z.infer<typeof supplierSchema>
 export type CustomerFormData = z.infer<typeof customerSchema>
