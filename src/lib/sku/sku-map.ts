@@ -143,28 +143,58 @@ export const SKU_MODELO: Record<string, Record<string, string>> = {
 // Proibido: dois nomes de cor com o mesmo código (causa colisão de SKU).
 
 export const SKU_COR: Record<string, string> = {
-  preto:    '01',
-  branco:   '02',
-  nude:     '03',
-  vermelho: '04',
-  rosa:     '05',
-  vinho:    '06',
-  azul:     '07',
-  verde:    '08',
-  amarelo:  '09',
-  roxo:     '10',
-  bege:     '11',
-  marrom:   '12',
-  lilas:    '13', // Código próprio — separado de roxo ('10') para evitar colisão de SKU
+  preto:           '01',
+  branco:          '02',
+  nude:            '03',
+  vermelho:        '04',
+  rosa:            '05',
+  vinho:           '06',
+  azul:            '07',
+  verde:           '08',
+  amarelo:         '09',
+  roxo:            '10',
+  bege:            '11',
+  marrom:          '12',
+  lilas:           '13',
+  bege_com_preto:  '14',
+  cinza:           '15',
+  laranja:         '16',
+  dourado:         '17',
+  prateado:        '18',
+  azul_marinho:    '19',
+  rosa_bebe:       '20',
+  pink:            '21',
+  coral:           '22',
+  off_white:       '23',
+  caramelo:        '24',
+  verde_oliva:     '25',
+  azul_celeste:    '26',
+  terracota:       '27',
+  bordo:           '28',
+  champagne:       '29',
+  creme:           '30',
+  salmao:          '31',
+  lavanda:         '32',
+  menta:           '33',
+  cinza_mescla:    '34',
+  nude_escuro:     '35',
+  azul_royal:      '36',
+  verde_esmeralda: '37',
+  preto_com_rosa:  '38',
+  branco_com_preto:'39',
+  cinza_com_preto: '40',
+  rosa_com_preto:  '41',
 }
 
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
 
 export const SKU_TAMANHO: Record<string, string> = {
-  p:  '01',
-  m:  '02',
-  g:  '03',
-  gg: '04',
+  pp:  '05',
+  p:   '01',
+  m:   '02',
+  g:   '03',
+  gg:  '04',
+  xgg: '06',
 }
 
 // ─── Anos de coleção ──────────────────────────────────────────────────────────
@@ -188,7 +218,7 @@ export const SKU_ANO: Record<string, string> = {
 
 // ─── Normalização de chaves ───────────────────────────────────────────────────
 
-function normalizeKey(value: string | undefined | null): string {
+export function normalizeKey(value: string | undefined | null): string {
   if (!value) return ''
   return value
     .toLowerCase()

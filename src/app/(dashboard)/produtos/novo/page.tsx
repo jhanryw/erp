@@ -44,12 +44,12 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>
 
-import { SKU_TIPO, SKU_MODELO, generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+import { SKU_TIPO, SKU_MODELO, SKU_COR, SKU_TAMANHO, generateSKU, normalizeKey } from '@/lib/sku/sku-map'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function slugToLabel(slug: string) {
-  return slug.toUpperCase().replace(/-/g, '')
+function keyToLabel(key: string) {
+  return key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
 }
 
 // ─── Componente ───────────────────────────────────────────────────────────────
@@ -60,9 +60,13 @@ export default function NovoProdutoPage() {
   const [categories,  setCategories]  = useState<{ id: number; name: string }[]>([])
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
   const [varTypes,    setVarTypes]    = useState<VariationType[]>([])
-  const [selColors,   setSelColors]   = useState<VariationValue[]>([])
-  const [selSizes,    setSelSizes]    = useState<VariationValue[]>([])
-  const [generated,   setGenerated]   = useState(false)
+  const [selColors,     setSelColors]     = useState<VariationValue[]>([])
+  const [selSizes,      setSelSizes]      = useState<VariationValue[]>([])
+  const [generated,     setGenerated]     = useState(false)
+  const [newColorInput, setNewColorInput] = useState('')
+  const [newSizeInput,  setNewSizeInput]  = useState('')
+  const [addingColor,   setAddingColor]   = useState(false)
+  const [addingSize,    setAddingSize]    = useState(false)
 
   const { register, handleSubmit, watch, control, setValue, formState: { errors, isSubmitting } } = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -166,6 +170,77 @@ export default function NovoProdutoPage() {
   function toggleSize(v: VariationValue) {
     setSelSizes(prev => prev.find(s => s.id === v.id) ? prev.filter(s => s.id !== v.id) : [...prev, v])
     setGenerated(false)
+  }
+
+  async function addNewVariationValue(
+    rawValue: string,
+    map: Record<string, string>,
+    typeId: number | undefined,
+    existing: VariationValue[],
+    onAdd: (v: VariationValue) => void,
+    setInput: (s: string) => void,
+    setLoading: (b: boolean) => void,
+  ) {
+    const trimmed = rawValue.trim()
+    if (!trimmed || !typeId) return
+
+    const key = normalizeKey(trimmed)
+    if (!map[key]) {
+      toast.error(`"${trimmed}" não está no mapa de SKUs`, {
+        description: `Valores válidos: ${Object.keys(map).map(keyToLabel).join(', ')}`,
+      })
+      return
+    }
+
+    // Se já está nos variation_values do banco, apenas seleciona
+    const found = existing.find(v => normalizeKey(v.value) === key)
+    if (found) {
+      onAdd(found)
+      setInput('')
+      return
+    }
+
+    // Novo — persiste no banco
+    setLoading(true)
+    try {
+      const res = await fetch('/api/variacoes/valores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variation_type_id: typeId, value: trimmed }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error('Erro ao adicionar valor', { description: json.error })
+        return
+      }
+      const newVal = json.value as VariationValue
+      setVarTypes(prev => prev.map(t =>
+        t.id === typeId ? { ...t, variation_values: [...t.variation_values, newVal] } : t,
+      ))
+      onAdd(newVal)
+      setInput('')
+      toast.success(`"${trimmed}" adicionado`)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function handleAddColor() {
+    addNewVariationValue(
+      newColorInput, SKU_COR, colorType?.id,
+      colorType?.variation_values ?? [],
+      v => { setSelColors(prev => prev.some(c => c.id === v.id) ? prev : [...prev, v]); setGenerated(false) },
+      setNewColorInput, setAddingColor,
+    )
+  }
+
+  function handleAddSize() {
+    addNewVariationValue(
+      newSizeInput, SKU_TAMANHO, sizeType?.id,
+      sizeType?.variation_values ?? [],
+      v => { setSelSizes(prev => prev.some(s => s.id === v.id) ? prev : [...prev, v]); setGenerated(false) },
+      setNewSizeInput, setAddingSize,
+    )
   }
 
   // Submit
@@ -291,7 +366,7 @@ export default function NovoProdutoPage() {
             {/* Cores */}
             {colorType && (
               <div>
-                <label className="label-base mb-2 block">Cores <span className="text-text-muted font-normal">(selecione as disponíveis)</span></label>
+                <label className="label-base mb-2 block">Cores <span className="text-text-muted font-normal">(clique para selecionar)</span></label>
                 <div className="flex flex-wrap gap-2">
                   {colorType.variation_values.map(v => {
                     const active = selColors.some(c => c.id === v.id)
@@ -304,13 +379,31 @@ export default function NovoProdutoPage() {
                   })}
                 </div>
                 {selColors.length > 0 && <p className="text-xs text-text-muted mt-2">{selColors.length} cor{selColors.length > 1 ? 'es' : ''} selecionada{selColors.length > 1 ? 's' : ''}</p>}
+                {/* Adicionar nova cor */}
+                <datalist id="cores-validas">
+                  {Object.keys(SKU_COR).map(k => <option key={k} value={keyToLabel(k)} />)}
+                </datalist>
+                <div className="flex gap-2 mt-3">
+                  <input
+                    list="cores-validas"
+                    value={newColorInput}
+                    onChange={e => setNewColorInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddColor() } }}
+                    placeholder="Outra cor... (ex: Cinza, Coral)"
+                    className="input-base text-sm flex-1"
+                  />
+                  <Button type="button" variant="secondary" size="sm" loading={addingColor} onClick={handleAddColor}>
+                    <Plus className="w-3 h-3" />
+                    Adicionar
+                  </Button>
+                </div>
               </div>
             )}
 
             {/* Tamanhos */}
             {sizeType && (
               <div>
-                <label className="label-base mb-2 block">Tamanhos <span className="text-text-muted font-normal">(selecione os disponíveis)</span></label>
+                <label className="label-base mb-2 block">Tamanhos <span className="text-text-muted font-normal">(clique para selecionar)</span></label>
                 <div className="flex flex-wrap gap-2">
                   {sizeType.variation_values.map(v => {
                     const active = selSizes.some(s => s.id === v.id)
@@ -323,6 +416,24 @@ export default function NovoProdutoPage() {
                   })}
                 </div>
                 {selSizes.length > 0 && <p className="text-xs text-text-muted mt-2">{selSizes.length} tamanho{selSizes.length > 1 ? 's' : ''} selecionado{selSizes.length > 1 ? 's' : ''}</p>}
+                {/* Adicionar novo tamanho */}
+                <datalist id="tamanhos-validos">
+                  {Object.keys(SKU_TAMANHO).map(k => <option key={k} value={k.toUpperCase()} />)}
+                </datalist>
+                <div className="flex gap-2 mt-3">
+                  <input
+                    list="tamanhos-validos"
+                    value={newSizeInput}
+                    onChange={e => setNewSizeInput(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddSize() } }}
+                    placeholder="Outro tamanho... (ex: PP, XGG)"
+                    className="input-base text-sm flex-1"
+                  />
+                  <Button type="button" variant="secondary" size="sm" loading={addingSize} onClick={handleAddSize}>
+                    <Plus className="w-3 h-3" />
+                    Adicionar
+                  </Button>
+                </div>
               </div>
             )}
 

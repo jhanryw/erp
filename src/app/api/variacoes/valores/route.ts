@@ -22,7 +22,7 @@ function toSlug(text: string) {
 }
 
 export async function POST(request: Request) {
-  const { response: unauth } = await requireRole('admin')
+  const { response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   let body: unknown
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const { response: unauth } = await requireRole('admin')
+  const { response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   const { searchParams } = new URL(request.url)
