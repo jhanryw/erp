@@ -535,13 +535,27 @@ export default function EstoqueEntradaLotePage() {
         }),
       })
 
-      const json = await res.json()
+      // Verificar content-type antes de tentar parsear JSON.
+      // Se o servidor retornar HTML (ex: sessão expirada → redirect para login,
+      // ou erro 500 de build), res.json() explodiria com "Unexpected token '<'".
+      const isJson = res.headers.get('content-type')?.includes('application/json')
 
       if (!res.ok && res.status !== 207) {
-        throw new Error(
-          typeof json.error === 'string' ? json.error : 'Erro ao registrar entrada em lote.'
-        )
+        if (res.status === 401 || res.status === 403) {
+          throw new Error('Sessão expirada ou sem permissão. Recarregue a página e faça login novamente.')
+        }
+        if (!isJson) {
+          throw new Error(`Erro ${res.status} no servidor. Verifique os logs do EasyPanel.`)
+        }
+        const errJson = await res.json()
+        throw new Error(typeof errJson.error === 'string' ? errJson.error : 'Erro ao registrar entrada em lote.')
       }
+
+      if (!isJson) {
+        throw new Error('Resposta inesperada do servidor (não-JSON). Verifique se o deploy foi concluído.')
+      }
+
+      const json = await res.json()
 
       if (res.status === 207) {
         const failed: { product_variation_id: number; error?: string }[] = json.results.filter(
