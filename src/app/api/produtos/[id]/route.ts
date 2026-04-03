@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
 import { generateSKU } from '@/lib/sku/sku-map'
+import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
@@ -329,10 +330,10 @@ export async function PUT(
         }
       }
 
-      // Gerar SKU no servidor — nunca usa valor vindo do cliente
-      let varSku: string
+      // Gerar SKU base no servidor — nunca usa valor vindo do cliente
+      let baseSku: string
       try {
-        varSku = generateSKU({
+        baseSku = generateSKU({
           tipo:    productMeta.tipo,
           modelo:  productMeta.modelo,
           cor:     colorValue,
@@ -346,25 +347,26 @@ export async function PUT(
         )
       }
 
-      // Inserir variação com SKU gerado pelo servidor
-      const { data: pv, error: pvError } = await admin
-        .from('product_variations')
-        .insert({
+      // Inserir com desvio automático de sufixo + retry por race condition
+      const insertResult = await insertVariationWithRetry(
+        baseSku,
+        {
           product_id:    productId,
-          sku_variation: varSku,
           cost_override: v.cost_override ?? null,
           price_override: v.price_override ?? null,
           active: true,
-        } as any)
-        .select('id')
-        .single() as unknown as { data: { id: number } | null; error: any }
+        },
+        admin,
+      )
 
-      if (pvError || !pv) {
-        const msg = pvError?.code === '23505'
-          ? `SKU de variação "${varSku}" já existe. Esta combinação de cor/tamanho já foi cadastrada.`
-          : pvError?.message ?? 'Erro ao criar variação.'
-        return NextResponse.json({ error: msg }, { status: 500 })
+      if (!insertResult.ok) {
+        return NextResponse.json(
+          { error: insertResult.message },
+          { status: insertResult.fatal ? 422 : 500 },
+        )
       }
+
+      const { pv } = insertResult
 
       // Inserir atributos (cor/tamanho) com o ID real da variação
       if (attrs.length > 0) {

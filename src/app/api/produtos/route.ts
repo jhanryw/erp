@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
@@ -114,23 +115,25 @@ export async function POST(request: Request) {
         }
 
         // Pode lançar se colorValue/sizeValue não estiverem no mapa de SKUs
-        const varSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
+        const baseSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
 
-        const { data: pv, error: pvError } = (await admin
-          .from('product_variations')
-          .insert({
-            product_id: product.id,
-            sku_variation: varSku,
+        // Insere com desvio automático de sufixo + retry por race condition
+        const insertResult = await insertVariationWithRetry(
+          baseSku,
+          {
+            product_id:    product.id,
             cost_override: v.cost_override ?? null,
             price_override: v.price_override ?? null,
             active: true,
-          } as any)
-          .select('id')
-          .single()) as unknown as { data: { id: number } | null; error: any }
+          },
+          admin,
+        )
 
-        if (pvError || !pv) {
-          throw new Error(`Erro ao criar variante (SKU ${varSku}): ${pvError?.message}`)
+        if (!insertResult.ok) {
+          throw new Error(`Erro ao criar variante (base ${baseSku}): ${insertResult.message}`)
         }
+
+        const { pv } = insertResult
 
         if (attrs.length > 0) {
           const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
