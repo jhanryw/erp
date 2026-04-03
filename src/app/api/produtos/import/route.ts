@@ -77,9 +77,7 @@ export async function POST(request: Request) {
       if (productError) {
         throw new Error(
           `Produto ${productData.name}: ` +
-            (productError.code === '23505'
-              ? 'SKU já cadastrado para esta empresa.'
-              : productError.code === '23503'
+            (productError.code === '23503'
               ? 'Categoria ou fornecedor inválido.'
               : productError.message)
         )

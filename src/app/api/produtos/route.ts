@@ -48,17 +48,26 @@ export async function POST(request: Request) {
 
   const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
 
-  // 1. Criar produto
-  const { data: product, error: productError } = (await admin
+  const { data: product, error: productError } = (await (admin as any)
     .from('products')
-    .insert({ ...productData, sku: parentSku, supplier_id: productData.supplier_id ?? null, subcategory_id: null, collection_id: null, company_id: user.company_id } as any)
+    .insert({
+      ...productData,
+      sku: parentSku,
+      supplier_id: productData.supplier_id ?? null,
+      subcategory_id: null,
+      collection_id: null,
+      company_id: user.company_id,
+    })
     .select('id')
-    .single()) as unknown as { data: { id: number } | null; error: any }
+    .single()) as unknown as { data: { id: number } | null; error: { code: string; message: string } | null }
 
   if (productError) {
-    const msg = productError.code === '23505' ? 'SKU já cadastrado para esta empresa.' : productError.code === '23503' ? 'Categoria ou fornecedor inválido.' : productError.message
-    const status = productError.code === '23505' ? 409 : 500
-    return NextResponse.json({ error: msg }, { status })
+    const msg =
+      productError.code === '23503'
+        ? 'Categoria ou fornecedor inválido.'
+        : productError.message
+
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 
   // 2. Criar variantes (se houver)

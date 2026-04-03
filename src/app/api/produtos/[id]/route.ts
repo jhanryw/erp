@@ -126,30 +126,13 @@ export async function PUT(
   const before = await getProductSnapshot(productId, user.company_id)
   if (!before) return NextResponse.json({ error: 'Produto não encontrado' }, { status: 404 })
 
-  // ── Detecção e validação de alteração de SKU ────────────────────────────────
+  // ── Detecção de alteração de SKU (para auditoria) ───────────────────────────
+  // products.sku é o SKU mãe (TTMM0000AA) — agrupador por tipo/modelo/ano.
+  // Não possui unicidade: dois produtos com cores diferentes geram o mesmo SKU mãe.
+  // A unicidade real está em product_variations.sku_variation (SKU unitário).
 
   const oldSku = before ? (before as Record<string, unknown>).sku as string | undefined : undefined
   const skuChanged = oldSku !== undefined && productFields.sku !== oldSku
-
-  if (skuChanged) {
-    // Unicidade: garantir que nenhum outro produto na mesma empresa usa o mesmo SKU
-    const { data: skuConflict, error: skuConflictError } = await createAdminClient()
-      .from('products')
-      .select('id')
-      .eq('sku', productFields.sku)
-      .eq('company_id', user.company_id)
-      .neq('id', productId)
-      .maybeSingle() as unknown as { data: { id: number } | null; error: { message: string } | null }
-
-    if (skuConflictError) return NextResponse.json({ error: skuConflictError.message }, { status: 500 })
-
-    if (skuConflict) {
-      return NextResponse.json(
-        { error: `SKU "${productFields.sku}" já está em uso por outro produto.` },
-        { status: 409 }
-      )
-    }
-  }
 
   // Verificar regra de preço (warning, não bloqueio)
   const priceCheck = await checkPriceChange(productId, productFields.base_price, productFields.base_cost)
@@ -176,11 +159,9 @@ export async function PUT(
 
   if (updateError) {
     const msg =
-      updateError.code === '23505' ? 'SKU já cadastrado para outro produto.' :
       updateError.code === '23503' ? 'Categoria ou fornecedor inválido.' :
       updateError.message
-    const status = updateError.code === '23505' ? 409 : 500
-    return NextResponse.json({ error: msg }, { status })
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 
   // ── 2. Remover variações ────────────────────────────────────────────────────
@@ -356,7 +337,7 @@ export async function PUT(
 
       if (pvError || !pv) {
         const msg = pvError?.code === '23505'
-          ? `SKU de variação "${varSku}" já existe neste produto.`
+          ? `SKU de variação "${varSku}" já existe. Esta combinação de cor/tamanho já foi cadastrada.`
           : pvError?.message ?? 'Erro ao criar variação.'
         return NextResponse.json({ error: msg }, { status: 500 })
       }
