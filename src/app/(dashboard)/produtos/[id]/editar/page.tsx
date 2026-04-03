@@ -6,8 +6,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
-import { ArrowLeft, Trash2, Plus } from 'lucide-react'
-import { productSchema, type ProductFormData } from '@/lib/validators'
+import { ArrowLeft, Trash2, Plus, ChevronDown } from 'lucide-react'
+import { productEditSchema, type ProductEditFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
@@ -76,7 +76,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const [toAdd, setToAdd] = useState<NewVariation[]>([])
   const [variationTypes, setVariationTypes] = useState<VariationType[]>([])
 
-  // New variation form fields
+  // Controls whether the "add variation" form is visible
+  const [showAddVariation, setShowAddVariation] = useState(false)
+
+  // New variation form fields (uncontrolled by RHF — managed via local state)
   const [newSku, setNewSku] = useState('')
   const [newColorId, setNewColorId] = useState<number | ''>('')
   const [newSizeId, setNewSizeId] = useState<number | ''>('')
@@ -89,8 +92,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     watch,
     reset,
     formState: { errors, isSubmitting },
-  } = useForm<ProductFormData>({
-    resolver: zodResolver(productSchema),
+  } = useForm<ProductEditFormData>({
+    resolver: zodResolver(productEditSchema),
   })
 
   const baseCost = Number(watch('base_cost')) || 0
@@ -177,17 +180,23 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   }
 
   // ── Submit ───────────────────────────────────────────────────────────────────
+  // PUT parcial: envia só os campos presentes no payload.
+  // O backend faz merge com os valores atuais do banco.
 
-  async function onSubmit(data: ProductFormData) {
-    const payload = {
-      ...data,
-      category_id: Number(data.category_id),
-      supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
-      base_cost: Number(data.base_cost),
-      base_price: Number(data.base_price),
-      variations_to_delete: toDelete,
-      variations_to_add: toAdd.map(({ key: _key, ...v }) => v),
-    }
+  async function onSubmit(data: ProductEditFormData) {
+    const payload: Record<string, unknown> = {}
+    if (data.name        !== undefined) payload.name        = data.name
+    if (data.sku         !== undefined) payload.sku         = data.sku
+    if (data.category_id !== undefined) payload.category_id = Number(data.category_id)
+    if (data.origin      !== undefined) payload.origin      = data.origin
+    if (data.base_cost   !== undefined) payload.base_cost   = Number(data.base_cost)
+    if (data.base_price  !== undefined) payload.base_price  = Number(data.base_price)
+    if (data.active      !== undefined) payload.active      = data.active
+    if ('supplier_id' in data) payload.supplier_id = data.supplier_id ? Number(data.supplier_id) : null
+
+    // Só inclui variações no payload se houver algo a fazer
+    if (toDelete.length > 0) payload.variations_to_delete = toDelete
+    if (toAdd.length > 0)    payload.variations_to_add    = toAdd.map(({ key: _key, ...v }) => v)
 
     const res = await fetch(`/api/produtos/${params.id}`, {
       method: 'PUT',
@@ -245,14 +254,12 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="Nome do produto"
-              required
               placeholder="Ex: Body de Renda Floral"
               error={errors.name?.message}
               {...register('name')}
             />
             <Input
               label="SKU"
-              required
               placeholder="Ex: BODY-RD-001"
               error={errors.sku?.message}
               {...register('sku')}
@@ -263,7 +270,6 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select
               label="Categoria"
-              required
               error={errors.category_id?.message}
               {...register('category_id')}
             >
@@ -281,7 +287,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           </div>
 
           {/* Origem */}
-          <Select label="Origem do produto" required {...register('origin')}>
+          <Select label="Origem do produto" {...register('origin')}>
             <option value="third_party">Terceiro (comprado de fornecedor)</option>
             <option value="own_brand">Marca Própria (produção interna)</option>
           </Select>
@@ -299,7 +305,6 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
             />
             <Input
               label="Preço de Venda (R$)"
-              required
               type="number"
               step="0.01"
               min="0.01"
@@ -378,99 +383,117 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           )}
         </div>
 
-        {/* ── Adicionar variação ── */}
-        <div className="card p-6 space-y-4">
-          <h3 className="text-sm font-semibold text-text-primary">Adicionar variação</h3>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Input
-              label="SKU da variação"
-              required
-              placeholder="Ex: BODY-RD-001-P-PRETO"
-              value={newSku}
-              onChange={e => setNewSku(e.target.value)}
+        {/* ── Adicionar variação (colapsável) ── */}
+        <div className="card overflow-hidden">
+          {/* Cabeçalho — sempre visível, toggle ao clicar */}
+          <button
+            type="button"
+            className="w-full flex items-center justify-between px-6 py-4 text-sm font-semibold text-text-primary hover:bg-bg-hover transition-colors"
+            onClick={() => setShowAddVariation(prev => !prev)}
+          >
+            <span className="flex items-center gap-2">
+              <Plus className="w-4 h-4" />
+              Adicionar variação
+            </span>
+            <ChevronDown
+              className={`w-4 h-4 text-text-muted transition-transform ${showAddVariation ? 'rotate-180' : ''}`}
             />
+          </button>
 
-            {colorType && (
-              <div>
-                <label className="label-base">Cor</label>
-                <select
-                  className="input-base"
-                  value={newColorId}
-                  onChange={e => setNewColorId(e.target.value !== '' ? Number(e.target.value) : '')}
-                >
-                  <option value="">Sem cor</option>
-                  {colorType.variation_values.map(vv => (
-                    <option key={vv.id} value={vv.id}>{vv.value}</option>
-                  ))}
-                </select>
-              </div>
-            )}
+          {/* Formulário — só renderiza quando expandido */}
+          {showAddVariation && (
+            <div className="px-6 pb-6 space-y-4 border-t border-border">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4">
+                {/* SKU sem `required` — validado via addVariation() */}
+                <Input
+                  label="SKU da variação"
+                  placeholder="Ex: BODY-RD-001-P-PRETO"
+                  value={newSku}
+                  onChange={e => setNewSku(e.target.value)}
+                />
 
-            {sizeType && (
-              <div>
-                <label className="label-base">Tamanho</label>
-                <select
-                  className="input-base"
-                  value={newSizeId}
-                  onChange={e => setNewSizeId(e.target.value !== '' ? Number(e.target.value) : '')}
-                >
-                  <option value="">Sem tamanho</option>
-                  {sizeType.variation_values.map(vv => (
-                    <option key={vv.id} value={vv.id}>{vv.value}</option>
-                  ))}
-                </select>
-              </div>
-            )}
-
-            <Input
-              label="Custo override (R$)"
-              type="number"
-              step="0.01"
-              min="0"
-              placeholder="Deixe vazio para usar o base"
-              value={newCost}
-              onChange={e => setNewCost(e.target.value)}
-            />
-
-            <Input
-              label="Preço override (R$)"
-              type="number"
-              step="0.01"
-              min="0.01"
-              placeholder="Deixe vazio para usar o base"
-              value={newPrice}
-              onChange={e => setNewPrice(e.target.value)}
-            />
-          </div>
-
-          <Button type="button" variant="outline" size="sm" onClick={addVariation}>
-            <Plus className="h-4 w-4 mr-1" />
-            Adicionar variação
-          </Button>
-
-          {/* Fila de novas variações */}
-          {toAdd.length > 0 && (
-            <div className="divide-y divide-border mt-2">
-              {toAdd.map((v) => (
-                <div key={v.key} className="flex items-center justify-between gap-3 py-2">
-                  <div className="min-w-0">
-                    <code className="text-xs text-text-primary">{v.sku_variation}</code>
-                    <p className="text-xs text-text-muted">
-                      Custo: {v.cost_override != null ? `R$ ${v.cost_override}` : 'base'} · Preço:{' '}
-                      {v.price_override != null ? `R$ ${v.price_override}` : 'base'}
-                    </p>
+                {colorType && (
+                  <div>
+                    <label className="label-base">Cor</label>
+                    <select
+                      className="input-base"
+                      value={newColorId}
+                      onChange={e => setNewColorId(e.target.value !== '' ? Number(e.target.value) : '')}
+                    >
+                      <option value="">Sem cor</option>
+                      {colorType.variation_values.map(vv => (
+                        <option key={vv.id} value={vv.id}>{vv.value}</option>
+                      ))}
+                    </select>
                   </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeToAdd(v.key)}
-                  >
-                    <Trash2 className="h-3.5 w-3.5 text-error" />
-                  </Button>
+                )}
+
+                {sizeType && (
+                  <div>
+                    <label className="label-base">Tamanho</label>
+                    <select
+                      className="input-base"
+                      value={newSizeId}
+                      onChange={e => setNewSizeId(e.target.value !== '' ? Number(e.target.value) : '')}
+                    >
+                      <option value="">Sem tamanho</option>
+                      {sizeType.variation_values.map(vv => (
+                        <option key={vv.id} value={vv.id}>{vv.value}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <Input
+                  label="Custo override (R$)"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  placeholder="Deixe vazio para usar o base"
+                  value={newCost}
+                  onChange={e => setNewCost(e.target.value)}
+                />
+
+                <Input
+                  label="Preço override (R$)"
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  placeholder="Deixe vazio para usar o base"
+                  value={newPrice}
+                  onChange={e => setNewPrice(e.target.value)}
+                />
+              </div>
+
+              <Button type="button" variant="outline" size="sm" onClick={addVariation}>
+                <Plus className="h-4 w-4 mr-1" />
+                Adicionar variação
+              </Button>
+
+              {/* Fila de novas variações */}
+              {toAdd.length > 0 && (
+                <div className="divide-y divide-border mt-2">
+                  {toAdd.map((v) => (
+                    <div key={v.key} className="flex items-center justify-between gap-3 py-2">
+                      <div className="min-w-0">
+                        <code className="text-xs text-text-primary">{v.sku_variation}</code>
+                        <p className="text-xs text-text-muted">
+                          Custo: {v.cost_override != null ? `R$ ${v.cost_override}` : 'base'} · Preço:{' '}
+                          {v.price_override != null ? `R$ ${v.price_override}` : 'base'}
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeToAdd(v.key)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 text-error" />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
