@@ -101,12 +101,12 @@ BEGIN
 
   INSERT INTO stock_movements (
     product_variation_id, product_id, type, quantity,
-    previous_stock, new_stock, unit_cost, reference_id, notes, created_by, company_id
+    previous_stock, new_stock, unit_cost, reference_id, created_by, company_id
   )
   SELECT
     p_product_variation_id, pv.product_id, 'entry', p_quantity_original,
     v_prev_qty::int, v_new_qty::int,
-    v_cost_per_unit, v_lot_id::text, p_notes, p_system_user_id, v_company_id
+    v_cost_per_unit, v_lot_id::text, p_system_user_id, v_company_id
   FROM product_variations pv WHERE pv.id = p_product_variation_id;
 
   INSERT INTO finance_entries (
