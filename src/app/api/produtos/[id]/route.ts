@@ -20,15 +20,18 @@ const variantToAddSchema = z.object({
   cost_override: z.coerce.number().min(0).nullable().optional(),
 })
 
+// Todos os campos do produto são opcionais — suporta update parcial.
+// Campos ausentes no payload são preenchidos com o valor atual do banco (merge).
+// A unicidade obrigatória é product_variations.sku_variation, não products.sku.
 const putSchema = z.object({
-  name: z.string().min(2),
-  sku: z.string().regex(/^\d{10}$/, 'SKU deve conter exatamente 10 dígitos numéricos'),
-  category_id: z.coerce.number().int().positive(),
+  name: z.string().min(2).optional(),
+  sku: z.string().regex(/^\d{10}$/, 'SKU deve conter exatamente 10 dígitos numéricos').optional(),
+  category_id: z.coerce.number().int().positive().optional(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
-  origin: z.enum(['own_brand', 'third_party']),
-  base_cost: z.coerce.number().min(0),
-  base_price: z.coerce.number().positive(),
-  active: z.boolean().default(true),
+  origin: z.enum(['own_brand', 'third_party']).optional(),
+  base_cost: z.coerce.number().min(0).optional(),
+  base_price: z.coerce.number().positive().optional(),
+  active: z.boolean().optional(),
   variations_to_delete: z.array(z.number().int().positive()).optional(),
   variations_to_add: z.array(variantToAddSchema).optional(),
 })
@@ -120,19 +123,40 @@ export async function PUT(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
   }
 
-  const { variations_to_delete, variations_to_add, ...productFields } = parsed.data
+  const { variations_to_delete, variations_to_add, ...patch } = parsed.data
 
   // Snapshot antes para auditoria — também verifica que o produto pertence à empresa
   const before = await getProductSnapshot(productId, user.company_id)
   if (!before) return NextResponse.json({ error: 'Produto não encontrado' }, { status: 404 })
+
+  // ── Merge: payload parcial + valores atuais do banco ────────────────────────
+  // Campos ausentes no payload herdam o valor atual do produto.
+  // Isso permite PUT parcial: { name: "Novo nome" } sem enviar todos os campos.
+  type ProductSnap = {
+    name: string; sku: string; category_id: number; supplier_id: number | null
+    origin: 'own_brand' | 'third_party'; base_cost: number; base_price: number; active: boolean
+  }
+  const snap = before as unknown as ProductSnap
+  const productFields = {
+    name:        patch.name        ?? snap.name,
+    sku:         patch.sku         ?? snap.sku,
+    category_id: patch.category_id ?? snap.category_id,
+    // supplier_id pode ser null intencionalmente (remover fornecedor);
+    // distinguir "não enviado" (undefined) de "enviado como null"
+    supplier_id: patch.supplier_id !== undefined ? (patch.supplier_id ?? null) : (snap.supplier_id ?? null),
+    origin:      patch.origin      ?? snap.origin,
+    base_cost:   patch.base_cost   ?? snap.base_cost,
+    base_price:  patch.base_price  ?? snap.base_price,
+    active:      patch.active      ?? snap.active,
+  }
 
   // ── Detecção de alteração de SKU (para auditoria) ───────────────────────────
   // products.sku é o SKU mãe (TTMM0000AA) — agrupador por tipo/modelo/ano.
   // Não possui unicidade: dois produtos com cores diferentes geram o mesmo SKU mãe.
   // A unicidade real está em product_variations.sku_variation (SKU unitário).
 
-  const oldSku = before ? (before as Record<string, unknown>).sku as string | undefined : undefined
-  const skuChanged = oldSku !== undefined && productFields.sku !== oldSku
+  const oldSku = snap.sku
+  const skuChanged = patch.sku !== undefined && patch.sku !== oldSku
 
   // Verificar regra de preço (warning, não bloqueio)
   const priceCheck = await checkPriceChange(productId, productFields.base_price, productFields.base_cost)
