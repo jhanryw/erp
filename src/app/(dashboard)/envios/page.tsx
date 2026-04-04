@@ -27,7 +27,7 @@ type ShipmentStatus =
   | 'retirado'
   | 'cancelado'
 
-type DeliveryMode = 'entrega' | 'retirada'
+type DeliveryMode = 'delivery' | 'pickup'
 
 interface Shipment {
   id: number
@@ -191,8 +191,8 @@ export default function EnviosPage() {
           onChange={(e) => setFilterMode(e.target.value)}
         >
           <option value="todos">Todos os modos</option>
-          <option value="entrega">Entrega</option>
-          <option value="retirada">Retirada</option>
+          <option value="delivery">Envio</option>
+          <option value="pickup">Retirada</option>
         </select>
 
         <Button
@@ -281,10 +281,10 @@ export default function EnviosPage() {
                       </TableCell>
                       <TableCell>
                         <Badge
-                          variant={shipment.delivery_mode === 'entrega' ? 'info' : 'brand'}
+                          variant={shipment.delivery_mode === 'delivery' ? 'info' : 'brand'}
                           size="sm"
                         >
-                          {shipment.delivery_mode === 'entrega' ? 'Entrega' : 'Retirada'}
+                          {shipment.delivery_mode === 'delivery' ? 'Envio' : 'Retirada'}
                         </Badge>
                       </TableCell>
                       <TableCell align="right" muted>
@@ -309,9 +309,19 @@ export default function EnviosPage() {
                                 handleStatusChange(shipment.id, e.target.value as ShipmentStatus)
                               }
                             >
-                              {ALL_STATUSES.map(([value, cfg]) => (
-                                <option key={value} value={value}>{cfg.label}</option>
-                              ))}
+                              {ALL_STATUSES
+                                .filter(([value]) => {
+                                  // Para retirada, ocultar status exclusivos de entrega por motoboy
+                                  if (shipment.delivery_mode === 'pickup') {
+                                    return !['aguardando_separacao', 'pronto_envio', 'aguardando_motoboy', 'saiu_entrega', 'nao_entregue'].includes(value)
+                                  }
+                                  // Para envio, ocultar status exclusivos de retirada
+                                  return value !== 'aguardando_retirada' && value !== 'retirado'
+                                })
+                                .map(([value, cfg]) => (
+                                  <option key={value} value={value}>{cfg.label}</option>
+                                ))
+                              }
                             </select>
                           )}
                         </div>
@@ -335,7 +345,9 @@ export default function EnviosPage() {
                                   <p>{address.city} — CEP {address.cep}</p>
                                 </div>
                               ) : (
-                                <p className="text-sm text-text-muted italic">Retirada no local</p>
+                                <p className="text-sm text-text-muted italic">
+                                  {shipment.delivery_mode === 'pickup' ? 'Retirada no local' : 'Endereço não cadastrado'}
+                                </p>
                               )}
                             </div>
 
