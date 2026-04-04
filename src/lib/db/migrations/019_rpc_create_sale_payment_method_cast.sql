@@ -1,19 +1,20 @@
--- Migration 019: Corrige rpc_create_sale
+-- Migration 019: rpc_create_sale — auditoria completa de tipos e casts
 --
--- Problema:
---   sales.payment_method é USER-DEFINED enum (payment_method).
---   p_payment_method é text. PostgreSQL não faz cast implícito text → enum.
---   Erro: "column payment_method is of type payment_method but expression is of type text"
+-- Problemas corrigidos (auditados via information_schema + DATABASE_SCHEMA.sql):
 --
--- Fix: p_payment_method::payment_method no INSERT.
+--  1. p_payment_method text → sales.payment_method payment_method (enum)
+--     Fix: p_payment_method::payment_method
 --
--- Bônus: adiciona p_card_fee (taxa de cartão repassada pelo cliente).
---   Quando informada, registra um finance_entry de expense/card_fee separado,
---   permitindo rastrear exatamente quanto a operadora reteve.
+--  2. p_sale_origin text → sales.sale_origin customer_origin (enum, nullable)
+--     Fix: NULLIF(p_sale_origin,'')::customer_origin
 --
--- NOTA: DROP das versões antigas com assinaturas diferentes para evitar
---   "function name is not unique" ao usar CREATE OR REPLACE com nova assinatura.
-
+--  3. 'card_fee' não existe em finance_category enum
+--     Fix: usar 'operational' como categoria da taxa de cartão
+--
+--  4. stock_movements sem 'notes' e 'created_by' no banco live
+--     Fix: INSERT sem essas colunas (consistente com migration 017)
+--
+-- DROP da assinatura antiga antes de recriar com p_card_fee extra:
 DROP FUNCTION IF EXISTS public.rpc_create_sale(int, uuid, text, text, numeric, numeric, numeric, text, jsonb, uuid);
 DROP FUNCTION IF EXISTS public.rpc_create_sale(int, uuid, text, text, numeric, numeric, numeric, text, jsonb, uuid, numeric);
 
@@ -28,7 +29,7 @@ CREATE OR REPLACE FUNCTION public.rpc_create_sale(
   p_notes            text,
   p_items            jsonb,
   p_system_user_id   uuid,
-  p_card_fee         numeric DEFAULT 0   -- taxa de cartão paga pelo cliente (0 = não se aplica)
+  p_card_fee         numeric DEFAULT 0
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -56,12 +57,12 @@ DECLARE
 BEGIN
   PERFORM set_config('app.stock_rpc', '1', true);
 
-  v_card_fee := COALESCE(p_card_fee, 0);
+  v_card_fee := GREATEST(0, COALESCE(p_card_fee, 0));
 
   -- Derivar company_id do vendedor
   SELECT company_id INTO v_company_id FROM users WHERE id = p_seller_id;
   IF v_company_id IS NULL THEN
-    RAISE EXCEPTION 'Vendedor não está associado a uma empresa.'
+    RAISE EXCEPTION 'Vendedor nao esta associado a uma empresa.'
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -75,11 +76,11 @@ BEGIN
     WHERE pv.id = v_pvid;
 
     IF v_item_company IS NULL THEN
-      RAISE EXCEPTION 'Variação #% não encontrada.', v_pvid
+      RAISE EXCEPTION 'Variacao #% nao encontrada.', v_pvid
         USING ERRCODE = 'P0001';
     END IF;
     IF v_item_company != v_company_id THEN
-      RAISE EXCEPTION 'Variação #% não pertence à empresa do vendedor.', v_pvid
+      RAISE EXCEPTION 'Variacao #% nao pertence a empresa do vendedor.', v_pvid
         USING ERRCODE = 'P0001';
     END IF;
 
@@ -101,22 +102,32 @@ BEGIN
     PERFORM 1 FROM stock WHERE product_variation_id = v_pvid FOR UPDATE;
   END LOOP;
 
+  -- ── INSERT sales ──────────────────────────────────────────────────────────────
+  -- payment_method::payment_method  → cast explícito text → enum
+  -- NULLIF(p_sale_origin,'')::customer_origin → nullable enum, string vazia vira NULL
   INSERT INTO sales (
     customer_id, seller_id, status,
     subtotal, discount_amount, cashback_used, shipping_charged, total,
     payment_method, sale_origin, notes, sale_date, company_id
   )
   VALUES (
-    p_customer_id, p_seller_id, 'paid',
-    ROUND(v_subtotal, 2), p_discount_amount, p_cashback_used, p_shipping_charged,
+    p_customer_id,
+    p_seller_id,
+    'paid',
+    ROUND(v_subtotal, 2),
+    p_discount_amount,
+    p_cashback_used,
+    p_shipping_charged,
     ROUND(v_total, 2),
-    p_payment_method::payment_method,   -- ← cast explícito: fix do erro
-    p_sale_origin, p_notes,
-    CURRENT_DATE, v_company_id
+    p_payment_method::payment_method,
+    NULLIF(p_sale_origin, '')::customer_origin,
+    p_notes,
+    CURRENT_DATE,
+    v_company_id
   )
   RETURNING id, sale_number INTO v_sale_id, v_sale_number;
 
-  -- Processar itens
+  -- ── Processar itens ───────────────────────────────────────────────────────────
   FOR v_item IN SELECT value FROM jsonb_array_elements(p_items) LOOP
     v_pvid       := (v_item->>'product_variation_id')::int;
     v_qty        := (v_item->>'quantity')::int;
@@ -136,7 +147,7 @@ BEGIN
 
     IF v_current_qty IS NULL OR v_current_qty < v_qty THEN
       RAISE EXCEPTION
-        'Estoque insuficiente para variação #%. Disponível: %, solicitado: %.',
+        'Estoque insuficiente para variacao #%. Disponivel: %, solicitado: %.',
         v_pvid, COALESCE(v_current_qty, 0), v_qty
         USING ERRCODE = 'P0001';
     END IF;
@@ -146,26 +157,30 @@ BEGIN
         last_updated = NOW()
     WHERE product_variation_id = v_pvid;
 
+    -- stock_movements: sem 'notes' nem 'created_by' (não existem no banco live)
     INSERT INTO stock_movements (
       product_variation_id, product_id, type, quantity,
       previous_stock, new_stock, unit_cost, reference_id, company_id
     )
-    SELECT v_pvid, pv.product_id, 'sale', -v_qty,
-           v_current_qty, v_current_qty - v_qty,
-           v_unit_cost, v_sale_id::text, v_company_id
+    SELECT
+      v_pvid, pv.product_id, 'sale', -v_qty,
+      v_current_qty, v_current_qty - v_qty,
+      v_unit_cost, v_sale_id::text, v_company_id
     FROM product_variations pv WHERE pv.id = v_pvid;
   END LOOP;
 
-  -- Receita bruta (inclui taxa de cartão paga pelo cliente = faturamento total)
+  -- ── Finance entries ───────────────────────────────────────────────────────────
+  -- Receita bruta da venda
   INSERT INTO finance_entries (
     type, category, description, amount, reference_date, sale_id, created_by, company_id
   )
   VALUES (
-    'income', 'sale', 'Venda ' || v_sale_number,
+    'income', 'sale',
+    'Venda ' || v_sale_number,
     v_gross, CURRENT_DATE, v_sale_id, p_system_user_id, v_company_id
   );
 
-  -- Cashback como dedutor de receita
+  -- Cashback utilizado (dedutor de receita, valor positivo)
   IF v_eff_cashback > 0 THEN
     INSERT INTO finance_entries (
       type, category, description, amount, reference_date, sale_id, created_by, company_id
@@ -173,18 +188,19 @@ BEGIN
     VALUES (
       'income', 'cashback_used',
       'Cashback utilizado — Venda ' || v_sale_number,
-      -v_eff_cashback, CURRENT_DATE, v_sale_id, p_system_user_id, v_company_id
+      v_eff_cashback, CURRENT_DATE, v_sale_id, p_system_user_id, v_company_id
     );
   END IF;
 
-  -- Taxa de cartão como despesa separada (operadora retém do valor recebido)
+  -- Taxa de cartão como despesa operacional
+  -- 'card_fee' não existe no enum finance_category → usa 'operational'
   IF v_card_fee > 0 THEN
     INSERT INTO finance_entries (
       type, category, description, amount, reference_date, sale_id, created_by, company_id
     )
     VALUES (
-      'expense', 'card_fee',
-      'Taxa de cartão — Venda ' || v_sale_number,
+      'expense', 'operational',
+      'Taxa de cartao — Venda ' || v_sale_number,
       v_card_fee, CURRENT_DATE, v_sale_id, p_system_user_id, v_company_id
     );
   END IF;

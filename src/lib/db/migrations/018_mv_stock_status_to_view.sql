@@ -1,13 +1,12 @@
--- Migration 018: Converte mv_stock_status de MATERIALIZED VIEW → VIEW normal
---               e adiciona sku_variation + tamanho + cor
+-- Migration 018: Atualiza mv_stock_status com novas colunas
 --
 -- Mudanças:
---   - View normal (sempre ao vivo, sem refresh)
---   - pv.sku_variation substitui p.sku (SKU único da variação)
---   - coluna "tamanho": valor do atributo de tipo 'tamanho'
---   - coluna "cor":     valor do atributo de tipo 'cor'
+--   - Mantém como VIEW normal (já está, não MATERIALIZED)
+--   - Adiciona pv.sku_variation (SKU único da variação)
+--   - Adiciona coluna "tamanho": valor do atributo de tipo 'tamanho'
+--   - Adiciona coluna "cor":     valor do atributo de tipo 'cor'
 
-DROP MATERIALIZED VIEW IF EXISTS mv_stock_status CASCADE;
+DROP VIEW IF EXISTS mv_stock_status CASCADE;
 
 CREATE VIEW mv_stock_status AS
 SELECT
