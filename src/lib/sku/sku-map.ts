@@ -29,7 +29,7 @@ export const SKU_TIPO = {
   short_doll:             '09',
   pijama_vestido:         '10',
   pijama_americano:       '11',
-  pijama_com_calcinha:    '12',
+  camisola_americana:     '12',
   pijama_rendado:         '13',
   conjunto_calcinha_sutia:'14',
 } as const
@@ -125,6 +125,12 @@ export const SKU_MODELO: Record<string, Record<string, string>> = {
   '13': { // Pijama Rendado
     com_bojo: '01',
     sem_bojo: '02',
+  },
+
+  '12': { // Camisola Americana
+    padrao:  '01',
+    renda:   '02',
+    sexy:    '03',
   },
 
   '14': { // Conjunto Calcinha + Sutiã
