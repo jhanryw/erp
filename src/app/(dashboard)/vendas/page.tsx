@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { Plus, ShoppingCart } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { Button } from '@/components/ui/button'
 import { SaleStatusBadge } from '@/components/ui/badge'
 import { Card, CardHeader } from '@/components/ui/card'
@@ -51,9 +53,15 @@ type SaleRow = {
   users: SaleUser | SaleUser[] | null
 }
 
-async function getSales(): Promise<SaleRow[]> {
-  const supabase = createAdminClient()
+async function getSales(): Promise<{ sales: SaleRow[]; error: string | null }> {
+  const serverClient = createClient()
+  const { data: { user: authUser } } = await serverClient.auth.getUser()
+  if (!authUser) return { sales: [], error: 'Não autenticado.' }
 
+  const profile = await getUserProfile(authUser.id, authUser.email)
+  if (!profile.company_id) return { sales: [], error: 'Usuário sem empresa vinculada.' }
+
+  const supabase = createAdminClient()
   const { data, error } = await supabase
     .from('sales')
     .select(`
@@ -69,19 +77,20 @@ async function getSales(): Promise<SaleRow[]> {
       customers:customer_id (id, name, cpf),
       users:seller_id (id, name)
     `)
+    .eq('company_id', profile.company_id)
     .order('created_at', { ascending: false })
     .limit(50)
 
   if (error) {
     console.error('Erro ao listar vendas:', error.message)
-    return []
+    return { sales: [], error: error.message }
   }
 
-  return (data ?? []) as unknown as SaleRow[]
+  return { sales: (data ?? []) as unknown as SaleRow[], error: null }
 }
 
 export default async function VendasPage() {
-  const sales = await getSales()
+  const { sales, error } = await getSales()
 
   return (
     <div className="space-y-6">
@@ -101,7 +110,13 @@ export default async function VendasPage() {
         </Link>
       </div>
 
-      {sales.length === 0 ? (
+      {error && (
+        <div className="rounded-lg border border-error/30 bg-error/5 px-4 py-3 text-sm text-error">
+          Erro ao carregar vendas: {error}
+        </div>
+      )}
+
+      {!error && sales.length === 0 ? (
         <EmptyState
           icon={<ShoppingCart className="h-4 w-4" />}
           title="Nenhuma venda registrada"
