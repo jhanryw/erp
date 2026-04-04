@@ -27,7 +27,9 @@ export const dynamic = 'force-dynamic'
 
 type StockStatusRow = {
   product_name: string
-  sku: string
+  sku_variation: string
+  tamanho: string | null
+  cor: string | null
   current_qty: number | null
   avg_cost: number | null
   stock_value_at_cost: number | null
@@ -171,7 +173,9 @@ export default async function EstoquePage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Produto</TableHead>
-                  <TableHead>SKU</TableHead>
+                  <TableHead>Cor</TableHead>
+                  <TableHead>Tamanho</TableHead>
+                  <TableHead>SKU Variação</TableHead>
                   <TableHead>Qtd</TableHead>
                   <TableHead>Custo Médio</TableHead>
                   <TableHead>Valor Custo</TableHead>
@@ -182,12 +186,14 @@ export default async function EstoquePage() {
 
               <TableBody>
                 {data.items.map((item, idx) => (
-                  <TableRow key={`${item.sku}-${idx}`}>
+                  <TableRow key={`${item.sku_variation}-${idx}`}>
                     <TableCell className="font-medium">
                       {item.product_name}
                     </TableCell>
+                    <TableCell>{item.cor ?? '—'}</TableCell>
+                    <TableCell>{item.tamanho ?? '—'}</TableCell>
                     <TableCell>
-                      <code>{item.sku}</code>
+                      <code>{item.sku_variation}</code>
                     </TableCell>
                     <TableCell>{formatNumber(item.current_qty ?? 0)}</TableCell>
                     <TableCell>{formatCurrency(item.avg_cost ?? 0)}</TableCell>

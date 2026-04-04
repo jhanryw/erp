@@ -78,7 +78,13 @@ export default function NovaVendaPage() {
         `)
         .ilike('sku_variation', `%${debouncedProduct}%`)
         .limit(20)
-      return (data ?? []).filter((v: any) => (v.stock?.quantity ?? 0) > 0).slice(0, 8)
+      // stock é retornado pelo Supabase como array [{quantity: N}] ou objeto {quantity: N}
+      return (data ?? []).filter((v: any) => {
+        const qty = Array.isArray(v.stock)
+          ? (v.stock[0]?.quantity ?? 0)
+          : (v.stock?.quantity ?? 0)
+        return qty > 0
+      }).slice(0, 8)
     },
     enabled: debouncedProduct.length >= 2,
   })
@@ -253,7 +259,9 @@ export default function NovaVendaPage() {
                     <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-10 overflow-hidden">
                       {products.map((v: any) => {
                         const p = v.products
-                        const qty = v.stock?.quantity ?? 0
+                        const qty = Array.isArray(v.stock)
+                          ? (v.stock[0]?.quantity ?? 0)
+                          : (v.stock?.quantity ?? 0)
                         return (
                           <button
                             key={v.id}
