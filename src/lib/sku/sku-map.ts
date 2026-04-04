@@ -185,6 +185,7 @@ export const SKU_COR: Record<string, string> = {
   cinza_com_preto: '40',
   rosa_com_preto:  '41',
   rose:            '42',
+  chumbo:          '43',
 }
 
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
