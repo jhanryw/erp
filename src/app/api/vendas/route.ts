@@ -4,6 +4,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -18,8 +19,10 @@ const itemSchema = z.object({
 const schema = z.object({
   customer_id:      z.number().int().positive(),
   payment_method:   z.enum(['pix', 'card', 'cash']),
+  delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   discount_amount:  z.number().min(0).default(0),
+  surcharge_amount: z.number().min(0).default(0),
   cashback_used:    z.number().min(0).default(0),
   shipping_charged: z.number().min(0).default(0),
   notes:            z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
@@ -68,6 +71,23 @@ export async function POST(request: Request) {
       action: 'create', resource: 'sale',
       resourceId: sale.id, detail: sale.sale_number,
     })
+
+    // Criar envio automaticamente após a venda
+    const { delivery_mode } = parsed.data
+    const shipmentStatus = delivery_mode === 'pickup' ? 'aguardando_retirada' : 'aguardando_confirmacao'
+    const admin = createAdminClient()
+    await (admin as any)
+      .from('shipments')
+      .insert({
+        order_id:      sale.id,
+        customer_id:   parsed.data.customer_id,
+        delivery_mode,
+        status:        shipmentStatus,
+        notes:         parsed.data.notes ?? null,
+        company_id:    user.company_id,
+      })
+    // Erro no shipment é não-fatal: a venda já foi criada
+
     return NextResponse.json({
       sale,
       ...(priceCheck.warnings.length > 0 ? { warnings: priceCheck.warnings } : {}),

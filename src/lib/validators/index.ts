@@ -68,14 +68,16 @@ export const saleItemSchema = z.object({
 })
 
 export const saleSchema = z.object({
-  customer_id: z.number().positive('Cliente obrigatório'),
-  payment_method: z.enum(['pix', 'card', 'cash']),
-  sale_origin: z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional(),
-  discount_amount: z.number().min(0).default(0),
-  cashback_used: z.number().min(0).default(0),
+  customer_id:      z.number().positive('Cliente obrigatório'),
+  payment_method:   z.enum(['pix', 'card', 'cash']),
+  delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
+  sale_origin:      z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional(),
+  discount_amount:  z.number().min(0).default(0),
+  surcharge_amount: z.number().min(0).default(0),
+  cashback_used:    z.number().min(0).default(0),
   shipping_charged: z.number().min(0).default(0),
-  notes: z.string().nullable().optional(),
-  items: z.array(saleItemSchema).min(1, 'Adicione pelo menos 1 item'),
+  notes:            z.string().nullable().optional(),
+  items:            z.array(saleItemSchema).min(1, 'Adicione pelo menos 1 item'),
 })
 
 // ─── Entrada de Estoque ───────────────────────────────────────────────────────

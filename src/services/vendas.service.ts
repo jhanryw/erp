@@ -23,6 +23,7 @@ export interface CreateSaleInput {
   payment_method: 'pix' | 'card' | 'cash'
   sale_origin?: string | null
   discount_amount: number
+  surcharge_amount: number
   cashback_used: number
   shipping_charged: number
   notes?: string | null
@@ -213,6 +214,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
       p_payment_method:   input.payment_method,
       p_sale_origin:      input.sale_origin ?? null,
       p_discount_amount:  input.discount_amount,
+      p_surcharge_amount: input.surcharge_amount ?? 0,
       p_cashback_used:    input.cashback_used,
       p_shipping_charged: input.shipping_charged,
       p_notes:            input.notes ?? null,

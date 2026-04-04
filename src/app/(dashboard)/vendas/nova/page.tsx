@@ -42,8 +42,10 @@ export default function NovaVendaPage() {
     defaultValues: {
       items: [],
       discount_amount: 0,
+      surcharge_amount: 0,
       cashback_used: 0,
       shipping_charged: 0,
+      delivery_mode: 'delivery',
     },
   })
 
@@ -138,11 +140,14 @@ export default function NovaVendaPage() {
 
   const items = watch('items')
   const discountAmount = watch('discount_amount') ?? 0
+  const surchargeAmount = watch('surcharge_amount') ?? 0
   const cashbackUsed = watch('cashback_used') ?? 0
   const shippingCharged = watch('shipping_charged') ?? 0
+  const deliveryMode = watch('delivery_mode')
 
   const subtotal = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
-  const total = Math.max(0, subtotal - discountAmount - cashbackUsed + shippingCharged)
+  const gross = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
+  const total = Math.max(0, gross - cashbackUsed)
 
   async function onSubmit(data: SaleFormData) {
     const res = await fetch('/api/vendas', {
@@ -263,6 +268,30 @@ export default function NovaVendaPage() {
             {step === 1 && (
               <div className="card p-5 space-y-4">
                 <h3 className="text-sm font-semibold text-text-primary">Adicionar Itens</h3>
+
+                {/* Modo de entrega */}
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-text-secondary">Modo de Entrega</p>
+                  <div className="flex gap-3">
+                    {[
+                      { value: 'delivery', label: 'Envio' },
+                      { value: 'pickup',   label: 'Retirada' },
+                    ].map(({ value, label }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setValue('delivery_mode', value as 'pickup' | 'delivery')}
+                        className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                          deliveryMode === value
+                            ? 'bg-brand text-white border-brand'
+                            : 'bg-bg-overlay text-text-secondary border-border hover:border-brand/50'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
                 {/* Busca de produto */}
                 <div className="relative">
@@ -427,6 +456,14 @@ export default function NovaVendaPage() {
                     min="0"
                     {...register('shipping_charged', { valueAsNumber: true })}
                   />
+                  <Input
+                    label="Acréscimo (R$)"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0,00"
+                    {...register('surcharge_amount', { valueAsNumber: true })}
+                  />
                 </div>
 
                 {cashbackBalance > 0 && (
@@ -471,6 +508,16 @@ export default function NovaVendaPage() {
                     <span className="text-text-secondary">Itens</span>
                     <span className="font-medium">{fields.length} produto(s)</span>
                   </div>
+                  <div className="flex justify-between py-1.5 border-b border-border/50">
+                    <span className="text-text-secondary">Entrega</span>
+                    <span className="font-medium">{deliveryMode === 'pickup' ? 'Retirada' : 'Envio'}</span>
+                  </div>
+                  {surchargeAmount > 0 && (
+                    <div className="flex justify-between py-1.5 border-b border-border/50">
+                      <span className="text-text-secondary">Acréscimo</span>
+                      <span className="font-medium text-warning">+ {formatCurrency(surchargeAmount)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-1.5">
                     <span className="text-text-secondary font-semibold">Total a pagar</span>
                     <span className="text-lg font-bold text-text-primary">{formatCurrency(total)}</span>
@@ -504,19 +551,28 @@ export default function NovaVendaPage() {
                   <span>− {formatCurrency(discountAmount)}</span>
                 </div>
               )}
-              {cashbackUsed > 0 && (
-                <div className="flex justify-between text-success">
-                  <span>Cashback</span>
-                  <span>− {formatCurrency(cashbackUsed)}</span>
-                </div>
-              )}
               {shippingCharged > 0 && (
                 <div className="flex justify-between text-text-secondary">
                   <span>Frete</span>
                   <span>+ {formatCurrency(shippingCharged)}</span>
                 </div>
               )}
-              <div className="flex justify-between font-bold text-text-primary border-t border-border pt-2 mt-2">
+              {surchargeAmount > 0 && (
+                <div className="flex justify-between text-warning">
+                  <span>Acréscimo</span>
+                  <span>+ {formatCurrency(surchargeAmount)}</span>
+                </div>
+              )}
+              {cashbackUsed > 0 && (
+                <div className="flex justify-between text-success">
+                  <span>Cashback</span>
+                  <span>− {formatCurrency(cashbackUsed)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-text-secondary border-t border-border pt-2 mt-2 text-xs">
+                <span>{deliveryMode === 'pickup' ? '📦 Retirada' : '🚚 Envio'}</span>
+              </div>
+              <div className="flex justify-between font-bold text-text-primary">
                 <span>Total</span>
                 <span className="text-lg">{formatCurrency(total)}</span>
               </div>
