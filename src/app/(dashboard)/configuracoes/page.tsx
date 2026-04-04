@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -11,6 +11,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/colecoes', icon: BookOpen, title: 'Coleções', description: 'Coleções e estações do catálogo.' },
   { href: '/cashback/configuracao', icon: Gift, title: 'Regra de Cashback', description: 'Taxa, prazo de liberação, expiração e valor mínimo.' },
   { href: '/configuracoes/frete', icon: Truck, title: 'Configuração de Frete', description: 'Origem logística, zonas de entrega, preços e regras de frete grátis.' },
+  { href: '/configuracoes/taxas-pagamento', icon: CreditCard, title: 'Taxas de Pagamento', description: 'Configure as taxas de cartão (1x–12x), PIX e Nuvemshop por parcelamento.' },
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
 ]
 
