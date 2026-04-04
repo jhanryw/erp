@@ -69,15 +69,33 @@ export default function NovaVendaPage() {
     queryKey: ['products-search', debouncedProduct],
     queryFn: async () => {
       if (!debouncedProduct) return []
-      const { data } = await supabase
+
+      // 1. Buscar IDs de produtos cujo nome bate com o termo
+      const { data: matchingProducts } = await supabase
+        .from('products')
+        .select('id')
+        .ilike('name', `%${debouncedProduct}%`)
+        .limit(15)
+      const productIds = (matchingProducts ?? []).map((p: any) => p.id)
+
+      // 2. Buscar variações por SKU OU por produto com nome correspondente
+      let query = supabase
         .from('product_variations')
         .select(`
           id, sku_variation, price_override, cost_override,
           products:product_id (id, name, sku, base_price, base_cost),
           stock(quantity)
         `)
-        .ilike('sku_variation', `%${debouncedProduct}%`)
         .limit(20)
+
+      if (productIds.length > 0) {
+        query = query.or(`sku_variation.ilike.%${debouncedProduct}%,product_id.in.(${productIds.join(',')})`)
+      } else {
+        query = query.ilike('sku_variation', `%${debouncedProduct}%`)
+      }
+
+      const { data } = await query
+
       // stock é retornado pelo Supabase como array [{quantity: N}] ou objeto {quantity: N}
       return (data ?? []).filter((v: any) => {
         const qty = Array.isArray(v.stock)
