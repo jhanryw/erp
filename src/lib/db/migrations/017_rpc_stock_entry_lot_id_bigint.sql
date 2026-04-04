@@ -1,17 +1,21 @@
--- Migration 017: Corrige tipo de v_lot_id em rpc_stock_entry
+-- Migration 017: Corrige rpc_stock_entry com schemas reais das 3 tabelas
 --
--- Problema: stock_lots.id é bigint (serial), mas a função declarava
---   v_lot_id uuid → RETURNING id INTO v_lot_id falha com
---   "invalid input syntax for type uuid: '1'"
+-- Problemas corrigidos (auditados via information_schema):
 --
--- Solução: trocar v_lot_id uuid → v_lot_id bigint.
---   - RETURNING id INTO v_lot_id: ✅ bigint → bigint
---   - v_lot_id::text em stock_movements.reference_id: ✅ bigint::text ok
---   - v_lot_id em finance_entries.stock_lot_id: ✅ FK bigint → bigint
---   - RETURN jsonb: usa v_lot_id::text para manter lot_id como string no JSON
---     (preserva compatibilidade com StockEntryResult.lot_id: string no TypeScript)
+--  1. v_lot_id uuid → integer
+--     stock_lots.id é integer (serial), não uuid.
+--     RETURNING id INTO v_lot_id falhava com "invalid input syntax for type uuid".
 --
--- CREATE OR REPLACE mantém a mesma assinatura — sem DROP necessário.
+--  2. stock_movements INSERT: remover "notes" e "created_by"
+--     Esses campos NÃO existem na tabela real de stock_movements.
+--
+--  3. entry_type::stock_entry_type (mantido da migration 016)
+--     stock_lots.entry_type é USER-DEFINED enum; p_entry_type é text.
+--
+-- Schemas confirmados:
+--   stock_lots       → id integer, entry_type enum, notes text, created_by uuid ✓
+--   stock_movements  → product_variation_id bigint, company_id int, SEM notes/created_by
+--   finance_entries  → stock_lot_id integer, created_by uuid, company_id int ✓
 
 CREATE OR REPLACE FUNCTION public.rpc_stock_entry(
   p_product_variation_id int,
@@ -33,7 +37,7 @@ AS $$
 DECLARE
   v_total_lot_cost  numeric;
   v_cost_per_unit   numeric;
-  v_lot_id          bigint;        -- era uuid; stock_lots.id é bigint/serial
+  v_lot_id          integer;   -- stock_lots.id é integer serial, não uuid
   v_prev_qty        numeric := 0;
   v_prev_avg_cost   numeric := 0;
   v_new_qty         numeric;
@@ -42,6 +46,7 @@ DECLARE
 BEGIN
   PERFORM set_config('app.stock_rpc', '1', true);
 
+  -- Buscar company_id a partir da variação
   SELECT p.company_id INTO v_company_id
   FROM product_variations pv
   JOIN products p ON p.id = pv.product_id
@@ -52,6 +57,8 @@ BEGIN
     + COALESCE(p_tax_cost, 0);
   v_cost_per_unit  := v_total_lot_cost / p_quantity_original;
 
+  -- ── 1. Inserir lote ──────────────────────────────────────────────────────────
+  -- stock_lots tem: notes ✓, created_by ✓, entry_type enum (requer cast) ✓
   INSERT INTO stock_lots (
     product_variation_id, supplier_id, entry_type,
     quantity_original, quantity_remaining,
@@ -62,7 +69,7 @@ BEGIN
   VALUES (
     p_product_variation_id,
     p_supplier_id,
-    p_entry_type::stock_entry_type,   -- cast text → enum (fix migration 016)
+    p_entry_type::stock_entry_type,
     p_quantity_original,
     p_quantity_original,
     p_unit_cost,
@@ -74,8 +81,9 @@ BEGIN
     p_notes,
     p_system_user_id
   )
-  RETURNING id INTO v_lot_id;       -- bigint → bigint: sem erro de cast
+  RETURNING id INTO v_lot_id;   -- integer → integer: sem erro de cast
 
+  -- ── 2. Ler posição atual (FOR UPDATE: evita race condition) ──────────────────
   SELECT quantity, avg_cost INTO v_prev_qty, v_prev_avg_cost
   FROM stock
   WHERE product_variation_id = p_product_variation_id
@@ -92,6 +100,7 @@ BEGIN
     ELSE v_cost_per_unit
   END;
 
+  -- ── 3. Atualizar posição de estoque ──────────────────────────────────────────
   INSERT INTO stock (product_variation_id, quantity, avg_cost, last_updated, company_id)
   VALUES (p_product_variation_id, v_new_qty, ROUND(v_new_avg_cost, 6), NOW(), v_company_id)
   ON CONFLICT (product_variation_id) DO UPDATE
@@ -99,18 +108,23 @@ BEGIN
         avg_cost     = ROUND(v_new_avg_cost, 6),
         last_updated = NOW();
 
+  -- ── 4. Registrar movimento ───────────────────────────────────────────────────
+  -- stock_movements NÃO tem "notes" nem "created_by" — removidos
   INSERT INTO stock_movements (
     product_variation_id, product_id, type, quantity,
-    previous_stock, new_stock, unit_cost, reference_id, created_by, company_id
+    previous_stock, new_stock, unit_cost, reference_id, company_id
   )
   SELECT
     p_product_variation_id, pv.product_id, 'entry', p_quantity_original,
     v_prev_qty::int, v_new_qty::int,
-    v_cost_per_unit, v_lot_id::text, p_system_user_id, v_company_id
+    v_cost_per_unit, v_lot_id::text, v_company_id
   FROM product_variations pv WHERE pv.id = p_product_variation_id;
 
+  -- ── 5. Lançamento financeiro ──────────────────────────────────────────────────
+  -- finance_entries.stock_lot_id é integer; v_lot_id é integer ✓
   INSERT INTO finance_entries (
-    type, category, description, amount, reference_date, stock_lot_id, created_by, company_id
+    type, category, description, amount, reference_date,
+    stock_lot_id, created_by, company_id
   )
   VALUES (
     'expense',
@@ -123,8 +137,9 @@ BEGIN
     v_company_id
   );
 
+  -- Retorna ::text para manter compatibilidade com StockEntryResult.lot_id: string
   RETURN jsonb_build_object(
-    'lot_id',         v_lot_id::text,  -- ::text preserva StockEntryResult.lot_id: string
+    'lot_id',         v_lot_id::text,
     'new_quantity',   v_new_qty,
     'new_avg_cost',   ROUND(v_new_avg_cost, 6),
     'total_lot_cost', ROUND(v_total_lot_cost, 2),
