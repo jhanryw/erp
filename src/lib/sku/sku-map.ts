@@ -117,20 +117,15 @@ export const SKU_MODELO: Record<string, Record<string, string>> = {
     regata:       '03',
   },
 
-  '12': { // Pijama com Calcinha
-    basico: '01',
-    renda:  '02',
+  '12': { // Camisola Americana
+    padrao:  '01',
+    renda:   '02',
+    sexy:    '03',
   },
 
   '13': { // Pijama Rendado
     com_bojo: '01',
     sem_bojo: '02',
-  },
-
-  '12': { // Camisola Americana
-    padrao:  '01',
-    renda:   '02',
-    sexy:    '03',
   },
 
   '14': { // Conjunto Calcinha + Sutiã
