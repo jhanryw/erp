@@ -187,6 +187,7 @@ export const SKU_COR: Record<string, string> = {
   rosa_com_preto:  '41',
   rose:            '42',
   chumbo:          '43',
+  verde_militar:   '44',
 }
 
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
