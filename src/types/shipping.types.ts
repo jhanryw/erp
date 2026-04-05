@@ -122,7 +122,7 @@ export interface ShippingCalculationResult {
   delivery_mode: DeliveryMode
   zone_id: number
   rule_id: number
-  distance_km: number
+  distance_km: number | null
   client_price: number
   internal_cost: number
   estimated_hours: number
