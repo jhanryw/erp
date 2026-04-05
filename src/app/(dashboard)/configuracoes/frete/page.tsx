@@ -45,9 +45,16 @@ export default function FreteConfigPage() {
       try {
         const res = await fetch('/api/shipping/admin/zones')
         const data = await res.json()
-        setZones(data.zones ?? data ?? [])
+        if (!res.ok) {
+          toast.error('Erro ao carregar zonas', { description: data.error ?? `Status ${res.status}` })
+          setZones([])
+          return
+        }
+        const list = data.zones ?? data
+        setZones(Array.isArray(list) ? list : [])
       } catch {
         toast.error('Erro ao carregar zonas de entrega')
+        setZones([])
       } finally {
         setLoadingZones(false)
       }
