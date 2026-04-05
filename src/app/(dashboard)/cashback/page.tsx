@@ -1,5 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
-import { getUserProfile } from '@/lib/supabase/session'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import Link from 'next/link'
 import { Gift, Settings, Clock, Percent, ShoppingBag, Wallet } from 'lucide-react'
 
@@ -96,9 +97,11 @@ async function getCashbackData(companyId: number | null) {
 
 export default async function CashbackPage() {
   await requirePageRole('gerente')
-  const user = await getUserProfile()
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
   const { config, pendingTotal, availableTotal, usedTotal, expiredTotal, transactions } =
-    await getCashbackData(user?.company_id ?? null)
+    await getCashbackData(profile?.company_id ?? null)
 
   return (
     <div className="space-y-6">
