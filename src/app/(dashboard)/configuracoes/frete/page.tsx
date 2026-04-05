@@ -69,27 +69,28 @@ export default function FreteConfigPage() {
     setSimResult(null)
     setSimLoading(true)
     try {
-      // 1. Buscar dados do CEP (cidade, bairro, coordenadas)
-      const cepRes = await fetch(`https://viacep.com.br/ws/${simCep}/json/`)
+      // 1. Buscar dados do CEP via endpoint interno (retorna cidade, bairro e coordenadas)
+      const cepRes = await fetch('/api/shipping/cep', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cep: simCep }),
+      })
       const cepData = await cepRes.json()
-      if (cepData.erro) {
-        setSimError('CEP não encontrado. Verifique e tente novamente.')
+      if (!cepRes.ok) {
+        setSimError(cepData.error ?? 'CEP não encontrado. Verifique e tente novamente.')
         return
       }
 
-      const city         = cepData.localidade ?? ''
-      const neighborhood = cepData.bairro     ?? ''
-
-      // 2. Calcular frete (lat/lng opcionais — o cálculo usa bairro/cidade/CEP)
+      // 2. Calcular frete com lat/lng reais
       const res = await fetch('/api/shipping/calculate', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           cep:         simCep,
-          city,
-          neighborhood,
-          latitude:    0,
-          longitude:   0,
+          city:        cepData.city        ?? '',
+          neighborhood:cepData.neighborhood ?? '',
+          latitude:    cepData.latitude     ?? 0,
+          longitude:   cepData.longitude    ?? 0,
           order_total: Number(simOrderValue),
         }),
       })
@@ -299,7 +300,9 @@ export default function FreteConfigPage() {
               </div>
               <div>
                 <p className="text-xs text-text-muted mb-0.5">Distância</p>
-                <p className="font-medium text-text-primary">{simResult.distance_km?.toFixed(1)} km</p>
+                <p className="font-medium text-text-primary">
+                  {simResult.distance_km != null ? `${simResult.distance_km.toFixed(2)} km` : '—'}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-text-muted mb-0.5">Preço ao cliente</p>

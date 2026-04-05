@@ -27,8 +27,11 @@ export async function calculateShipping(
 
     const origin = origins[0]
 
-    // 2. Calculate distance
-    const distance = calculateDistance(origin.latitude, origin.longitude, latitude, longitude)
+    // 2. Calculate distance (only when we have valid coordinates)
+    const hasCoords = origin.latitude && origin.longitude && latitude !== 0 && longitude !== 0
+    const distance = hasCoords
+      ? calculateDistance(origin.latitude, origin.longitude, latitude, longitude)
+      : null
 
     // 3. Find matching zone/rule by priority: CEP → Neighborhood → Distance
     const { data: zones } = await (admin as any)
@@ -44,23 +47,20 @@ export async function calculateShipping(
     let matchedRule: any = null
     let matchedZone: any = null
 
+    function getActiveRule(zone: any): any {
+      const rules = Array.isArray(zone.shipping_rules)
+        ? zone.shipping_rules
+        : zone.shipping_rules ? [zone.shipping_rules] : []
+      return rules.find((r: any) => r.is_active) ?? null
+    }
+
     // Try by CEP range
     for (const zone of zones) {
       const ranges = (zone.cep_ranges_json as Array<{ min: string; max: string }> | null) || []
       for (const range of ranges) {
-        const cepisInRange = cep >= range.min && cep <= range.max
-        if (cepisInRange) {
-          const rules = Array.isArray(zone.shipping_rules)
-            ? zone.shipping_rules
-            : zone.shipping_rules
-              ? [zone.shipping_rules]
-              : []
-          const rule = rules.find((r: any) => r.is_active)
-          if (rule) {
-            matchedRule = rule
-            matchedZone = zone
-            break
-          }
+        if (cep >= range.min && cep <= range.max) {
+          const rule = getActiveRule(zone)
+          if (rule) { matchedRule = rule; matchedZone = zone; break }
         }
       }
       if (matchedRule) break
@@ -73,40 +73,21 @@ export async function calculateShipping(
         const matches =
           neighborhoods.some((n: string) => n.toLowerCase() === neighborhood.toLowerCase()) &&
           zone.city?.toLowerCase() === city.toLowerCase()
-
         if (matches) {
-          const rules = Array.isArray(zone.shipping_rules)
-            ? zone.shipping_rules
-            : zone.shipping_rules
-              ? [zone.shipping_rules]
-              : []
-          const rule = rules.find((r: any) => r.is_active)
-          if (rule) {
-            matchedRule = rule
-            matchedZone = zone
-            break
-          }
+          const rule = getActiveRule(zone)
+          if (rule) { matchedRule = rule; matchedZone = zone; break }
         }
       }
     }
 
-    // Try by distance
-    if (!matchedRule) {
+    // Try by distance — only when real coordinates are available
+    if (!matchedRule && distance !== null) {
       for (const zone of zones) {
-        const minKm = zone.min_km || 0
-        const maxKm = zone.max_km || 999
+        const minKm = zone.min_km ?? 0
+        const maxKm = zone.max_km ?? 9999
         if (distance >= minKm && distance <= maxKm) {
-          const rules = Array.isArray(zone.shipping_rules)
-            ? zone.shipping_rules
-            : zone.shipping_rules
-              ? [zone.shipping_rules]
-              : []
-          const rule = rules.find((r: any) => r.is_active && r.allow_delivery)
-          if (rule) {
-            matchedRule = rule
-            matchedZone = zone
-            break
-          }
+          const rule = getActiveRule(zone)
+          if (rule?.allow_delivery) { matchedRule = rule; matchedZone = zone; break }
         }
       }
     }
@@ -135,13 +116,15 @@ export async function calculateShipping(
       delivery_mode: 'delivery',
       zone_id: matchedZone.id,
       rule_id: matchedRule.id,
-      distance_km: Math.round(distance * 100) / 100,
+      distance_km: distance !== null ? Math.round(distance * 100) / 100 : null,
       client_price: clientPrice,
       internal_cost: internalCost,
       estimated_hours: matchedRule.estimated_hours,
       subsidy,
       free_shipping_applied: freeShippingApplied,
-      reason: `Zona: ${matchedZone.name} | ${Math.round(distance)}km`,
+      reason: distance !== null
+        ? `Zona: ${matchedZone.name} | ${Math.round(distance * 10) / 10}km`
+        : `Zona: ${matchedZone.name}`,
     }
   } catch (error) {
     console.error('[Shipping Calculator] Erro:', error)

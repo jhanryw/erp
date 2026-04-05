@@ -9,6 +9,40 @@ const schema = z.object({
   cep: z.string().min(5),
 })
 
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const cep = searchParams.get('cep') ?? ''
+
+    const parsed = schema.safeParse({ cep })
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'CEP inválido' }, { status: 422 })
+    }
+
+    const cepData = await fetchCEP(parsed.data.cep)
+    if (!cepData) {
+      return NextResponse.json({ error: 'CEP não encontrado' }, { status: 404 })
+    }
+
+    const address = `${cepData.logradouro}, ${cepData.bairro}, ${cepData.localidade}, ${cepData.uf}, Brasil`
+    const coords = await geocodeAddress(address)
+
+    return NextResponse.json({
+      cep:          cepData.cep,
+      street:       cepData.logradouro,
+      neighborhood: cepData.bairro,
+      city:         cepData.localidade,
+      state:        cepData.uf,
+      complement:   cepData.complemento,
+      latitude:     coords?.lat,
+      longitude:    coords?.lon,
+    })
+  } catch (error) {
+    console.error('[API Shipping CEP GET]', error)
+    return NextResponse.json({ error: 'Erro ao processar requisição' }, { status: 500 })
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json()
