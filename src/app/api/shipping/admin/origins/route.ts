@@ -6,16 +6,16 @@ import { requireRole } from '@/lib/supabase/session'
 import { z } from 'zod'
 
 const schemaCreate = z.object({
-  name: z.string().min(2),
-  cep: z.string().min(5),
-  street: z.string().min(2),
-  number: z.string().optional(),
-  complement: z.string().optional(),
+  name:         z.string().min(2),
+  cep:          z.string().min(5),
+  street:       z.string().min(2),
+  number:       z.string().optional(),
+  complement:   z.string().optional(),
   neighborhood: z.string().min(2),
-  city: z.string().min(2),
-  state: z.string().length(2),
-  latitude: z.coerce.number(),
-  longitude: z.coerce.number(),
+  city:         z.string().min(2),
+  state:        z.string().length(2),
+  latitude:     z.preprocess((v) => (v == null || v === '' ? null : Number(v)), z.number().nullable().optional()),
+  longitude:    z.preprocess((v) => (v == null || v === '' ? null : Number(v)), z.number().nullable().optional()),
 })
 
 export async function GET() {

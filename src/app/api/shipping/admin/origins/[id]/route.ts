@@ -14,8 +14,8 @@ const schemaUpdate = z.object({
   neighborhood: z.string().min(2).optional(),
   city: z.string().min(2).optional(),
   state: z.string().length(2).optional(),
-  latitude: z.coerce.number().optional(),
-  longitude: z.coerce.number().optional(),
+  latitude:  z.preprocess((v) => (v == null || v === '' ? null : Number(v)), z.number().nullable().optional()),
+  longitude: z.preprocess((v) => (v == null || v === '' ? null : Number(v)), z.number().nullable().optional()),
   is_active: z.boolean().optional(),
 })
 

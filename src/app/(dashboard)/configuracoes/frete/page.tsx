@@ -22,7 +22,8 @@ interface ShippingZone {
 }
 
 interface SimulateResult {
-  zone_name: string
+  zone_name?: string
+  reason?: string
   client_price: number
   internal_cost: number
   distance_km: number
@@ -68,14 +69,36 @@ export default function FreteConfigPage() {
     setSimResult(null)
     setSimLoading(true)
     try {
+      // 1. Buscar dados do CEP (cidade, bairro, coordenadas)
+      const cepRes = await fetch(`https://viacep.com.br/ws/${simCep}/json/`)
+      const cepData = await cepRes.json()
+      if (cepData.erro) {
+        setSimError('CEP não encontrado. Verifique e tente novamente.')
+        return
+      }
+
+      const city         = cepData.localidade ?? ''
+      const neighborhood = cepData.bairro     ?? ''
+
+      // 2. Calcular frete (lat/lng opcionais — o cálculo usa bairro/cidade/CEP)
       const res = await fetch('/api/shipping/calculate', {
-        method: 'POST',
+        method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cep: simCep, order_value: Number(simOrderValue) }),
+        body: JSON.stringify({
+          cep:         simCep,
+          city,
+          neighborhood,
+          latitude:    0,
+          longitude:   0,
+          order_total: Number(simOrderValue),
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setSimError(data.error ?? 'Erro ao calcular frete')
+        const errMsg = typeof data.error === 'string'
+          ? data.error
+          : 'CEP ou bairro não atendido pelas zonas configuradas.'
+        setSimError(errMsg)
       } else {
         setSimResult(data)
       }
@@ -255,7 +278,9 @@ export default function FreteConfigPage() {
         {simError && (
           <div className="mt-4 p-3 rounded-lg bg-error/10 border border-error/20 flex items-start gap-2">
             <XCircle className="w-4 h-4 text-error shrink-0 mt-0.5" />
-            <p className="text-sm text-error">{simError}</p>
+            <p className="text-sm text-error">
+              {typeof simError === 'string' ? simError : 'Não foi possível calcular o frete para este CEP.'}
+            </p>
           </div>
         )}
 
@@ -268,7 +293,9 @@ export default function FreteConfigPage() {
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
                 <p className="text-xs text-text-muted mb-0.5">Zona encontrada</p>
-                <p className="font-medium text-text-primary">{simResult.zone_name}</p>
+                <p className="font-medium text-text-primary">
+                  {simResult.zone_name ?? simResult.reason ?? '—'}
+                </p>
               </div>
               <div>
                 <p className="text-xs text-text-muted mb-0.5">Distância</p>
