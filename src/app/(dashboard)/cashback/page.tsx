@@ -121,7 +121,7 @@ export default async function CashbackPage() {
           </p>
         </div>
 
-        <Link href="/cashback/configuracoes">
+        <Link href="/cashback/configuracao">
           <Button>
             <Settings className="mr-2 h-4 w-4" />
             Configurar
