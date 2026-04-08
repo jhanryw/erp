@@ -5,6 +5,7 @@ import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -71,6 +72,12 @@ export async function POST(request: Request) {
       action: 'create', resource: 'sale',
       resourceId: sale.id, detail: sale.sale_number,
     })
+
+    // Sincronizar estoque para Nuvemshop (não-fatal, fire-and-forget)
+    const soldVariationIds = parsed.data.items.map((i) => i.product_variation_id)
+    pushMultipleVariantStocksToNuvemshop(soldVariationIds, { eventType: 'stock_push_erp' }).catch(
+      (err) => console.error('[POST /api/vendas] Erro na sincronização Nuvemshop', err)
+    )
 
     // Criar envio automaticamente após a venda
     const { delivery_mode } = parsed.data

@@ -4,8 +4,6 @@
  * Envs necessárias:
  *   NUVEMSHOP_ACCESS_TOKEN  — token de acesso da loja
  *   NUVEMSHOP_STORE_ID      — ID numérico da loja
- *
- * Escopo atual: criação de produtos (sem update, sem deleção).
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -47,6 +45,27 @@ export interface NuvemshopProductResponse {
   variants: Array<{ id: number; price: string; stock: number }>
 }
 
+// ─── createNuvemshopProductFull types ─────────────────────────────────────────
+
+export interface NuvemshopVariantInput {
+  /** ERP internal variation id — used by caller to correlate mapping */
+  internalVariationId: number
+  price:               number
+  stock:               number
+  sku?:                string
+  /** Ordered attribute values matching attributeNames order, e.g. ["Rosa", "M"] */
+  attributeValues:     string[]
+}
+
+export interface NuvemshopProductFullPayload {
+  name:            string
+  description?:    string
+  images?:         string[]
+  /** Ordered attribute type names, e.g. ["Cor", "Tamanho"] */
+  attributeNames:  string[]
+  variants:        NuvemshopVariantInput[]
+}
+
 // ─── createNuvemshopProduct ───────────────────────────────────────────────────
 
 /**
@@ -73,6 +92,56 @@ export async function createNuvemshopProduct(
   if (payload.images && payload.images.length > 0) {
     body.images = payload.images.map((src) => ({ src }))
   }
+
+  const res = await fetch(`${baseUrl()}/products`, {
+    method:  'POST',
+    headers: authHeaders(),
+    body:    JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Nuvemshop API ${res.status}: ${text}`)
+  }
+
+  return res.json() as Promise<NuvemshopProductResponse>
+}
+
+// ─── createNuvemshopProductFull ───────────────────────────────────────────────
+
+/**
+ * Cria um produto multi-variante na Nuvemshop com atributos, SKU e estoque por variante.
+ * Retorna o produto criado incluindo todos os variants com seus IDs externos.
+ */
+export async function createNuvemshopProductFull(
+  payload: NuvemshopProductFullPayload
+): Promise<NuvemshopProductResponse> {
+  const body: Record<string, unknown> = {
+    name: { pt: payload.name },
+  }
+
+  if (payload.description) {
+    body.description = { pt: payload.description }
+  }
+
+  if (payload.images && payload.images.length > 0) {
+    body.images = payload.images.map((src) => ({ src }))
+  }
+
+  // Attributes define the variant dimensions at product level (e.g. "Cor", "Tamanho")
+  if (payload.attributeNames.length > 0) {
+    body.attributes = payload.attributeNames.map((name) => ({ pt: name }))
+  }
+
+  body.variants = payload.variants.map((v) => ({
+    price: v.price.toFixed(2),
+    stock: v.stock,
+    ...(v.sku ? { sku: v.sku } : {}),
+    // values must align with the attributes order
+    ...(v.attributeValues.length > 0
+      ? { values: v.attributeValues.map((val) => ({ pt: val })) }
+      : {}),
+  }))
 
   const res = await fetch(`${baseUrl()}/products`, {
     method:  'POST',

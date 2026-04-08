@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { updateVariantStock } from '@/lib/integrations/nuvemshop'
+import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
@@ -257,34 +257,12 @@ export async function POST(request: Request) {
               // Não interrompe o fluxo — ledger principal (stock_movements) já foi atualizado pela RPC
             }
 
-            // 5c. Sincronizar estoque de volta para a Nuvemshop
-            // Buscar external_variant_id para chamar updateVariantStock
-            const variantKeyForItem = order.products.find(
-              (p) => {
-                const variantKey = p.variant_id != null ? String(p.variant_id) : null
-                const mapping    = variantKey ? mappingByVariantId.get(variantKey) : undefined
-                return mapping?.product_variation_id === item.product_variation_id
-              }
-            )
-
-            if (variantKeyForItem?.variant_id != null) {
-              const mapping = mappingByVariantId.get(String(variantKeyForItem.variant_id))
-              if (mapping) {
-                try {
-                  await updateVariantStock(
-                    mapping.external_id,
-                    String(variantKeyForItem.variant_id),
-                    newQty
-                  )
-                } catch (syncErr) {
-                  console.error(
-                    '[webhook/order] Erro ao sincronizar estoque na Nuvemshop',
-                    { variant_id: variantKeyForItem.variant_id, error: syncErr }
-                  )
-                  // Falha não crítica: ERP está correto, Nuvemshop será corrigida em próxima sincronização
-                }
-              }
-            }
+            // 5c. Confirmar estoque final na Nuvemshop via serviço centralizado
+            // (loga em nuvemshop_sync_logs + atualiza last_stock_synced_at automaticamente)
+            await pushVariantStockToNuvemshop(item.product_variation_id, {
+              eventType:       'stock_confirm_ns',
+              externalOrderId: externalId,
+            })
           }
         } catch (stockErr) {
           console.error('[webhook/order] Exceção na baixa de estoque do item', { item_id: item.id, error: stockErr })

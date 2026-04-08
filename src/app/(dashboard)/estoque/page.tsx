@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   Package,
   DollarSign,
+  Boxes,
 } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -26,6 +27,7 @@ import { formatDate } from '@/lib/utils/date'
 export const dynamic = 'force-dynamic'
 
 type StockStatusRow = {
+  product_id: number
   product_name: string
   sku_variation: string
   tamanho: string | null
@@ -41,14 +43,16 @@ async function getStockData() {
   const supabase = createAdminClient()
 
   const [stockItems, summary] = await Promise.all([
+    // Lista para a tabela — inclui variações zeradas (cadastro mantido para reposição)
     supabase
       .from('mv_stock_status')
       .select('*')
       .order('current_qty', { ascending: true })
       .limit(50),
+    // Agrega todos os registros; product_id necessário para contagem de produtos distintos
     supabase
       .from('mv_stock_status')
-      .select('current_qty, stock_value_at_cost, stock_value_at_price'),
+      .select('product_id, current_qty, stock_value_at_cost, stock_value_at_price'),
   ])
 
   if (stockItems.error) {
@@ -60,20 +64,22 @@ async function getStockData() {
   }
 
   const items = (stockItems.data ?? []) as StockStatusRow[]
-  const all = (summary.data ?? []) as StockStatusRow[]
+  const all   = (summary.data ?? []) as StockStatusRow[]
+
+  // Apenas variações com estoque físico real — variações zeradas continuam no catálogo
+  // mas não devem distorcer os indicadores operacionais
+  const withStock = all.filter((r) => Number(r.current_qty ?? 0) > 0)
 
   return {
     items,
-    totalQty: all.reduce((s, r) => s + Number(r.current_qty ?? 0), 0),
-    totalCostValue: all.reduce(
-      (s, r) => s + Number(r.stock_value_at_cost ?? 0),
-      0
-    ),
-    totalSaleValue: all.reduce(
-      (s, r) => s + Number(r.stock_value_at_price ?? 0),
-      0
-    ),
-    alertCount: all.filter((r) => Number(r.current_qty ?? 0) <= 3).length,
+    // Produtos distintos que possuem pelo menos uma variação em estoque
+    productCount:   new Set(withStock.map((r) => r.product_id)).size,
+    totalQty:       withStock.reduce((s, r) => s + Number(r.current_qty), 0),
+    totalCostValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_cost  ?? 0), 0),
+    totalSaleValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_price ?? 0), 0),
+    // Alerta somente para variações que EXISTEM em estoque mas estão acabando (1–3 unidades)
+    // Variações zeradas são placeholder de catálogo, não "alerta de falta"
+    alertCount: withStock.filter((r) => Number(r.current_qty) <= 3).length,
   }
 }
 
@@ -110,7 +116,12 @@ export default async function EstoquePage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <StatCard
+          title="Produtos"
+          value={formatNumber(data.productCount)}
+          icon={<Boxes className="h-4 w-4" />}
+        />
         <StatCard
           title="Quantidade Total"
           value={formatNumber(data.totalQty)}
