@@ -71,7 +71,7 @@ export const saleSchema = z.object({
   customer_id:      z.number().positive('Cliente obrigatório'),
   payment_method:   z.enum(['pix', 'card', 'cash']),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
-  sale_origin:      z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional(),
+  sale_origin:      z.preprocess(v => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional()),
   discount_amount:  z.number().min(0).default(0),
   surcharge_amount: z.number().min(0).default(0),
   cashback_used:    z.number().min(0).default(0),

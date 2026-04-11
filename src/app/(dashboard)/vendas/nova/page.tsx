@@ -41,6 +41,7 @@ export default function NovaVendaPage() {
     resolver: zodResolver(saleSchema),
     defaultValues: {
       items: [],
+      payment_method: 'pix' as const,
       discount_amount: 0,
       surcharge_amount: 0,
       cashback_used: 0,
@@ -114,12 +115,12 @@ export default function NovaVendaPage() {
     setValue('customer_id', customer.id)
     setCustomerSearch(customer.name)
 
-    // Buscar saldo de cashback
+    // Buscar saldo de cashback (maybeSingle evita 406 quando cliente não tem linha na view)
     const { data } = await supabase
       .from('v_cashback_balance')
       .select('available_balance')
       .eq('customer_id', customer.id)
-      .single() as unknown as { data: { available_balance: number } | null, error: any }
+      .maybeSingle() as unknown as { data: { available_balance: number } | null, error: any }
     setCashbackBalance(data?.available_balance ?? 0)
   }
 
@@ -150,20 +151,27 @@ export default function NovaVendaPage() {
   const total = Math.max(0, gross - cashbackUsed)
 
   async function onSubmit(data: SaleFormData) {
-    const res = await fetch('/api/vendas', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    })
-    const json = await res.json()
-    if (!res.ok) {
-      toast.error('Erro ao registrar venda', { description: json.error })
-      return
+    try {
+      const res = await fetch('/api/vendas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error('Erro ao registrar venda', { description: json.error ?? 'Erro desconhecido' })
+        return
+      }
+      toast.success('Venda registrada!', {
+        description: `Pedido ${json.sale.sale_number} criado com sucesso.`,
+      })
+      router.push(`/vendas/${json.sale.id}`)
+    } catch (err) {
+      console.error('[onSubmit] erro inesperado:', err)
+      toast.error('Erro inesperado ao registrar venda', {
+        description: err instanceof Error ? err.message : 'Verifique o console para detalhes.',
+      })
     }
-    toast.success('Venda registrada!', {
-      description: `Pedido ${json.sale.sale_number} criado com sucesso.`,
-    })
-    router.push(`/vendas/${json.sale.id}`)
   }
 
   return (
@@ -523,6 +531,19 @@ export default function NovaVendaPage() {
                     <span className="text-lg font-bold text-text-primary">{formatCurrency(total)}</span>
                   </div>
                 </div>
+
+                {Object.keys(errors).length > 0 && (
+                  <div className="rounded-lg bg-error/10 border border-error/30 p-3 text-xs text-error space-y-1">
+                    <p className="font-semibold">Corrija os erros antes de continuar:</p>
+                    {errors.customer_id && <p>• Cliente: {errors.customer_id.message}</p>}
+                    {errors.payment_method && <p>• Forma de pagamento: {errors.payment_method.message}</p>}
+                    {errors.items && <p>• Itens: {typeof errors.items.message === 'string' ? errors.items.message : 'Verifique os itens da venda'}</p>}
+                    {errors.discount_amount && <p>• Desconto: {errors.discount_amount.message}</p>}
+                    {errors.surcharge_amount && <p>• Acréscimo: {errors.surcharge_amount.message}</p>}
+                    {errors.cashback_used && <p>• Cashback: {errors.cashback_used.message}</p>}
+                    {errors.shipping_charged && <p>• Frete: {errors.shipping_charged.message}</p>}
+                  </div>
+                )}
 
                 <div className="flex gap-3">
                   <Button type="button" variant="secondary" onClick={() => setStep(2)} className="flex-1">
