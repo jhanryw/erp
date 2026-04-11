@@ -22,6 +22,8 @@ export interface CreateSaleInput {
   customer_id: number
   payment_method: 'pix' | 'card' | 'cash'
   sale_origin?: string | null
+  /** 'use' → aplica saldo existente, não gera novo cashback; 'accumulate' → gera cashback normalmente */
+  cashback_action?: 'use' | 'accumulate'
   discount_amount: number
   surcharge_amount: number
   cashback_used: number
@@ -207,19 +209,26 @@ export function checkSalePrices(items: SaleItem[]): { ok: true; warnings: string
 export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome<SaleResult>> {
   const admin = createAdminClient() // admin client: RPC SECURITY DEFINER, equivalente ao service_role
 
+  // accumulate_cashback = true  → gera novo cashback ao fechar a venda (padrão)
+  // accumulate_cashback = false → não gera cashback (cliente optou por usar o saldo existente)
+  // Nota: a RPC precisa honrar p_accumulate_cashback para controlar a geração.
+  // Se a função ainda não suportar o parâmetro, o comportamento padrão (gerar cashback) é mantido.
+  const accumulateCashback = input.cashback_action !== 'use'
+
   const { data: sale, error } = await (admin as any)
     .rpc('rpc_create_sale', {
-      p_customer_id:      input.customer_id,
-      p_seller_id:        input.systemUserId,
-      p_payment_method:   input.payment_method,
-      p_sale_origin:      input.sale_origin ?? null,
-      p_discount_amount:  input.discount_amount,
-      p_surcharge_amount: input.surcharge_amount ?? 0,
-      p_cashback_used:    input.cashback_used,
-      p_shipping_charged: input.shipping_charged,
-      p_notes:            input.notes ?? null,
-      p_items:            input.items,
-      p_system_user_id:   input.systemUserId,
+      p_customer_id:         input.customer_id,
+      p_seller_id:           input.systemUserId,
+      p_payment_method:      input.payment_method,
+      p_sale_origin:         input.sale_origin ?? null,
+      p_discount_amount:     input.discount_amount,
+      p_surcharge_amount:    input.surcharge_amount ?? 0,
+      p_cashback_used:       input.cashback_used,
+      p_shipping_charged:    input.shipping_charged,
+      p_notes:               input.notes ?? null,
+      p_items:               input.items,
+      p_system_user_id:      input.systemUserId,
+      p_accumulate_cashback: accumulateCashback,
     }) as unknown as {
       data: { id: number; sale_number: string } | null
       error: { code: string; message: string } | null

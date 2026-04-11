@@ -42,6 +42,7 @@ export default function NovaVendaPage() {
     defaultValues: {
       items: [],
       payment_method: 'pix' as const,
+      cashback_action: 'accumulate' as const,
       discount_amount: 0,
       surcharge_amount: 0,
       cashback_used: 0,
@@ -145,6 +146,7 @@ export default function NovaVendaPage() {
   const cashbackUsed = watch('cashback_used') ?? 0
   const shippingCharged = watch('shipping_charged') ?? 0
   const deliveryMode = watch('delivery_mode')
+  const cashbackAction = watch('cashback_action') ?? 'accumulate'
 
   const subtotal = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
   const gross = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
@@ -475,14 +477,52 @@ export default function NovaVendaPage() {
                 </div>
 
                 {cashbackBalance > 0 && (
-                  <Input
-                    label={`Cashback (disponível: ${formatCurrency(cashbackBalance)})`}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max={cashbackBalance}
-                    {...register('cashback_used', { valueAsNumber: true })}
-                  />
+                  <div className="space-y-3">
+                    <div className="space-y-1.5">
+                      <p className="text-xs font-medium text-text-secondary">
+                        Cashback disponível:{' '}
+                        <span className="text-success font-semibold">{formatCurrency(cashbackBalance)}</span>
+                      </p>
+                      <div className="flex gap-2">
+                        {(
+                          [
+                            { value: 'accumulate', label: 'Acumular cashback', desc: 'Gera novo crédito nessa compra' },
+                            { value: 'use',        label: 'Usar cashback',      desc: 'Aplica saldo como desconto' },
+                          ] as const
+                        ).map(({ value, label, desc }) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => {
+                              setValue('cashback_action', value)
+                              if (value === 'accumulate') setValue('cashback_used', 0)
+                            }}
+                            className={`flex-1 p-3 rounded-lg border text-left text-sm transition-colors ${
+                              cashbackAction === value
+                                ? 'bg-brand/10 border-brand'
+                                : 'bg-bg-overlay border-border hover:border-brand/40'
+                            }`}
+                          >
+                            <p className={`font-medium ${cashbackAction === value ? 'text-brand' : 'text-text-primary'}`}>
+                              {label}
+                            </p>
+                            <p className="text-xs text-text-muted mt-0.5">{desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {cashbackAction === 'use' && (
+                      <Input
+                        label={`Valor a usar (máx. ${formatCurrency(cashbackBalance)})`}
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        max={cashbackBalance}
+                        {...register('cashback_used', { valueAsNumber: true })}
+                      />
+                    )}
+                  </div>
                 )}
 
                 <Input
@@ -524,6 +564,18 @@ export default function NovaVendaPage() {
                     <div className="flex justify-between py-1.5 border-b border-border/50">
                       <span className="text-text-secondary">Acréscimo</span>
                       <span className="font-medium text-warning">+ {formatCurrency(surchargeAmount)}</span>
+                    </div>
+                  )}
+                  {cashbackBalance > 0 && (
+                    <div className="flex justify-between py-1.5 border-b border-border/50">
+                      <span className="text-text-secondary">Cashback</span>
+                      {cashbackAction === 'use' ? (
+                        <span className="font-medium text-success">
+                          − {formatCurrency(cashbackUsed)} (usando saldo)
+                        </span>
+                      ) : (
+                        <span className="font-medium text-brand">Acumulando nesta compra</span>
+                      )}
                     </div>
                   )}
                   <div className="flex justify-between py-1.5">

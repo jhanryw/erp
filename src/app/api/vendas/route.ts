@@ -22,6 +22,9 @@ const schema = z.object({
   payment_method:   z.enum(['pix', 'card', 'cash']),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  // 'use' → aplica saldo existente, não gera novo cashback
+  // 'accumulate' → não usa saldo, gera cashback normalmente
+  cashback_action:  z.enum(['use', 'accumulate']).default('accumulate'),
   discount_amount:  z.number().min(0).default(0),
   surcharge_amount: z.number().min(0).default(0),
   cashback_used:    z.number().min(0).default(0),
@@ -62,8 +65,15 @@ export async function POST(request: Request) {
       )
     }
 
+    // Garantir coerência: se cashback_action === 'use', cashback_used pode ser > 0;
+    // se 'accumulate', forçar cashback_used = 0 independente do que foi enviado.
+    const saleData = {
+      ...parsed.data,
+      cashback_used: parsed.data.cashback_action === 'accumulate' ? 0 : parsed.data.cashback_used,
+    }
+
     // Criar venda via service (sale + itens + estoque + finance)
-    const result = await createSale({ ...parsed.data, systemUserId: user.id })
+    const result = await createSale({ ...saleData, systemUserId: user.id })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
     const sale = result.data
@@ -74,23 +84,23 @@ export async function POST(request: Request) {
     })
 
     // Sincronizar estoque para Nuvemshop (não-fatal, fire-and-forget)
-    const soldVariationIds = parsed.data.items.map((i) => i.product_variation_id)
+    const soldVariationIds = saleData.items.map((i) => i.product_variation_id)
     pushMultipleVariantStocksToNuvemshop(soldVariationIds, { eventType: 'stock_push_erp' }).catch(
       (err) => console.error('[POST /api/vendas] Erro na sincronização Nuvemshop', err)
     )
 
     // Criar envio automaticamente após a venda
-    const { delivery_mode } = parsed.data
+    const { delivery_mode } = saleData
     const shipmentStatus = delivery_mode === 'pickup' ? 'aguardando_retirada' : 'aguardando_confirmacao'
     const admin = createAdminClient()
     await (admin as any)
       .from('shipments')
       .insert({
         order_id:      sale.id,
-        customer_id:   parsed.data.customer_id,
+        customer_id:   saleData.customer_id,
         delivery_mode,
         status:        shipmentStatus,
-        notes:         parsed.data.notes ?? null,
+        notes:         saleData.notes ?? null,
         company_id:    user.company_id,
       })
     // Erro no shipment é não-fatal: a venda já foi criada

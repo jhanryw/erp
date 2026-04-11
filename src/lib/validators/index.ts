@@ -72,6 +72,9 @@ export const saleSchema = z.object({
   payment_method:   z.enum(['pix', 'card', 'cash']),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess(v => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional()),
+  // 'use'      → aplica saldo existente como desconto, não gera novo cashback
+  // 'accumulate' → não usa saldo, gera cashback normalmente ao fechar a venda
+  cashback_action:  z.enum(['use', 'accumulate']).default('accumulate'),
   discount_amount:  z.number().min(0).default(0),
   surcharge_amount: z.number().min(0).default(0),
   cashback_used:    z.number().min(0).default(0),
