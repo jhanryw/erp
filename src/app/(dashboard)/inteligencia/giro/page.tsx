@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import { formatDate } from '@/lib/utils/date'
 export const dynamic = 'force-dynamic'
 
 async function getTurnoverData() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const [stockRes, perfRes] = await Promise.all([
     (supabase
       .from('mv_stock_status')

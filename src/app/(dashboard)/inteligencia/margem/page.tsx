@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 export const dynamic = 'force-dynamic'
 
 async function getMarginData() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const { data } = await supabase
     .from('mv_product_performance')
     .select('product_id, product_name, sku, base_cost, base_price, margin_pct, realized_margin_pct, total_revenue, total_gross_profit, total_units_sold')

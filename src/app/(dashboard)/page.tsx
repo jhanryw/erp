@@ -10,7 +10,9 @@ import { Button } from '@/components/ui/button'
 import { DailySalesChart } from '@/components/modules/dashboards/daily-sales-chart'
 import { TopProductsWidget } from '@/components/modules/dashboards/top-products-widget'
 import { StockAlertsWidget } from '@/components/modules/dashboards/stock-alerts-widget'
+import { RefreshViewsButton } from '@/components/modules/dashboards/refresh-views-button'
 import { formatCurrency } from '@/lib/utils/currency'
+import { hasMinRole } from '@/types/roles'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,12 +37,16 @@ export default async function DashboardPage() {
             Visão geral dos principais indicadores do ERP
           </p>
         </div>
-        <Link href="/dashboard">
-          <Button variant="outline" size="sm">
-            <BarChart2 className="mr-2 h-4 w-4" />
-            Dashboard Executivo
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {hasMinRole(role, 'gerente') && <RefreshViewsButton />}
+          <Link href="/dashboard">
+            <Button variant="outline" size="sm">
+              <BarChart2 className="mr-2 h-4 w-4" />
+              <span className="hidden sm:inline">Dashboard Executivo</span>
+              <span className="sm:hidden">Executivo</span>
+            </Button>
+          </Link>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

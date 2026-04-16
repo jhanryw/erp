@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -11,7 +11,7 @@ import type { RfmSegment } from '@/types/database.types'
 export const dynamic = 'force-dynamic'
 
 async function getRfmData() {
-  const supabase = createClient()
+  const supabase = createAdminClient()
   const { data } = await supabase
     .from('mv_customer_rfm')
     .select('customer_id, days_since_last_purchase, purchase_count, total_spent, r_score, f_score, m_score, rfm_total, segment')
