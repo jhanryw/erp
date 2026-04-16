@@ -198,7 +198,59 @@ export default async function EstoquePage({
               : `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} em estoque`}
           </CardHeader>
 
-          <div className="overflow-x-auto">
+          {/* ── Mobile: cards ──────────────────────────────── */}
+          <div className="md:hidden divide-y divide-border">
+            {data.items.map((item, idx) => {
+              const qty = item.current_qty ?? 0
+              return (
+                <div key={`${item.sku_variation}-${idx}`} className="px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-text-primary truncate">{item.product_name}</p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        <code className="font-mono">{item.sku_variation}</code>
+                        {(item.cor || item.tamanho) && (
+                          <span className="ml-1.5">
+                            {[item.cor, item.tamanho].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className={`text-lg font-bold tabular-nums ${
+                        qty === 0 ? 'text-error' : qty <= 3 ? 'text-warning' : 'text-text-primary'
+                      }`}>
+                        {formatNumber(qty)}
+                      </p>
+                      <p className="text-[10px] text-text-muted leading-none">unidades</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 mt-2 text-xs text-text-muted">
+                    <span>
+                      Custo médio:{' '}
+                      <span className="text-text-secondary font-medium">
+                        {formatCurrency(item.avg_cost ?? 0)}
+                      </span>
+                    </span>
+                    <span>
+                      Venda:{' '}
+                      <span className="text-text-secondary font-medium">
+                        {formatCurrency(item.stock_value_at_price ?? 0)}
+                      </span>
+                    </span>
+                  </div>
+                  {item.last_entry_date && (
+                    <p className="text-[11px] text-text-muted mt-1">
+                      Entrada: {formatDate(item.last_entry_date)}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* ── Desktop: tabela ─────────────────────────────── */}
+          <div className="hidden md:block overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>

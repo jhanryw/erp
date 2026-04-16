@@ -92,17 +92,17 @@ async function getCashbackData(companyId: number | null, filter: FilterKey = 'to
       .limit(200),
   ])
 
-  const all = (totals.data ?? []) as CashbackRow[]
+  const all             = (totals.data ?? []) as CashbackRow[]
   const allTransactions = (transactions.data ?? []) as any[]
 
-  const pendingTotal    = all.filter((t) => t.status === 'pending').reduce((s, t) => s + Number(t.amount ?? 0), 0)
-  const availableTotal  = all.filter((t) => t.status === 'available').reduce((s, t) => s + Number(t.amount ?? 0), 0)
-  const usedTotal       = all.filter((t) => t.type === 'use').reduce((s, t) => s + Number(t.amount ?? 0), 0)
-  const expiredTotal    = all.filter((t) => t.type === 'expire').reduce((s, t) => s + Number(t.amount ?? 0), 0)
+  const pendingTotal   = all.filter((t) => t.status === 'pending').reduce((s, t) => s + Number(t.amount ?? 0), 0)
+  const availableTotal = all.filter((t) => t.status === 'available').reduce((s, t) => s + Number(t.amount ?? 0), 0)
+  const usedTotal      = all.filter((t) => t.type === 'use').reduce((s, t) => s + Number(t.amount ?? 0), 0)
+  const expiredTotal   = all.filter((t) => t.type === 'expire').reduce((s, t) => s + Number(t.amount ?? 0), 0)
 
-  const expiringSoon        = allTransactions.filter(isExpiringSoon)
-  const expiringSoonCount   = expiringSoon.length
-  const expiringSoonTotal   = expiringSoon.reduce((s, t) => s + Number(t.amount ?? 0), 0)
+  const expiringSoon      = allTransactions.filter(isExpiringSoon)
+  const expiringSoonCount = expiringSoon.length
+  const expiringSoonTotal = expiringSoon.reduce((s, t) => s + Number(t.amount ?? 0), 0)
 
   let filteredTransactions = allTransactions
   if (filter === 'disponiveis') filteredTransactions = allTransactions.filter((t) => t.status === 'available')
@@ -161,30 +161,31 @@ export default async function CashbackPage({
         <Link href="/cashback/configuracao">
           <Button>
             <Settings className="mr-2 h-4 w-4" />
-            Configurar
+            <span className="hidden sm:inline">Configurar</span>
+            <span className="sm:hidden">Config.</span>
           </Button>
         </Link>
       </div>
 
       {/* Alerta: créditos a expirar */}
       {expiringSoonCount > 0 && (
-        <div className="card p-4 border-warning/40 bg-warning/5 flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-warning shrink-0" />
+        <div className="card p-4 border-warning/40 bg-warning/5 flex items-start sm:items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-warning shrink-0 mt-0.5 sm:mt-0" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-warning">
-              {expiringSoonCount} crédito{expiringSoonCount > 1 ? 's' : ''} expirando nos próximos {EXPIRING_DAYS} dias
+              {expiringSoonCount} crédito{expiringSoonCount > 1 ? 's' : ''} expirando em {EXPIRING_DAYS} dias
             </p>
             <p className="text-xs text-text-muted mt-0.5">
-              Total em risco: {formatCurrency(expiringSoonTotal)} — Considere notificar as clientes.
+              Total em risco: {formatCurrency(expiringSoonTotal)}
             </p>
           </div>
-          <Link href="/cashback?filter=a_expirar">
-            <Button size="sm" variant="secondary">Ver detalhes</Button>
+          <Link href="/cashback?filter=a_expirar" className="flex-shrink-0">
+            <Button size="sm" variant="secondary">Ver</Button>
           </Link>
         </div>
       )}
 
-      {/* Regras ativas em destaque */}
+      {/* Regras ativas */}
       {config ? (
         <div className="card p-5">
           <div className="flex items-center gap-2 mb-4">
@@ -192,22 +193,22 @@ export default async function CashbackPage({
             <h3 className="text-sm font-semibold text-text-primary">Regras Ativas do Programa</h3>
             <Badge variant="success" size="sm">Ativo</Badge>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="flex flex-col gap-1 p-3 rounded-lg bg-bg-overlay">
               <div className="flex items-center gap-1.5 text-xs text-text-muted">
                 <Percent className="w-3.5 h-3.5" />
                 Percentual
               </div>
               <span className="text-xl font-bold text-brand">{config.rate_pct}%</span>
-              <span className="text-xs text-text-muted">do valor da compra</span>
+              <span className="text-xs text-text-muted">da compra</span>
             </div>
             <div className="flex flex-col gap-1 p-3 rounded-lg bg-bg-overlay">
               <div className="flex items-center gap-1.5 text-xs text-text-muted">
                 <ShoppingBag className="w-3.5 h-3.5" />
-                Pedido mínimo
+                Pedido mín.
               </div>
               <span className="text-xl font-bold text-text-primary">
-                {config.min_order_value > 0 ? formatCurrency(config.min_order_value) : 'Qualquer valor'}
+                {config.min_order_value > 0 ? formatCurrency(config.min_order_value) : 'Qualquer'}
               </span>
               <span className="text-xs text-text-muted">para acumular</span>
             </div>
@@ -216,7 +217,7 @@ export default async function CashbackPage({
                 <Clock className="w-3.5 h-3.5" />
                 Liberação
               </div>
-              <span className="text-xl font-bold text-text-primary">{config.release_days} dias</span>
+              <span className="text-xl font-bold text-text-primary">{config.release_days}d</span>
               <span className="text-xs text-text-muted">após a compra</span>
             </div>
             <div className="flex flex-col gap-1 p-3 rounded-lg bg-bg-overlay">
@@ -225,34 +226,32 @@ export default async function CashbackPage({
                 Uso mínimo
               </div>
               <span className="text-xl font-bold text-text-primary">{formatCurrency(config.min_use_value)}</span>
-              <span className="text-xs text-text-muted">
-                expira em {config.expiry_days} dias
-              </span>
+              <span className="text-xs text-text-muted">expira em {config.expiry_days}d</span>
             </div>
           </div>
         </div>
       ) : (
-        <div className="card p-5 border-dashed border-warning/40 bg-warning/5 flex items-center justify-between">
+        <div className="card p-5 border-dashed border-warning/40 bg-warning/5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
           <div className="flex items-center gap-3">
-            <Gift className="w-5 h-5 text-warning" />
+            <Gift className="w-5 h-5 text-warning shrink-0" />
             <div>
               <p className="text-sm font-medium text-text-primary">Programa de cashback não configurado</p>
-              <p className="text-xs text-text-muted">Configure as regras para começar a oferecer cashback às clientes.</p>
+              <p className="text-xs text-text-muted">Configure as regras para oferecer cashback.</p>
             </div>
           </div>
-          <Link href="/cashback/configuracao">
+          <Link href="/cashback/configuracao" className="sm:ml-auto">
             <Button size="sm">Configurar agora</Button>
           </Link>
         </div>
       )}
 
       {/* Métricas */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <StatCard title="Pendente (a liberar)"    value={formatCurrency(pendingTotal)}      icon={<Gift className="h-4 w-4" />} />
-        <StatCard title="Disponível nas clientes" value={formatCurrency(availableTotal)}    icon={<Wallet className="h-4 w-4" />} />
-        <StatCard title={`A expirar (${EXPIRING_DAYS}d)`} value={formatCurrency(expiringSoonTotal)} icon={<AlertTriangle className="h-4 w-4" />} />
-        <StatCard title="Já resgatado"            value={formatCurrency(usedTotal)}         icon={<ShoppingBag className="h-4 w-4" />} />
-        <StatCard title="Expirado"                value={formatCurrency(expiredTotal)}      icon={<Clock className="h-4 w-4" />} />
+      <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+        <StatCard title="A liberar"     value={formatCurrency(pendingTotal)}      icon={<Gift className="h-4 w-4" />} />
+        <StatCard title="Disponível"    value={formatCurrency(availableTotal)}    icon={<Wallet className="h-4 w-4" />} />
+        <StatCard title={`Expirando (${EXPIRING_DAYS}d)`} value={formatCurrency(expiringSoonTotal)} icon={<AlertTriangle className="h-4 w-4" />} />
+        <StatCard title="Resgatado"     value={formatCurrency(usedTotal)}         icon={<ShoppingBag className="h-4 w-4" />} />
+        <StatCard title="Expirado"      value={formatCurrency(expiredTotal)}      icon={<Clock className="h-4 w-4" />} />
       </div>
 
       {/* Transações com filtros */}
@@ -260,7 +259,6 @@ export default async function CashbackPage({
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-base font-semibold text-text-primary">Transações</h2>
-            {/* Filtros */}
             <div className="flex gap-1 flex-wrap">
               {FILTERS.map(({ key, label, count }) => (
                 <Link
@@ -286,86 +284,139 @@ export default async function CashbackPage({
           </div>
         </CardHeader>
 
-        <div className="overflow-x-auto">
-          {transactions.length === 0 ? (
-            <div className="py-12 text-center">
-              <Gift className="w-8 h-8 text-text-muted mx-auto mb-2" />
-              <p className="text-sm text-text-muted">Nenhuma transação encontrada.</p>
-              {filter !== 'todos' && (
-                <p className="text-xs text-text-muted mt-1">
-                  <Link href="/cashback" className="underline hover:text-text-primary">Ver todas as transações</Link>
-                </p>
-              )}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead>Tipo</TableHead>
-                  <TableHead align="right">Valor</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Expira em</TableHead>
-                  <TableHead>Data</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {transactions.map((t) => {
-                  const expiring = isExpiringSoon(t)
-                  const days = t.expires_at ? daysUntilExpiry(t.expires_at) : null
-                  return (
-                    <TableRow key={t.id} className={expiring ? 'bg-warning/5' : undefined}>
-                      <TableCell>
+        {transactions.length === 0 ? (
+          <div className="py-12 text-center">
+            <Gift className="w-8 h-8 text-text-muted mx-auto mb-2" />
+            <p className="text-sm text-text-muted">Nenhuma transação encontrada.</p>
+            {filter !== 'todos' && (
+              <p className="text-xs text-text-muted mt-1">
+                <Link href="/cashback" className="underline hover:text-text-primary">Ver todas</Link>
+              </p>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* ── Mobile: cards ──────────────────────────── */}
+            <div className="md:hidden divide-y divide-border">
+              {transactions.map((t) => {
+                const expiring   = isExpiringSoon(t)
+                const days       = t.expires_at ? daysUntilExpiry(t.expires_at) : null
+                const customer   = t.customers as any
+                const statusConf = STATUS_CONFIG[t.status as CashbackStatus]
+
+                return (
+                  <div key={t.id} className={`px-4 py-3.5 ${expiring ? 'bg-warning/5' : ''}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
                         <Link
-                          href={`/clientes/${(t.customers as any)?.id}`}
-                          className="hover:text-text-primary transition-colors"
+                          href={`/clientes/${customer?.id}`}
+                          className="text-sm font-medium text-text-primary hover:underline truncate block"
                         >
-                          {(t.customers as any)?.name ?? '—'}
+                          {customer?.name ?? '—'}
                         </Link>
-                      </TableCell>
-                      <TableCell muted>
-                        {TYPE_LABELS[t.type as CashbackTransactionType] ?? t.type}
-                      </TableCell>
-                      <TableCell align="right" className="font-medium">
-                        {formatCurrency(t.amount)}
-                      </TableCell>
-                      <TableCell>
+                        <p className="text-xs text-text-muted mt-0.5">
+                          {TYPE_LABELS[t.type as CashbackTransactionType] ?? t.type}
+                          {' · '}
+                          {formatDate(t.created_at)}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
+                        <p className="text-sm font-bold text-text-primary tabular-nums">
+                          {formatCurrency(t.amount)}
+                        </p>
                         {expiring ? (
                           <Badge variant="warning" size="sm">
                             <AlertTriangle className="w-3 h-3 mr-1" />
-                            A expirar
+                            {days === 0 ? 'hoje' : `${days}d`}
                           </Badge>
                         ) : (
-                          <Badge
-                            variant={STATUS_CONFIG[t.status as CashbackStatus]?.variant ?? 'default'}
-                            size="sm"
+                          <Badge variant={statusConf?.variant ?? 'default'} size="sm">
+                            {statusConf?.label ?? t.status}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    {t.expires_at && !expiring && (
+                      <p className="text-xs text-text-muted mt-1.5">
+                        Expira: {formatDate(t.expires_at)}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            {/* ── Desktop: tabela ─────────────────────────── */}
+            <div className="hidden md:block overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead>Tipo</TableHead>
+                    <TableHead align="right">Valor</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Expira em</TableHead>
+                    <TableHead>Data</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {transactions.map((t) => {
+                    const expiring = isExpiringSoon(t)
+                    const days     = t.expires_at ? daysUntilExpiry(t.expires_at) : null
+                    return (
+                      <TableRow key={t.id} className={expiring ? 'bg-warning/5' : undefined}>
+                        <TableCell>
+                          <Link
+                            href={`/clientes/${(t.customers as any)?.id}`}
+                            className="hover:text-text-primary transition-colors"
                           >
-                            {STATUS_CONFIG[t.status as CashbackStatus]?.label ?? t.status}
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell muted>
-                        {t.expires_at ? (
-                          <span className={expiring ? 'text-warning font-medium' : ''}>
-                            {formatDate(t.expires_at)}
-                            {days !== null && days >= 0 && days <= EXPIRING_DAYS && (
-                              <span className="ml-1 text-warning font-semibold">
-                                ({days === 0 ? 'hoje' : `${days}d`})
-                              </span>
-                            )}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </TableCell>
-                      <TableCell muted>{formatDate(t.created_at)}</TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          )}
-        </div>
+                            {(t.customers as any)?.name ?? '—'}
+                          </Link>
+                        </TableCell>
+                        <TableCell muted>
+                          {TYPE_LABELS[t.type as CashbackTransactionType] ?? t.type}
+                        </TableCell>
+                        <TableCell align="right" className="font-medium">
+                          {formatCurrency(t.amount)}
+                        </TableCell>
+                        <TableCell>
+                          {expiring ? (
+                            <Badge variant="warning" size="sm">
+                              <AlertTriangle className="w-3 h-3 mr-1" />
+                              A expirar
+                            </Badge>
+                          ) : (
+                            <Badge
+                              variant={STATUS_CONFIG[t.status as CashbackStatus]?.variant ?? 'default'}
+                              size="sm"
+                            >
+                              {STATUS_CONFIG[t.status as CashbackStatus]?.label ?? t.status}
+                            </Badge>
+                          )}
+                        </TableCell>
+                        <TableCell muted>
+                          {t.expires_at ? (
+                            <span className={expiring ? 'text-warning font-medium' : ''}>
+                              {formatDate(t.expires_at)}
+                              {days !== null && days >= 0 && days <= EXPIRING_DAYS && (
+                                <span className="ml-1 text-warning font-semibold">
+                                  ({days === 0 ? 'hoje' : `${days}d`})
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
+                        </TableCell>
+                        <TableCell muted>{formatDate(t.created_at)}</TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
       </Card>
     </div>
   )

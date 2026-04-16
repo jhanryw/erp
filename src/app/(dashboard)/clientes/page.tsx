@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Plus, Users } from 'lucide-react'
+import { Plus, Users, ChevronRight } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
@@ -110,14 +110,71 @@ export default async function ClientesPage() {
           title="Nenhum cliente cadastrado"
           description="Cadastre o primeiro cliente."
           action={{ label: 'Cadastrar cliente', href: '/clientes/novo' }}
-      />
+        />
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">
             {customers.length} clientes
           </CardHeader>
 
-          <div className="overflow-x-auto">
+          {/* ── Mobile: lista em cards ─────────────────────────── */}
+          <div className="md:hidden divide-y divide-border">
+            {customers.map((customer) => {
+              const rawMetrics = customer.customer_metrics
+              const metrics = Array.isArray(rawMetrics)
+                ? rawMetrics[0] ?? null
+                : rawMetrics ?? null
+
+              return (
+                <Link
+                  key={customer.id}
+                  href={`/clientes/${customer.id}`}
+                  className="flex items-center gap-3 px-4 py-3.5 hover:bg-bg-hover active:bg-bg-hover transition-colors"
+                >
+                  {/* Avatar inicial */}
+                  <div className="w-10 h-10 rounded-full bg-brand/15 flex items-center justify-center flex-shrink-0">
+                    <span className="text-sm font-bold text-brand">
+                      {customer.name.charAt(0).toUpperCase()}
+                    </span>
+                  </div>
+
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="font-medium text-text-primary truncate">{customer.name}</p>
+                      {metrics?.rfm_segment && (
+                        <RfmBadge segment={metrics.rfm_segment} />
+                      )}
+                    </div>
+                    <p className="text-xs text-text-muted mt-0.5">
+                      {customer.phone ?? '—'}
+                      {customer.origin && ` · ${ORIGIN_LABELS[customer.origin] ?? customer.origin}`}
+                    </p>
+                    <div className="flex gap-3 mt-1.5 text-xs">
+                      <span className="text-text-muted">
+                        Gasto:{' '}
+                        <span className="text-text-primary font-semibold">
+                          {formatCurrency(metrics?.total_spent ?? 0)}
+                        </span>
+                      </span>
+                      <span className="text-text-muted">
+                        {metrics?.order_count ?? 0} compra{(metrics?.order_count ?? 0) !== 1 ? 's' : ''}
+                      </span>
+                      {metrics?.last_purchase_date && (
+                        <span className="text-text-muted hidden xs:inline">
+                          Última: {formatDate(metrics.last_purchase_date)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <ChevronRight className="w-4 h-4 text-text-muted flex-shrink-0" />
+                </Link>
+              )
+            })}
+          </div>
+
+          {/* ── Desktop: tabela completa ───────────────────────── */}
+          <div className="hidden md:block overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
