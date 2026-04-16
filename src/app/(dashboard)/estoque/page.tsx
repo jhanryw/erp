@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import Link from 'next/link'
 import {
   Plus,
@@ -23,6 +24,7 @@ import {
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { EstoqueSearch } from './estoque-search'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,16 +41,21 @@ type StockStatusRow = {
   last_entry_date: string | null
 }
 
-async function getStockData() {
+async function getStockData(search?: string) {
   const supabase = createAdminClient()
 
+  let itemsQuery = supabase
+    .from('mv_stock_status')
+    .select('*')
+    .order('product_name', { ascending: true })
+    .order('current_qty', { ascending: true })
+
+  if (search) {
+    itemsQuery = itemsQuery.ilike('product_name', `%${search}%`)
+  }
+
   const [stockItems, summary] = await Promise.all([
-    // Lista para a tabela — inclui variações zeradas (cadastro mantido para reposição)
-    supabase
-      .from('mv_stock_status')
-      .select('*')
-      .order('current_qty', { ascending: true })
-      .limit(50),
+    itemsQuery,
     // Agrega todos os registros; product_id necessário para contagem de produtos distintos
     supabase
       .from('mv_stock_status')
@@ -83,8 +90,14 @@ async function getStockData() {
   }
 }
 
-export default async function EstoquePage() {
-  const data = await getStockData()
+export default async function EstoquePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>
+}) {
+  const { q } = await searchParams
+  const search = q?.trim() || undefined
+  const data = await getStockData(search)
 
   return (
     <div className="space-y-6">
@@ -166,6 +179,10 @@ export default async function EstoquePage() {
         </Link>
       </div>
 
+      <Suspense>
+        <EstoqueSearch defaultValue={q} />
+      </Suspense>
+
       {data.items.length === 0 ? (
         <EmptyState
           icon={<Warehouse className="h-4 w-4" />}
@@ -176,7 +193,9 @@ export default async function EstoquePage() {
       ) : (
         <Card>
           <CardHeader className="text-sm text-muted-foreground">
-            {data.items.length} variações em estoque
+            {search
+              ? `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} encontrada${data.items.length !== 1 ? 's' : ''} para "${search}"`
+              : `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} em estoque`}
           </CardHeader>
 
           <div className="overflow-x-auto">
