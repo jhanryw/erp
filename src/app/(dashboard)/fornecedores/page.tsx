@@ -30,6 +30,8 @@ type SupplierRow = {
   created_at: string
 }
 
+type PerformanceMap = Record<number, { total_purchased_value: number; total_revenue: number }>
+
 async function getSuppliers(): Promise<SupplierRow[]> {
   const supabase = createAdminClient()
 
@@ -44,6 +46,30 @@ async function getSuppliers(): Promise<SupplierRow[]> {
   }
 
   return (data ?? []) as SupplierRow[]
+}
+
+async function getPerformance(): Promise<PerformanceMap> {
+  const supabase = createAdminClient()
+
+  const { data, error } = await supabase
+    .from('mv_supplier_performance')
+    .select('supplier_id, total_purchased_value, total_revenue')
+
+  if (error) {
+    console.error('Erro ao buscar performance de fornecedores:', error.message)
+    return {}
+  }
+
+  return Object.fromEntries(
+    (data ?? []).map((r: { supplier_id: number; total_purchased_value: number; total_revenue: number }) => [
+      r.supplier_id,
+      { total_purchased_value: r.total_purchased_value ?? 0, total_revenue: r.total_revenue ?? 0 },
+    ])
+  )
+}
+
+function fmtBrl(value: number): string {
+  return value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
 function formatDoc(doc: string | null): string {
@@ -64,7 +90,7 @@ function formatDoc(doc: string | null): string {
 
 export default async function FornecedoresPage() {
   await requirePageRole('gerente')
-  const suppliers = await getSuppliers()
+  const [suppliers, performance] = await Promise.all([getSuppliers(), getPerformance()])
 
   return (
     <div className="space-y-6">
@@ -105,41 +131,52 @@ export default async function FornecedoresPage() {
                   <TableHead>CPF/CNPJ</TableHead>
                   <TableHead>Telefone</TableHead>
                   <TableHead>Cidade / UF</TableHead>
+                  <TableHead className="text-right">Valor Gasto</TableHead>
+                  <TableHead className="text-right">Faturamento</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
 
               <TableBody>
-                {suppliers.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell className="font-medium">
-                      <Link href={`/fornecedores/${s.id}`} className="hover:underline">
-                        {s.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell>{formatDoc(s.document)}</TableCell>
-                    <TableCell>{s.phone ?? '—'}</TableCell>
-                    <TableCell>
-                      {s.city && s.state ? `${s.city} / ${s.state}` : s.city ?? '—'}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={s.active ? 'default' : 'secondary'}>
-                        {s.active ? 'Ativo' : 'Inativo'}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Link href={`/fornecedores/${s.id}/editar`}>
-                          <Button variant="outline" size="sm">
-                            Editar
-                          </Button>
+                {suppliers.map((s) => {
+                  const perf = performance[s.id]
+                  return (
+                    <TableRow key={s.id}>
+                      <TableCell className="font-medium">
+                        <Link href={`/fornecedores/${s.id}`} className="hover:underline">
+                          {s.name}
                         </Link>
-                        <DeleteSupplierButton id={s.id} />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                      </TableCell>
+                      <TableCell>{formatDoc(s.document)}</TableCell>
+                      <TableCell>{s.phone ?? '—'}</TableCell>
+                      <TableCell>
+                        {s.city && s.state ? `${s.city} / ${s.state}` : s.city ?? '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {perf ? fmtBrl(perf.total_purchased_value) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {perf ? fmtBrl(perf.total_revenue) : '—'}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={s.active ? 'default' : 'secondary'}>
+                          {s.active ? 'Ativo' : 'Inativo'}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-2">
+                          <Link href={`/fornecedores/${s.id}/editar`}>
+                            <Button variant="outline" size="sm">
+                              Editar
+                            </Button>
+                          </Link>
+                          <DeleteSupplierButton id={s.id} />
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           </div>

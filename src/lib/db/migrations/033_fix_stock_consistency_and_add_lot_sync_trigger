@@ -1,0 +1,151 @@
+-- 033_sync_stock_with_lots_and_reconciliation.sql
+
+BEGIN;
+
+-- =========================================================
+-- 1) Função global de reconciliação
+-- Garante que:
+--   stock.quantity = soma de stock_lots.quantity_remaining
+--   stock.avg_cost = média ponderada por cost_per_unit
+-- Também cria linhas faltantes em stock
+-- =========================================================
+CREATE OR REPLACE FUNCTION public.reconcile_stock()
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- Cria linhas faltantes em stock para variações já cadastradas
+  INSERT INTO public.stock (
+    product_variation_id,
+    quantity,
+    avg_cost,
+    last_updated,
+    company_id
+  )
+  SELECT
+    pv.id,
+    0,
+    0,
+    NOW(),
+    p.company_id
+  FROM public.product_variations pv
+  JOIN public.products p
+    ON p.id = pv.product_id
+  LEFT JOIN public.stock s
+    ON s.product_variation_id = pv.id
+  WHERE s.product_variation_id IS NULL;
+
+  -- Recalcula tudo com base nos lotes
+  UPDATE public.stock s
+  SET
+    quantity = COALESCE((
+      SELECT SUM(sl.quantity_remaining)::int
+      FROM public.stock_lots sl
+      WHERE sl.product_variation_id = s.product_variation_id
+    ), 0),
+
+    avg_cost = COALESCE((
+      SELECT ROUND(
+        SUM((sl.quantity_remaining::numeric) * sl.cost_per_unit)
+        / NULLIF(SUM(sl.quantity_remaining), 0),
+        4
+      )
+      FROM public.stock_lots sl
+      WHERE sl.product_variation_id = s.product_variation_id
+    ), 0),
+
+    last_updated = NOW();
+END;
+$$;
+
+-- =========================================================
+-- 2) Função de sincronização por variação
+-- Atualiza apenas a variação afetada após insert/update/delete
+-- em stock_lots
+-- =========================================================
+CREATE OR REPLACE FUNCTION public.sync_stock_from_lots()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_product_variation_id integer;
+BEGIN
+  -- Identifica a variação afetada
+  IF TG_OP = 'DELETE' THEN
+    v_product_variation_id := OLD.product_variation_id;
+  ELSE
+    v_product_variation_id := NEW.product_variation_id;
+  END IF;
+
+  -- Se por algum motivo não houver variação, encerra
+  IF v_product_variation_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- Garante existência da linha em stock
+  INSERT INTO public.stock (
+    product_variation_id,
+    quantity,
+    avg_cost,
+    last_updated,
+    company_id
+  )
+  SELECT
+    pv.id,
+    0,
+    0,
+    NOW(),
+    p.company_id
+  FROM public.product_variations pv
+  JOIN public.products p
+    ON p.id = pv.product_id
+  LEFT JOIN public.stock s
+    ON s.product_variation_id = pv.id
+  WHERE pv.id = v_product_variation_id
+    AND s.product_variation_id IS NULL;
+
+  -- Recalcula o consolidado da variação afetada
+  UPDATE public.stock s
+  SET
+    quantity = COALESCE((
+      SELECT SUM(sl.quantity_remaining)::int
+      FROM public.stock_lots sl
+      WHERE sl.product_variation_id = v_product_variation_id
+    ), 0),
+
+    avg_cost = COALESCE((
+      SELECT ROUND(
+        SUM((sl.quantity_remaining::numeric) * sl.cost_per_unit)
+        / NULLIF(SUM(sl.quantity_remaining), 0),
+        4
+      )
+      FROM public.stock_lots sl
+      WHERE sl.product_variation_id = v_product_variation_id
+    ), 0),
+
+    last_updated = NOW()
+  WHERE s.product_variation_id = v_product_variation_id;
+
+  RETURN NULL;
+END;
+$$;
+
+-- =========================================================
+-- 3) Trigger em stock_lots
+-- Sempre que mexer em lotes, sincroniza stock
+-- =========================================================
+DROP TRIGGER IF EXISTS trg_sync_stock_lots ON public.stock_lots;
+
+CREATE TRIGGER trg_sync_stock_lots
+AFTER INSERT OR UPDATE OR DELETE
+ON public.stock_lots
+FOR EACH ROW
+EXECUTE FUNCTION public.sync_stock_from_lots();
+
+-- =========================================================
+-- 4) Reconciliação inicial
+-- Corrige tudo que já estiver inconsistente
+-- =========================================================
+SELECT public.reconcile_stock();
+
+COMMIT;

@@ -68,9 +68,15 @@ REVOKE ALL ON FUNCTION refresh_analytics_views() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION refresh_analytics_views() TO service_role;
 
 -- -----------------------------------------------------------------------------
--- 3. Atualização inicial — popula todas as views com dados atuais
+-- 3. Atualização inicial
+--    ATENÇÃO: REFRESH MATERIALIZED VIEW CONCURRENTLY não pode rodar dentro
+--    de uma transação (e o Supabase envolve cada migration em uma transação).
+--    Execute manualmente via SQL Editor após aplicar a migration:
+--
+--      SELECT refresh_analytics_views();
+--
+--    Ou acesse: POST /api/admin/refresh-views
 -- -----------------------------------------------------------------------------
-SELECT refresh_analytics_views();
 
 -- -----------------------------------------------------------------------------
 -- 4. Agendamento via pg_cron (habilite se pg_cron estiver disponível)
