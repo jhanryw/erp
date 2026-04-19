@@ -1,5 +1,23 @@
-import { format, formatDistanceToNow, parseISO, isValid } from 'date-fns'
+import { format, formatDistanceToNow, parseISO, isValid, subDays } from 'date-fns'
 import { ptBR } from 'date-fns/locale'
+
+// Sistema opera no fuso horário fixo do Brasil (Fortaleza = UTC-3, sem DST).
+const BRAZIL_TZ = 'America/Fortaleza'
+
+/**
+ * Retorna a data atual (ou a data fornecida) como 'yyyy-MM-dd' no fuso
+ * America/Fortaleza, independente do timezone do servidor/container.
+ */
+export function brazilDate(date: Date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: BRAZIL_TZ }).format(date)
+}
+
+/**
+ * Subtrai `days` dias da data atual e retorna como 'yyyy-MM-dd' no fuso brasileiro.
+ */
+export function brazilSubDays(days: number): string {
+  return brazilDate(subDays(new Date(), days))
+}
 
 export function formatDate(date: string | Date, pattern = 'dd/MM/yyyy'): string {
   const d = typeof date === 'string' ? parseISO(date) : date
@@ -22,5 +40,5 @@ export function formatMonthYear(date: string | Date): string {
 }
 
 export function toISODate(date: Date): string {
-  return format(date, 'yyyy-MM-dd')
+  return brazilDate(date)
 }

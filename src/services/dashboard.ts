@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { AppRole } from '@/types/roles'
 import { hasMinRole } from '@/types/roles'
-import { subDays, format } from 'date-fns'
+import { brazilDate, brazilSubDays } from '@/lib/utils/date'
 
 export interface DashboardKpi {
   revenue: number
@@ -46,8 +46,8 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
   const supabase = createAdminClient()
   const showFinancials = hasMinRole(role, 'gerente')
 
-  const today         = format(new Date(), 'yyyy-MM-dd')
-  const thirtyDaysAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
+  const today         = brazilDate()
+  const thirtyDaysAgo = brazilSubDays(30)
 
   // ── Consultas em paralelo ─────────────────────────────────────────────────
   const [

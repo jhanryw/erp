@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
+import { brazilDate } from '@/lib/utils/date'
 
 export async function POST(request: Request) {
   // Proteger endpoint com CRON_SECRET
@@ -9,7 +10,7 @@ export async function POST(request: Request) {
   }
 
   const supabase = createAdminClient()
-  const today = new Date().toISOString().split('T')[0]
+  const today = brazilDate()
 
   const { data, error } = await (supabase
     .from('cashback_transactions') as any)

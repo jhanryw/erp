@@ -31,6 +31,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/supabase/session'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { brazilDate } from '@/lib/utils/date'
 
 export async function GET(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -42,10 +43,9 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url)
 
-  // Default: mês atual
-  const now = new Date()
-  const defaultFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  const defaultTo   = now.toISOString().slice(0, 10)
+  // Default: mês atual no fuso Brasil
+  const defaultTo   = brazilDate()
+  const defaultFrom = defaultTo.slice(0, 7) + '-01'
 
   const from = searchParams.get('from') || defaultFrom
   const to   = searchParams.get('to')   || defaultTo
