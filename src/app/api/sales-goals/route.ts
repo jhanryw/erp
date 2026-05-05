@@ -6,6 +6,15 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+type GoalRow = {
+  month: number
+  goal_min: number
+  goal_target: number
+  goal_stretch: number
+}
+
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
 const monthGoalSchema = z.object({
@@ -48,7 +57,7 @@ export async function GET(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Garante retorno dos 12 meses, preenchendo ausentes com zeros
-  const stored = new Map((data ?? []).map((r) => [r.month, r]))
+  const stored = new Map(((data ?? []) as GoalRow[]).map((r) => [r.month, r]))
   const months = Array.from({ length: 12 }, (_, i) => {
     const m = i + 1
     const saved = stored.get(m)
