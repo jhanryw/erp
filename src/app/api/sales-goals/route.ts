@@ -15,6 +15,10 @@ type GoalRow = {
   goal_stretch: number
 }
 
+// monthly_sales_goals não está nos tipos gerados do Supabase ainda
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const goalsTable = (client: ReturnType<typeof createAdminClient>) => (client as any).from('monthly_sales_goals')
+
 // ─── Schemas ─────────────────────────────────────────────────────────────────
 
 const monthGoalSchema = z.object({
@@ -48,8 +52,7 @@ export async function GET(request: Request) {
   }
 
   const admin = createAdminClient()
-  const { data, error } = await admin
-    .from('monthly_sales_goals')
+  const { data, error } = await goalsTable(admin)
     .select('month, goal_min, goal_target, goal_stretch')
     .eq('company_id', user.company_id)
     .eq('year', year)
@@ -57,7 +60,7 @@ export async function GET(request: Request) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   // Garante retorno dos 12 meses, preenchendo ausentes com zeros
-  const stored = new Map(((data ?? []) as GoalRow[]).map((r) => [r.month, r]))
+  const stored = new Map((data as GoalRow[] ?? []).map((r) => [r.month, r]))
   const months = Array.from({ length: 12 }, (_, i) => {
     const m = i + 1
     const saved = stored.get(m)
@@ -106,8 +109,7 @@ export async function POST(request: Request) {
     goal_stretch: g.goal_stretch,
   }))
 
-  const { error } = await admin
-    .from('monthly_sales_goals')
+  const { error } = await goalsTable(admin)
     .upsert(rows, { onConflict: 'company_id,year,month' })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
