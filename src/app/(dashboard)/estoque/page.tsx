@@ -32,6 +32,7 @@ type StockStatusRow = {
   product_id: number
   product_name: string
   sku_variation: string
+  sku_parent: string | null
   tamanho: string | null
   cor: string | null
   current_qty: number | null
@@ -39,6 +40,8 @@ type StockStatusRow = {
   stock_value_at_cost: number | null
   stock_value_at_price: number | null
   last_entry_date: string | null
+  out_of_stock: boolean
+  low_stock: boolean
 }
 
 async function getStockData(search?: string) {
@@ -51,7 +54,9 @@ async function getStockData(search?: string) {
     .order('current_qty', { ascending: true })
 
   if (search) {
-    itemsQuery = itemsQuery.ilike('product_name', `%${search}%`)
+    itemsQuery = itemsQuery.or(
+      `product_name.ilike.%${search}%,sku_variation.ilike.%${search}%,sku_parent.ilike.%${search}%`,
+    )
   }
 
   const [stockItems, summary] = await Promise.all([

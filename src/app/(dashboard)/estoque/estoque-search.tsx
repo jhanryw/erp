@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
-import { useCallback, useTransition } from 'react'
+import { useCallback, useRef, useTransition } from 'react'
 import { Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 
@@ -10,19 +10,23 @@ export function EstoqueSearch({ defaultValue }: { defaultValue?: string }) {
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const [, startTransition] = useTransition()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      const params = new URLSearchParams(searchParams.toString())
       const value = e.target.value.trim()
-      if (value) {
-        params.set('q', value)
-      } else {
-        params.delete('q')
-      }
-      startTransition(() => {
-        router.replace(`${pathname}?${params.toString()}`)
-      })
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      debounceRef.current = setTimeout(() => {
+        const params = new URLSearchParams(searchParams.toString())
+        if (value) {
+          params.set('q', value)
+        } else {
+          params.delete('q')
+        }
+        startTransition(() => {
+          router.replace(`${pathname}?${params.toString()}`)
+        })
+      }, 300)
     },
     [router, pathname, searchParams],
   )
