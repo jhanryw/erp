@@ -28,6 +28,7 @@ export type AuditResource =
   | 'supplier' | 'customer'
   | 'marketing_cost' | 'cashback_config'
   | 'shipping_config'
+  | 'monthly_sales_goals'
 
 export interface AuditPayload {
   action:      AuditAction

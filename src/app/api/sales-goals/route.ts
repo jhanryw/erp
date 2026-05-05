@@ -117,7 +117,7 @@ export async function POST(request: Request) {
   auditLog({
     userId: user.id,
     userRole: user.role,
-    action: 'upsert',
+    action: 'update',
     resource: 'monthly_sales_goals',
     detail: `year:${year} months:${goals.map((g) => g.month).join(',')}`,
   })
