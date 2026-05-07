@@ -524,77 +524,64 @@ export interface Database {
           product_id: number
           product_name: string
           sku: string
-          color: string | null
-          size: string | null
           current_qty: number
           avg_cost: number
           stock_value_at_cost: number
           stock_value_at_price: number
+          base_price: number
+          margin_pct: number
           last_entry_date: string | null
-          supplier_id: number | null
+          last_sale_date: string | null
         }
       }
       mv_color_performance: {
         Row: {
-          color: string
-          category_id: number | null
-          units_sold: number
+          color_name: string
+          total_items_sold: number
+          total_units_sold: number
           total_revenue: number
           total_gross_profit: number
-          avg_margin_pct: number
-          avg_ticket: number
-          product_count: number
+          avg_price: number
+          avg_ticket_contribution: number | null
         }
       }
       mv_abc_by_revenue: {
         Row: {
           product_id: number
-          product_name: string
-          sku: string
-          supplier_id: number | null
-          supplier_name: string | null
-          value: number
+          total_revenue: number
+          revenue_pct: number
           cumulative_pct: number
-          abc_curve: AbcCurve
-          margin_pct: number | null
+          abc_class: AbcCurve
         }
       }
       mv_abc_by_profit: {
         Row: {
           product_id: number
-          product_name: string
-          sku: string
-          supplier_id: number | null
-          supplier_name: string | null
-          value: number
+          total_gross_profit: number
+          profit_pct: number
           cumulative_pct: number
-          abc_curve: AbcCurve
-          margin_pct: number | null
+          abc_class: AbcCurve
         }
       }
       mv_abc_by_volume: {
         Row: {
           product_id: number
-          product_name: string
-          sku: string
-          supplier_id: number | null
-          supplier_name: string | null
-          value: number
+          total_units_sold: number
+          volume_pct: number
           cumulative_pct: number
-          abc_curve: AbcCurve
-          margin_pct: number | null
+          abc_class: AbcCurve
         }
       }
       mv_supplier_performance: {
         Row: {
           supplier_id: number
           supplier_name: string
-          total_purchased_brl: number
+          total_lots: number
+          total_purchased_value: number
+          total_units_sold: number
           total_revenue: number
           total_gross_profit: number
           avg_margin_pct: number
-          top_product_name: string | null
-          avg_ticket_per_purchase: number
           product_count: number
         }
       }

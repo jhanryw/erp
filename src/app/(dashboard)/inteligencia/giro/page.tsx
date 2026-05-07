@@ -14,15 +14,18 @@ async function getTurnoverData() {
   const supabase = createAdminClient()
   const [stockRes, perfRes] = await Promise.all([
     (supabase
-      .from('mv_stock_status')
-      .select('product_variation_id, product_id, product_name, sku, current_qty, avg_cost, stock_value_at_cost, last_entry_date')
+      .from('mv_stock_status' as any)
+      .select('product_variation_id, product_id, product_name, sku, current_qty, avg_cost, stock_value_at_cost, last_entry_date, last_sale_date')
       .order('current_qty', { ascending: false })
-      .limit(100)) as unknown as Promise<{ data: any[] | null }>,
+      .limit(200)) as unknown as Promise<{ data: any[] | null; error: any }>,
     (supabase
-      .from('mv_product_performance')
+      .from('mv_product_performance' as any)
       .select('product_id, total_units_sold, first_sale_date, last_sale_date')
-    ) as unknown as Promise<{ data: any[] | null }>,
+    ) as unknown as Promise<{ data: any[] | null; error: any }>,
   ])
+
+  if (stockRes.error) console.error('mv_stock_status error:', stockRes.error.message)
+  if (perfRes.error) console.error('mv_product_performance error:', perfRes.error.message)
 
   const perfMap = Object.fromEntries((perfRes.data ?? []).map(p => [p.product_id, p]))
 
@@ -32,15 +35,14 @@ async function getTurnoverData() {
       ? Math.floor((Date.now() - new Date(s.last_entry_date).getTime()) / 86400000)
       : null
     const totalSold = perf.total_units_sold ?? 0
-    const giro = totalSold > 0 && s.current_qty > 0
-      ? (totalSold / (s.current_qty + totalSold)) * 100
-      : 0
     const diasParaVender = totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
       ? Math.round(s.current_qty / (totalSold / daysSinceEntry))
       : null
-    const last_sale_date = perf.last_sale_date ?? null
 
-    return { ...s, totalSold, giro, diasParaVender, daysSinceEntry, last_sale_date }
+    // prefer last_sale_date from mv_stock_status (per-variation), fallback to product-level
+    const last_sale_date = s.last_sale_date ?? perf.last_sale_date ?? null
+
+    return { ...s, totalSold, diasParaVender, daysSinceEntry, last_sale_date }
   })
 
   return items

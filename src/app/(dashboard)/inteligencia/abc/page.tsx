@@ -11,28 +11,29 @@ export const dynamic = 'force-dynamic'
 
 async function getAbcData() {
   const supabase = createAdminClient()
-  const { data } = await supabase
-    .from('mv_abc_by_revenue')
-    .select('product_id, product_name, sku, supplier_name, value, cumulative_pct, abc_curve, margin_pct')
-    .order('value', { ascending: false }) as unknown as { data: any[] | null }
+  const { data, error } = await supabase
+    .from('mv_abc_by_revenue' as any)
+    .select('product_id, total_revenue, revenue_pct, cumulative_pct, abc_class')
+    .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null; error: any }
+
+  if (error) console.error('mv_abc_by_revenue error:', error.message)
   const abcData = data ?? []
 
   if (abcData.length === 0) return { items: [], totals: { A: 0, B: 0, C: 0 } }
 
   const productIds = abcData.map(r => r.product_id)
-  const { data: products } = await supabase
-    .from('mv_product_performance')
-    .select('product_id, total_units_sold')
-    .in('product_id', productIds) as unknown as { data: any[] | null }
+  const { data: products, error: perfError } = await supabase
+    .from('mv_product_performance' as any)
+    .select('product_id, product_name, sku, total_units_sold')
+    .in('product_id', productIds) as unknown as { data: any[] | null; error: any }
 
+  if (perfError) console.error('mv_product_performance error:', perfError.message)
   const productMap = Object.fromEntries((products ?? []).map(p => [p.product_id, p]))
 
-  const totalRevenue = abcData.reduce((s, r) => s + (r.value ?? 0), 0)
   const items = abcData.map(r => ({
     ...r,
-    total_revenue: r.value,
-    revenue_pct: totalRevenue > 0 ? (r.value / totalRevenue) * 100 : 0,
-    abc_class: r.abc_curve,
+    product_name: productMap[r.product_id]?.product_name ?? '—',
+    sku: productMap[r.product_id]?.sku ?? '—',
     total_units_sold: productMap[r.product_id]?.total_units_sold ?? 0,
   }))
 
@@ -45,10 +46,10 @@ async function getAbcData() {
   return { items, totals }
 }
 
-const ABC_BADGE: Record<string, { variant: 'success' | 'warning' | 'error'; label: string }> = {
-  A: { variant: 'success', label: 'A — Essencial' },
-  B: { variant: 'warning', label: 'B — Secundário' },
-  C: { variant: 'error', label: 'C — Baixo Giro' },
+const ABC_BADGE: Record<string, { variant: 'success' | 'warning' | 'error' }> = {
+  A: { variant: 'success' },
+  B: { variant: 'warning' },
+  C: { variant: 'error' },
 }
 
 export default async function CurvaAbcPage() {
@@ -102,7 +103,7 @@ export default async function CurvaAbcPage() {
             </TableHeader>
             <TableBody>
               {items.map((item, idx) => {
-                const abc = ABC_BADGE[item.abc_class] ?? { variant: 'default' as const, label: item.abc_class }
+                const abc = ABC_BADGE[item.abc_class] ?? { variant: 'default' as const }
                 return (
                   <TableRow key={item.product_id}>
                     <TableCell muted>{idx + 1}</TableCell>
@@ -113,10 +114,10 @@ export default async function CurvaAbcPage() {
                     </TableCell>
                     <TableCell muted><span className="font-mono text-xs">{item.sku}</span></TableCell>
                     <TableCell align="right" className="font-semibold">{formatCurrency(item.total_revenue)}</TableCell>
-                    <TableCell align="right" muted>{item.revenue_pct?.toFixed(2)}%</TableCell>
+                    <TableCell align="right" muted>{(item.revenue_pct ?? 0).toFixed(2)}%</TableCell>
                     <TableCell align="right">
                       <span className={`font-medium ${item.cumulative_pct <= 80 ? 'text-success' : item.cumulative_pct <= 95 ? 'text-warning' : 'text-error'}`}>
-                        {item.cumulative_pct?.toFixed(1)}%
+                        {(item.cumulative_pct ?? 0).toFixed(1)}%
                       </span>
                     </TableCell>
                     <TableCell align="right">{item.total_units_sold}</TableCell>

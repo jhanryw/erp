@@ -11,10 +11,12 @@ export const dynamic = 'force-dynamic'
 
 async function getSupplierRankingData() {
   const supabase = createAdminClient()
-  const { data } = await supabase
-    .from('mv_supplier_performance')
-    .select('supplier_id, supplier_name, total_purchased_brl, total_revenue, total_gross_profit, avg_margin_pct, top_product_name, avg_ticket_per_purchase, product_count')
-    .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null }
+  const { data, error } = await supabase
+    .from('mv_supplier_performance' as any)
+    .select('supplier_id, supplier_name, total_lots, total_purchased_value, total_units_sold, total_revenue, total_gross_profit, avg_margin_pct, product_count')
+    .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null; error: any }
+
+  if (error) console.error('mv_supplier_performance error:', error.message)
   return data ?? []
 }
 
@@ -23,8 +25,9 @@ export default async function RankingFornecedoresPage() {
 
   const totalRevenue = suppliers.reduce((s, sup) => s + (sup.total_revenue ?? 0), 0)
   const totalProfit = suppliers.reduce((s, sup) => s + (sup.total_gross_profit ?? 0), 0)
-  const avgMargin = suppliers.length > 0
-    ? suppliers.filter(s => (s.avg_margin_pct ?? 0) > 0).reduce((s, sup) => s + sup.avg_margin_pct, 0) / Math.max(suppliers.filter(s => (s.avg_margin_pct ?? 0) > 0).length, 1)
+  const withMargin = suppliers.filter(s => (s.avg_margin_pct ?? 0) > 0)
+  const avgMargin = withMargin.length > 0
+    ? withMargin.reduce((s, sup) => s + sup.avg_margin_pct, 0) / withMargin.length
     : 0
 
   return (
@@ -54,7 +57,6 @@ export default async function RankingFornecedoresPage() {
         ))}
       </div>
 
-      {/* Participação no faturamento */}
       {suppliers.length > 0 && (
         <Card>
           <CardHeader>
@@ -94,7 +96,7 @@ export default async function RankingFornecedoresPage() {
                 <TableHead>#</TableHead>
                 <TableHead>Fornecedor</TableHead>
                 <TableHead align="right">Produtos</TableHead>
-                <TableHead align="right">Ticket Médio</TableHead>
+                <TableHead align="right">Unid. Vendidas</TableHead>
                 <TableHead align="right">Faturamento</TableHead>
                 <TableHead align="right">Lucro Bruto</TableHead>
                 <TableHead align="right">Margem %</TableHead>
@@ -111,12 +113,9 @@ export default async function RankingFornecedoresPage() {
                       <Link href={`/fornecedores/${sup.supplier_id}`} className="font-medium hover:text-accent">
                         {sup.supplier_name}
                       </Link>
-                      {sup.top_product_name && (
-                        <span className="block text-xs text-text-muted truncate max-w-[200px]">{sup.top_product_name}</span>
-                      )}
                     </TableCell>
                     <TableCell align="right">{sup.product_count ?? 0}</TableCell>
-                    <TableCell align="right" muted>{formatCurrency(sup.avg_ticket_per_purchase ?? 0)}</TableCell>
+                    <TableCell align="right">{sup.total_units_sold ?? 0}</TableCell>
                     <TableCell align="right" className="font-semibold">{formatCurrency(sup.total_revenue ?? 0)}</TableCell>
                     <TableCell align="right" className="text-success">{formatCurrency(sup.total_gross_profit ?? 0)}</TableCell>
                     <TableCell align="right">
