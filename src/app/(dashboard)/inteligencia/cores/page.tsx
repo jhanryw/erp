@@ -12,7 +12,7 @@ async function getColorData() {
   const supabase = createAdminClient()
   const { data } = await supabase
     .from('mv_color_performance')
-    .select('*')
+    .select('color, units_sold, total_revenue, total_gross_profit, avg_margin_pct, avg_ticket, product_count')
     .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null }
   return data ?? []
 }
@@ -21,7 +21,7 @@ export default async function PerformanceCoresPage() {
   const colors = await getColorData()
 
   const totalRevenue = colors.reduce((s, c) => s + (c.total_revenue ?? 0), 0)
-  const totalUnits = colors.reduce((s, c) => s + (c.total_units_sold ?? 0), 0)
+  const totalUnits = colors.reduce((s, c) => s + (c.units_sold ?? 0), 0)
   const topColor = colors[0]
 
   return (
@@ -41,7 +41,7 @@ export default async function PerformanceCoresPage() {
           { label: 'Cores Analisadas', value: colors.length },
           { label: 'Unidades Vendidas', value: totalUnits },
           { label: 'Faturamento Total', value: formatCurrency(totalRevenue) },
-          { label: 'Cor Mais Vendida', value: topColor?.color_name ?? '—', sub: topColor ? `${formatCurrency(topColor.total_revenue)} em receita` : '' },
+          { label: 'Cor Mais Vendida', value: topColor?.color ?? '—', sub: topColor ? `${formatCurrency(topColor.total_revenue)} em receita` : '' },
         ].map((kpi) => (
           <div key={kpi.label} className="card p-4">
             <p className="text-xs text-text-muted mb-1">{kpi.label}</p>
@@ -61,9 +61,9 @@ export default async function PerformanceCoresPage() {
             {colors.slice(0, 10).map((c) => {
               const pct = totalRevenue > 0 ? (c.total_revenue / totalRevenue) * 100 : 0
               return (
-                <div key={c.color_name}>
+                <div key={c.color}>
                   <div className="flex justify-between text-sm mb-1">
-                    <span className="text-text-secondary font-medium">{c.color_name}</span>
+                    <span className="text-text-secondary font-medium">{c.color}</span>
                     <span className="text-text-primary font-semibold">{formatCurrency(c.total_revenue)} ({pct.toFixed(1)}%)</span>
                   </div>
                   <div className="h-2 bg-bg-overlay rounded-full">
@@ -92,10 +92,11 @@ export default async function PerformanceCoresPage() {
                 <TableHead>#</TableHead>
                 <TableHead>Cor</TableHead>
                 <TableHead align="right">Unid. Vendidas</TableHead>
-                <TableHead align="right">Itens</TableHead>
+                <TableHead align="right">Produtos</TableHead>
                 <TableHead align="right">Faturamento</TableHead>
                 <TableHead align="right">Lucro Bruto</TableHead>
-                <TableHead align="right">Preço Médio</TableHead>
+                <TableHead align="right">Ticket Médio</TableHead>
+                <TableHead align="right">Margem %</TableHead>
                 <TableHead align="right">% Faturamento</TableHead>
               </TableRow>
             </TableHeader>
@@ -103,14 +104,19 @@ export default async function PerformanceCoresPage() {
               {colors.map((c, idx) => {
                 const pct = totalRevenue > 0 ? (c.total_revenue / totalRevenue) * 100 : 0
                 return (
-                  <TableRow key={c.color_name}>
+                  <TableRow key={c.color}>
                     <TableCell muted>{idx + 1}</TableCell>
-                    <TableCell className="font-medium">{c.color_name}</TableCell>
-                    <TableCell align="right">{c.total_units_sold ?? 0}</TableCell>
-                    <TableCell align="right" muted>{c.total_items_sold ?? 0}</TableCell>
+                    <TableCell className="font-medium">{c.color}</TableCell>
+                    <TableCell align="right">{c.units_sold ?? 0}</TableCell>
+                    <TableCell align="right" muted>{c.product_count ?? 0}</TableCell>
                     <TableCell align="right" className="font-semibold">{formatCurrency(c.total_revenue ?? 0)}</TableCell>
                     <TableCell align="right" className="text-success">{formatCurrency(c.total_gross_profit ?? 0)}</TableCell>
-                    <TableCell align="right" muted>{formatCurrency(c.avg_price ?? 0)}</TableCell>
+                    <TableCell align="right" muted>{formatCurrency(c.avg_ticket ?? 0)}</TableCell>
+                    <TableCell align="right">
+                      <span className={`font-medium ${(c.avg_margin_pct ?? 0) >= 30 ? 'text-success' : (c.avg_margin_pct ?? 0) >= 15 ? 'text-warning' : 'text-error'}`}>
+                        {(c.avg_margin_pct ?? 0).toFixed(1)}%
+                      </span>
+                    </TableCell>
                     <TableCell align="right">
                       <span className="text-sm font-medium text-brand">{pct.toFixed(1)}%</span>
                     </TableCell>

@@ -13,8 +13,8 @@ async function getAbcData() {
   const supabase = createAdminClient()
   const { data } = await supabase
     .from('mv_abc_by_revenue')
-    .select('product_id, total_revenue, revenue_pct, cumulative_pct, abc_class')
-    .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null }
+    .select('product_id, product_name, sku, supplier_name, value, cumulative_pct, abc_curve, margin_pct')
+    .order('value', { ascending: false }) as unknown as { data: any[] | null }
   const abcData = data ?? []
 
   if (abcData.length === 0) return { items: [], totals: { A: 0, B: 0, C: 0 } }
@@ -22,15 +22,17 @@ async function getAbcData() {
   const productIds = abcData.map(r => r.product_id)
   const { data: products } = await supabase
     .from('mv_product_performance')
-    .select('product_id, product_name, sku, total_units_sold')
+    .select('product_id, total_units_sold')
     .in('product_id', productIds) as unknown as { data: any[] | null }
 
   const productMap = Object.fromEntries((products ?? []).map(p => [p.product_id, p]))
 
+  const totalRevenue = abcData.reduce((s, r) => s + (r.value ?? 0), 0)
   const items = abcData.map(r => ({
     ...r,
-    product_name: productMap[r.product_id]?.product_name ?? '—',
-    sku: productMap[r.product_id]?.sku ?? '—',
+    total_revenue: r.value,
+    revenue_pct: totalRevenue > 0 ? (r.value / totalRevenue) * 100 : 0,
+    abc_class: r.abc_curve,
     total_units_sold: productMap[r.product_id]?.total_units_sold ?? 0,
   }))
 

@@ -15,7 +15,7 @@ async function getTurnoverData() {
   const [stockRes, perfRes] = await Promise.all([
     (supabase
       .from('mv_stock_status')
-      .select('product_variation_id, product_id, product_name, sku, current_qty, avg_cost, stock_value_at_cost, last_entry_date, last_sale_date')
+      .select('product_variation_id, product_id, product_name, sku, current_qty, avg_cost, stock_value_at_cost, last_entry_date')
       .order('current_qty', { ascending: false })
       .limit(100)) as unknown as Promise<{ data: any[] | null }>,
     (supabase
@@ -35,11 +35,12 @@ async function getTurnoverData() {
     const giro = totalSold > 0 && s.current_qty > 0
       ? (totalSold / (s.current_qty + totalSold)) * 100
       : 0
-    const diasParaVender = totalSold > 0 && daysSinceEntry
-      ? Math.round((s.current_qty / (totalSold / Math.max(daysSinceEntry, 1))) )
+    const diasParaVender = totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
+      ? Math.round(s.current_qty / (totalSold / daysSinceEntry))
       : null
+    const last_sale_date = perf.last_sale_date ?? null
 
-    return { ...s, totalSold, giro, diasParaVender, daysSinceEntry }
+    return { ...s, totalSold, giro, diasParaVender, daysSinceEntry, last_sale_date }
   })
 
   return items

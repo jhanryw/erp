@@ -120,14 +120,7 @@ export async function getAbcCurve(
   const { data, error } = await supabase
     .from(ABC_VIEW_MAP[dimension] as any)
     .select('*')
-    .order(
-      dimension === 'revenue'
-        ? 'total_revenue'
-        : dimension === 'profit'
-        ? 'total_gross_profit'
-        : 'total_units_sold',
-      { ascending: false }
-    )
+    .order('value', { ascending: false })
     .limit(limit)
 
   if (error) throw new Error(`getAbcCurve: ${error.message}`)
@@ -202,21 +195,18 @@ function categorizeTurnover(rate: number): StockTurnoverRow['turnover_category']
 export async function getStockTurnover(days = 90): Promise<StockTurnoverRow[]> {
   const supabase = createAdminClient()
 
-  // Estoque atual por variação (com nome do produto)
+  const sinceDate = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
+
   const [stockRes, salesRes] = await Promise.all([
     supabase
       .from('mv_stock_status' as any)
       .select('product_variation_id, product_id, product_name, sku, current_qty, supplier_id'),
     (supabase
       .from('sale_items') as any)
-      .select('product_variation_id, quantity')
-      .gte(
-        'sales.sale_date',
-        new Date(Date.now() - days * 86400000).toISOString().slice(0, 10)
-      ) as Promise<{ data: any[] | null, error: any }>,
+      .select('product_variation_id, quantity, sales!inner(sale_date)')
+      .gte('sales.sale_date', sinceDate) as Promise<{ data: any[] | null, error: any }>,
   ])
 
-  // Soma unidades vendidas por variação no período
   const soldMap: Record<number, number> = {}
   for (const item of salesRes.data ?? []) {
     soldMap[item.product_variation_id] =
