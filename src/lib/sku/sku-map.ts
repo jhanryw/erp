@@ -169,7 +169,7 @@ export const SKU_COR: Record<string, string> = {
   off_white:       '23',
   caramelo:        '24',
   verde_oliva:     '25',
-  azul_claro:      '26',
+  azul_celeste:    '26',
   terracota:       '27',
   bordo:           '28',
   champagne:       '29',
@@ -188,7 +188,8 @@ export const SKU_COR: Record<string, string> = {
   rose:            '42',
   chumbo:          '43',
   verde_militar:   '44',
-  azul_petroleo: '45',
+  azul_petroleo:   '45',
+  caqui:           '46',
 }
 
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
