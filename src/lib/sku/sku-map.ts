@@ -195,8 +195,9 @@ export const SKU_COR: Record<string, string> = {
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
 
 export const SKU_TAMANHO: Record<string, string> = {
-  pp:   '05',
-  p:    '01',
+  unico: '00',
+  pp:    '05',
+  p:     '01',
   p_m:  '07',
   m:    '02',
   g:    '03',
