@@ -18,7 +18,7 @@ export interface StockAdjustInput {
   /** Positivo = entrada, negativo = saída */
   delta: number
   reason: string
-  notes?: string
+  notes?: string | null
 }
 
 export interface StockAdjustResult {

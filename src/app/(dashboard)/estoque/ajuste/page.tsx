@@ -77,17 +77,53 @@ export default function EstoqueAjustePage() {
       .then(({ data }) => setVariations((data as any) ?? []))
   }, [selectedProduct])
 
+  const KNOWN_ERRORS: Record<string, string> = {
+    'variação não encontrada': 'Variação de produto não encontrada.',
+    'estoque insuficiente':    'Estoque insuficiente para realizar a saída.',
+    'stock not found':         'Registro de estoque não encontrado para essa variação.',
+    'delta cannot be zero':    'A quantidade não pode ser zero.',
+  }
+
+  function parseErrorMessage(err: unknown): string {
+    if (typeof err === 'string') {
+      const lower = err.toLowerCase()
+      for (const [key, friendly] of Object.entries(KNOWN_ERRORS)) {
+        if (lower.includes(key)) return friendly
+      }
+      return err
+    }
+    if (err && typeof err === 'object') {
+      const obj = err as Record<string, unknown>
+      if (typeof obj.error === 'string') return parseErrorMessage(obj.error)
+      const fieldErrors = obj.fieldErrors as Record<string, string[]> | undefined
+      if (fieldErrors) {
+        const first = Object.values(fieldErrors)[0]?.[0]
+        if (first) return first
+      }
+    }
+    return 'Verifique os dados e tente novamente.'
+  }
+
   async function onSubmit(data: FormData) {
+    const payload = {
+      product_variation_id: data.product_variation_id,
+      delta:  data.delta,
+      reason: data.reason,
+      notes:  data.notes?.trim() || null,
+    }
+
     const res = await fetch('/api/estoque/ajuste', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     })
+
     if (!res.ok) {
-      const err = await res.json()
-      toast.error('Erro ao registrar ajuste', { description: err.error })
+      const err = await res.json().catch(() => ({}))
+      toast.error('Erro ao registrar ajuste', { description: parseErrorMessage(err.error ?? err) })
       return
     }
+
     toast.success('Ajuste registrado com sucesso')
     router.push('/estoque')
   }

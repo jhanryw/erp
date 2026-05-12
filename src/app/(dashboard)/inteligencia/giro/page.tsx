@@ -15,12 +15,12 @@ async function getTurnoverData() {
   const [stockRes, perfRes] = await Promise.all([
     (supabase
       .from('mv_stock_status' as any)
-      .select('product_variation_id, product_id, product_name, sku, current_qty, avg_cost, stock_value_at_cost, last_entry_date, last_sale_date')
+      .select('product_variation_id, product_id, product_name, sku_parent, sku_variation, cor, tamanho, current_qty, avg_cost, stock_value_at_cost, last_entry_date, last_sale_date')
       .order('current_qty', { ascending: false })
       .limit(200)) as unknown as Promise<{ data: any[] | null; error: any }>,
     (supabase
       .from('mv_product_performance' as any)
-      .select('product_id, total_units_sold, first_sale_date, last_sale_date')
+      .select('product_id, total_units_sold, last_sale_date')
     ) as unknown as Promise<{ data: any[] | null; error: any }>,
   ])
 
@@ -38,11 +38,11 @@ async function getTurnoverData() {
     const diasParaVender = totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
       ? Math.round(s.current_qty / (totalSold / daysSinceEntry))
       : null
-
-    // prefer last_sale_date from mv_stock_status (per-variation), fallback to product-level
     const last_sale_date = s.last_sale_date ?? perf.last_sale_date ?? null
+    const sku = s.sku_variation ?? s.sku_parent ?? '—'
+    const variacao = [s.cor, s.tamanho].filter(Boolean).join(' / ') || null
 
-    return { ...s, totalSold, diasParaVender, daysSinceEntry, last_sale_date }
+    return { ...s, totalSold, diasParaVender, daysSinceEntry, last_sale_date, sku, variacao }
   })
 
   return items
@@ -92,7 +92,7 @@ export default async function GiroEstoquePage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Produto / SKU</TableHead>
+                <TableHead>Produto / Variação</TableHead>
                 <TableHead align="right">Em Estoque</TableHead>
                 <TableHead align="right">Já Vendido</TableHead>
                 <TableHead align="right">Val. Estoque</TableHead>
@@ -111,7 +111,10 @@ export default async function GiroEstoquePage() {
                       <Link href={`/produtos/${item.product_id}`} className="font-medium hover:text-accent block">
                         {item.product_name}
                       </Link>
-                      <span className="font-mono text-xs text-text-muted">{item.sku}</span>
+                      <span className="font-mono text-xs text-text-muted">
+                        {item.sku}
+                        {item.variacao && <span className="ml-1 not-mono">· {item.variacao}</span>}
+                      </span>
                     </TableCell>
                     <TableCell align="right" className={zerado ? 'text-error font-bold' : 'font-semibold'}>{item.current_qty ?? 0}</TableCell>
                     <TableCell align="right" muted>{item.totalSold}</TableCell>

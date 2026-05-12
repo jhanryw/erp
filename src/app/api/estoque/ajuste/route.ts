@@ -6,10 +6,10 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 const schema = z.object({
-  product_variation_id: z.number().min(1),
-  delta:  z.number().int().refine((n) => n !== 0, { message: 'Delta não pode ser zero' }),
-  reason: z.string().min(1),
-  notes:  z.string().optional(),
+  product_variation_id: z.coerce.number().int().min(1, 'Selecione uma variação válida'),
+  delta:  z.coerce.number().int('Deve ser número inteiro').refine((n) => n !== 0, { message: 'Delta não pode ser zero' }),
+  reason: z.string().min(1, 'Informe o motivo do ajuste'),
+  notes:  z.string().optional().nullable().transform((v) => (v == null || v.trim() === '') ? null : v.trim()),
 })
 
 export async function POST(request: Request) {
@@ -20,7 +20,12 @@ export async function POST(request: Request) {
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
   const parsed = schema.safeParse(body)
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+  if (!parsed.success) {
+    const flat = parsed.error.flatten()
+    const fieldMsg = Object.values(flat.fieldErrors as Record<string, string[]>)[0]?.[0]
+    const formMsg  = flat.formErrors[0]
+    return NextResponse.json({ error: fieldMsg ?? formMsg ?? 'Dados inválidos' }, { status: 400 })
+  }
 
   try {
     const result = await adjustStock(parsed.data, user.id)
