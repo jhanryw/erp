@@ -169,7 +169,7 @@ export const SKU_COR: Record<string, string> = {
   off_white:       '23',
   caramelo:        '24',
   verde_oliva:     '25',
-  azul_celeste:    '26',
+  azul_claro:      '26',
   terracota:       '27',
   bordo:           '28',
   champagne:       '29',
