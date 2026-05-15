@@ -340,7 +340,7 @@ export async function POST(request: Request) {
         p_customer_id:         customerId,
         p_seller_id:           systemUserId,
         p_payment_method:      paymentMethod,
-        p_sale_origin:         'nuvemshop',
+        p_sale_origin:         'website',
         p_discount_amount:     0,
         p_surcharge_amount:    0,
         p_cashback_used:       0,
