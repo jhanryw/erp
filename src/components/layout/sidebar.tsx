@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ShoppingCart, Users, Package, Warehouse,
   Truck, TrendingUp, DollarSign, BarChart3, Brain,
-  Settings, Gift, LogOut, ChevronRight, Gem, SendHorizonal,
+  Settings, Gift, LogOut, ChevronRight, Gem, SendHorizonal, Globe,
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
@@ -59,6 +59,7 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     title: 'Sistema',
     items: [
       { label: 'Configurações', href: '/configuracoes', icon: Settings, minRole: 'admin' },
+      { label: 'Nuvemshop',    href: '/configuracoes/nuvemshop', icon: Globe, minRole: 'admin' },
     ],
   },
 ]
