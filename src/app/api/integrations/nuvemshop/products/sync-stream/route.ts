@@ -23,7 +23,6 @@ type VariationRow = {
   id:                           number
   sku_variation:                string | null
   product_variation_attributes: AttributeRow[]
-  stock:                        { quantity: number }[]
 }
 
 export async function POST(request: Request) {
@@ -91,6 +90,7 @@ export async function POST(request: Request) {
 
         for (const product of pending) {
           try {
+            // 1. Buscar variações do produto
             const { data: variations } = (await (admin as any)
               .from('product_variations')
               .select(`
@@ -101,12 +101,32 @@ export async function POST(request: Request) {
                   variation_value_id,
                   variation_types:variation_type_id ( name, slug ),
                   variation_values:variation_value_id ( value, slug )
-                ),
-                stock ( quantity )
+                )
               `)
               .eq('product_id', product.id)
               .eq('active', true)
               .order('id', { ascending: true })) as { data: VariationRow[] | null }
+
+            // 2. Buscar estoque para essas variações
+            const variationIds = (variations ?? []).map((v) => v.id)
+            let stockRows: Array<{ product_variation_id: number; quantity: number }> | null = null
+
+            if (variationIds.length > 0) {
+              const { data } = (await (admin as any)
+                .from('stock')
+                .select('product_variation_id, quantity')
+                .in('product_variation_id', variationIds)) as {
+                  data: Array<{ product_variation_id: number; quantity: number }> | null
+                }
+              stockRows = data
+            }
+
+            const stockByVariation = new Map<number, number>()
+            if (stockRows) {
+              for (const row of stockRows) {
+                stockByVariation.set(row.product_variation_id, row.quantity)
+              }
+            }
 
             const allVariations = variations ?? []
 
@@ -143,7 +163,7 @@ export async function POST(request: Request) {
               return {
                 internalVariationId: v.id,
                 price:               product.base_price,
-                stock:               v.stock?.[0]?.quantity ?? 0,
+                stock:               stockByVariation.get(v.id) ?? 0,
                 sku:                 v.sku_variation ?? undefined,
                 attributeValues:     attributeSlugs.map((slug) => attrBySlug.get(slug) ?? ''),
               }
