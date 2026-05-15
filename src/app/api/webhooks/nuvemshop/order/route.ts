@@ -1,11 +1,24 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { cancelSale } from '@/services/vendas.service'
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
 
+// ─── Env vars necessárias ─────────────────────────────────────────────────────
+// NUVEMSHOP_STORE_ID         — ID numérico da loja
+// NUVEMSHOP_ACCESS_TOKEN     — token de acesso
+// NUVEMSHOP_SYSTEM_USER_ID   — UUID do usuário sistema usado como p_seller_id no rpc_create_sale
+
 // ─── Tipos do payload da Nuvemshop ────────────────────────────────────────────
+
+type NuvemshopCustomer = {
+  name?:           string
+  email?:          string
+  phone?:          string
+  identification?: string
+}
 
 type NuvemshopOrderItem = {
   id:         number
@@ -18,11 +31,13 @@ type NuvemshopOrderItem = {
 }
 
 type NuvemshopOrder = {
-  id:       number
-  status:   string
-  total:    string
-  customer: { name?: string; email?: string } | null
-  products: NuvemshopOrderItem[]
+  id:               number
+  status:           string
+  total:            string
+  total_shipping?:  string
+  customer:         NuvemshopCustomer | null
+  products:         NuvemshopOrderItem[]
+  payment_details?: { method?: string } | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -30,6 +45,64 @@ type NuvemshopOrder = {
 function resolveName(name: string | Record<string, string>): string {
   if (typeof name === 'string') return name
   return name.pt ?? name.es ?? name.en ?? Object.values(name)[0] ?? ''
+}
+
+/** Mapeia método de pagamento Nuvemshop → ERP. */
+function mapPaymentMethod(nsMethod?: string): 'pix' | 'card' | 'cash' {
+  if (!nsMethod) return 'pix'
+  const m = nsMethod.toLowerCase()
+  if (m.includes('pix'))                    return 'pix'
+  if (m.includes('credit') || m.includes('debit') || m.includes('card')) return 'card'
+  return 'cash'
+}
+
+/** Encontra cliente por e-mail ou CPF. Cria um novo se não encontrar. */
+async function findOrCreateCustomer(
+  admin:    ReturnType<typeof createAdminClient>,
+  customer: NuvemshopCustomer
+): Promise<number | null> {
+  const email = customer.email?.trim() || null
+  const cpf   = customer.identification?.replace(/\D/g, '') || null
+  const name  = customer.name?.trim() || 'Cliente Nuvemshop'
+
+  // Tentar encontrar por e-mail primeiro, depois por CPF
+  if (email) {
+    const { data } = await (admin as any)
+      .from('customers')
+      .select('id')
+      .eq('email', email)
+      .maybeSingle() as { data: { id: number } | null }
+    if (data) return data.id
+  }
+
+  if (cpf) {
+    const { data } = await (admin as any)
+      .from('customers')
+      .select('id')
+      .eq('cpf', cpf)
+      .maybeSingle() as { data: { id: number } | null }
+    if (data) return data.id
+  }
+
+  // Criar novo cliente
+  const { data: created, error } = await (admin as any)
+    .from('customers')
+    .insert({
+      name,
+      email:  email ?? null,
+      cpf:    cpf   ?? null,
+      phone:  customer.phone?.trim() ?? null,
+      origin: 'website',
+    })
+    .select('id')
+    .single() as { data: { id: number } | null; error: { message: string } | null }
+
+  if (error || !created) {
+    console.error('[webhook/order] Erro ao criar cliente', error?.message)
+    return null
+  }
+
+  return created.id
 }
 
 // ─── Rota ─────────────────────────────────────────────────────────────────────
@@ -49,10 +122,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    // ── 1. Buscar pedido completo na Nuvemshop ──────────────────────────────────
     const storeId = process.env.NUVEMSHOP_STORE_ID
     const token   = process.env.NUVEMSHOP_ACCESS_TOKEN
 
+    // ── 1. Buscar pedido completo na Nuvemshop ──────────────────────────────────
     const apiRes = await fetch(
       `https://api.tiendanube.com/v1/${storeId}/orders/${orderId}`,
       {
@@ -71,72 +144,42 @@ export async function POST(request: Request) {
 
     const order = await apiRes.json() as NuvemshopOrder
 
-    // ── 2. Mapear campos base ───────────────────────────────────────────────────
-    const externalId        = String(order.id)
-    const channelStatus     = order.status ?? ''
-    const operationalStatus = channelStatus === 'paid' ? 'pronto' : null
-    const total             = parseFloat(order.total ?? '0')
-    const customerName      = order.customer?.name  ?? ''
-    const customerEmail     = order.customer?.email ?? ''
+    const externalId    = String(order.id)
+    const channelStatus = order.status ?? ''
+    const total         = parseFloat(order.total ?? '0')
+    const customerName  = order.customer?.name  ?? ''
+    const customerEmail = order.customer?.email ?? ''
 
     const admin = createAdminClient()
 
-    // ── 3. Verificar se pedido já existe ────────────────────────────────────────
+    // ── 2. Verificar / criar staging do pedido ──────────────────────────────────
     const { data: existing } = (await (admin as any)
       .from('pedidos')
-      .select('id, stock_processed')
+      .select('id, stock_processed, sale_id')
       .eq('external_id', externalId)
       .eq('source', 'nuvemshop')
-      .maybeSingle()) as { data: { id: number; stock_processed: boolean } | null }
+      .maybeSingle()) as { data: { id: number; stock_processed: boolean; sale_id: number | null } | null }
 
     let pedidoId: number
 
     if (existing) {
       pedidoId = existing.id
-
-      // Atualizar status sempre
-      const updatePayload: Record<string, unknown> = {
-        status:         channelStatus,
-        channel_status: channelStatus,
-        total,
-        customer_name:  customerName,
-        customer_email: customerEmail,
-      }
-      if (operationalStatus) updatePayload.operational_status = operationalStatus
-
-      const { error: updateError } = (await (admin as any)
+      await (admin as any)
         .from('pedidos')
-        .update(updatePayload)
-        .eq('id', pedidoId)) as { error: { message: string } | null }
-
-      if (updateError) {
-        console.error('[webhook/order] Erro ao atualizar pedido', updateError.message)
-        return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
-      }
-
-      // Se estoque já processado, não retoca os itens — só atualiza status
-      if (existing.stock_processed) {
-        return NextResponse.json({ ok: true, imported: true })
-      }
-
-      // Estoque ainda não processado: recriar itens para novo processamento
-      if (order.products.length > 0) {
-        await (admin as any).from('pedidos_itens').delete().eq('pedido_id', pedidoId)
-      }
+        .update({ status: channelStatus, channel_status: channelStatus, total, customer_name: customerName, customer_email: customerEmail })
+        .eq('id', pedidoId)
     } else {
-      // ── INSERT novo pedido ────────────────────────────────────────────────────
       const { data: pedido, error: pedidoError } = (await (admin as any)
         .from('pedidos')
         .insert({
-          external_id:        externalId,
-          source:             'nuvemshop',
-          status:             channelStatus,
-          channel_status:     channelStatus,
-          operational_status: operationalStatus,
+          external_id:     externalId,
+          source:          'nuvemshop',
+          status:          channelStatus,
+          channel_status:  channelStatus,
           total,
-          customer_name:      customerName,
-          customer_email:     customerEmail,
-          stock_processed:    false,
+          customer_name:   customerName,
+          customer_email:  customerEmail,
+          stock_processed: false,
         })
         .select('id')
         .single()) as { data: { id: number } | null; error: { message: string } | null }
@@ -145,48 +188,87 @@ export async function POST(request: Request) {
         console.error('[webhook/order] Erro ao inserir pedido', pedidoError?.message)
         return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
       }
-
       pedidoId = pedido.id
     }
 
-    // ── 4. Inserir itens com mapeamento de variação ─────────────────────────────
+    // ── 3. Cancelamento ─────────────────────────────────────────────────────────
+    if (event === 'orders/cancelled' || channelStatus === 'cancelled') {
+      const saleId = existing?.sale_id ?? null
+
+      if (saleId) {
+        const systemUserId = process.env.NUVEMSHOP_SYSTEM_USER_ID ?? ''
+        const cancelResult = await cancelSale(saleId, systemUserId, null)
+
+        if (!cancelResult.ok) {
+          console.error('[webhook/order] Erro ao cancelar venda', cancelResult.error)
+          // Não falha o webhook — pode já estar cancelada
+        } else {
+          // Buscar itens do pedido para confirmar estoque na Nuvemshop
+          const { data: itens } = (await (admin as any)
+            .from('pedidos_itens')
+            .select('product_variation_id')
+            .eq('pedido_id', pedidoId)
+            .eq('mapped', true)) as { data: Array<{ product_variation_id: number }> | null }
+
+          for (const item of itens ?? []) {
+            await pushVariantStockToNuvemshop(item.product_variation_id, {
+              eventType:       'stock_confirm_ns',
+              externalOrderId: externalId,
+            })
+          }
+        }
+      }
+
+      await (admin as any)
+        .from('pedidos')
+        .update({ status: 'cancelled', channel_status: 'cancelled' })
+        .eq('id', pedidoId)
+
+      return NextResponse.json({ ok: true, cancelled: true })
+    }
+
+    // ── 4. Pedido pago: já processado? ──────────────────────────────────────────
+    if (channelStatus !== 'paid') {
+      return NextResponse.json({ ok: true, skipped: true })
+    }
+
+    if (existing?.stock_processed && existing?.sale_id) {
+      return NextResponse.json({ ok: true, already_processed: true })
+    }
+
     if (order.products.length === 0) {
       return NextResponse.json({ ok: true, imported: true })
     }
 
-    // Buscar mapeamentos de variantes existentes para os variant_ids deste pedido
+    // ── 5. Buscar mapeamentos de variantes ──────────────────────────────────────
     const externalVariantIds = order.products
       .map((p) => p.variant_id)
       .filter((v): v is number => v != null)
       .map(String)
 
-    type MappingRow = {
-      external_variant_id: string
-      product_variation_id: number
-      external_id: string
-    }
-
+    type MappingRow = { external_variant_id: string; product_variation_id: number; external_id: string }
     let variantMappings: MappingRow[] = []
+
     if (externalVariantIds.length > 0) {
       const { data: mappings } = (await (admin as any)
         .from('produto_map')
         .select('external_variant_id, product_variation_id, external_id')
         .eq('source', 'nuvemshop')
         .in('external_variant_id', externalVariantIds)) as { data: MappingRow[] | null }
-
       variantMappings = mappings ?? []
     }
 
     const mappingByVariantId = new Map<string, MappingRow>()
-    for (const m of variantMappings) {
-      mappingByVariantId.set(m.external_variant_id, m)
+    for (const m of variantMappings) mappingByVariantId.set(m.external_variant_id, m)
+
+    // ── 6. Inserir / recriar itens do pedido ────────────────────────────────────
+    if (order.products.length > 0) {
+      await (admin as any).from('pedidos_itens').delete().eq('pedido_id', pedidoId)
     }
 
-    // Construir linhas de itens
-    const itens = order.products.map((p) => {
+    const itensPayload = order.products.map((p) => {
       const variantKey = p.variant_id != null ? String(p.variant_id) : null
       const mapping    = variantKey ? mappingByVariantId.get(variantKey) : undefined
-
       return {
         pedido_id:            pedidoId,
         external_product_id:  String(p.product_id ?? p.id),
@@ -200,9 +282,9 @@ export async function POST(request: Request) {
 
     const { data: insertedItens, error: itensError } = (await (admin as any)
       .from('pedidos_itens')
-      .insert(itens)
-      .select('id, product_variation_id, mapped, quantidade')) as {
-        data: Array<{ id: number; product_variation_id: number | null; mapped: boolean; quantidade: number }> | null
+      .insert(itensPayload)
+      .select('id, product_variation_id, mapped, quantidade, preco')) as {
+        data: Array<{ id: number; product_variation_id: number | null; mapped: boolean; quantidade: number; preco: number }> | null
         error: { message: string } | null
       }
 
@@ -211,73 +293,105 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
     }
 
-    // ── 5. Baixa de estoque (apenas para pedidos pagos com itens mapeados) ───────
-    const shouldDeductStock = channelStatus === 'paid'
+    const mappedItens = insertedItens.filter((i) => i.mapped && i.product_variation_id != null)
 
-    if (shouldDeductStock) {
-      for (const item of insertedItens) {
-        if (!item.mapped || item.product_variation_id == null) continue
-
-        try {
-          // 5a. Baixar estoque no ERP via RPC idempotente
-          const { data: rpcResult, error: rpcError } = (await (admin as any).rpc(
-            'rpc_nuvemshop_sale_deduct',
-            {
-              p_product_variation_id: item.product_variation_id,
-              p_quantity:             item.quantidade,
-              p_external_order_id:    externalId,
-            }
-          )) as { data: { new_quantity: number; skipped: boolean } | null; error: { message: string } | null }
-
-          if (rpcError) {
-            console.error(
-              '[webhook/order] rpc_nuvemshop_sale_deduct falhou',
-              { item_id: item.id, error: rpcError.message }
-            )
-            continue
-          }
-
-          const newQty   = rpcResult?.new_quantity ?? 0
-          const skipped  = rpcResult?.skipped ?? false
-
-          // 5b. Registrar em estoque_movimentacoes (tracking por canal)
-          if (!skipped) {
-            const { error: movError } = (await (admin as any)
-              .from('estoque_movimentacoes')
-              .insert({
-                product_variation_id: item.product_variation_id,
-                tipo:                 'saida',
-                origem:               'nuvemshop',
-                referencia_externa:   externalId,
-                quantidade:           item.quantidade,
-              })) as { error: { message: string } | null }
-
-            if (movError) {
-              console.error('[webhook/order] Erro ao registrar estoque_movimentacoes', movError.message)
-              // Não interrompe o fluxo — ledger principal (stock_movements) já foi atualizado pela RPC
-            }
-
-            // 5c. Confirmar estoque final na Nuvemshop via serviço centralizado
-            // (loga em nuvemshop_sync_logs + atualiza last_stock_synced_at automaticamente)
-            await pushVariantStockToNuvemshop(item.product_variation_id, {
-              eventType:       'stock_confirm_ns',
-              externalOrderId: externalId,
-            })
-          }
-        } catch (stockErr) {
-          console.error('[webhook/order] Exceção na baixa de estoque do item', { item_id: item.id, error: stockErr })
-          // Continua para próximo item — não deve falhar o webhook inteiro
-        }
-      }
-
-      // 5d. Marcar pedido como processado para evitar dupla baixa
-      await (admin as any)
-        .from('pedidos')
-        .update({ stock_processed: true })
-        .eq('id', pedidoId)
+    if (mappedItens.length === 0) {
+      console.warn('[webhook/order] Nenhum item mapeado — venda não criada no ERP', { externalId })
+      return NextResponse.json({ ok: true, imported: true, mapped_items: 0 })
     }
 
-    return NextResponse.json({ ok: true, imported: true })
+    // ── 7. Buscar custo médio de cada variação ──────────────────────────────────
+    const variationIds = mappedItens.map((i) => i.product_variation_id!)
+
+    const { data: stockRows } = (await admin
+      .from('stock')
+      .select('product_variation_id, avg_cost')
+      .in('product_variation_id', variationIds)) as unknown as {
+        data: Array<{ product_variation_id: number; avg_cost: number }> | null
+      }
+
+    const avgCostByVariation = new Map<number, number>()
+    for (const s of stockRows ?? []) avgCostByVariation.set(s.product_variation_id, s.avg_cost ?? 0)
+
+    // ── 8. Encontrar ou criar cliente ───────────────────────────────────────────
+    const customerId = await findOrCreateCustomer(admin, order.customer ?? {})
+
+    if (!customerId) {
+      console.error('[webhook/order] Não foi possível encontrar/criar cliente', { externalId })
+      return NextResponse.json({ error: 'Erro ao processar cliente.' }, { status: 500 })
+    }
+
+    // ── 9. Montar itens para rpc_create_sale ────────────────────────────────────
+    const saleItems = mappedItens.map((i) => ({
+      product_variation_id: i.product_variation_id!,
+      quantity:             i.quantidade,
+      unit_price:           i.preco,
+      unit_cost:            avgCostByVariation.get(i.product_variation_id!) ?? 0,
+      discount_amount:      0,
+    }))
+
+    const shippingCharged  = parseFloat(order.total_shipping ?? '0')
+    const paymentMethod    = mapPaymentMethod(order.payment_details?.method)
+    const systemUserId     = process.env.NUVEMSHOP_SYSTEM_USER_ID ?? ''
+
+    // ── 10. Criar venda completa no ERP (atômico via RPC) ───────────────────────
+    const { data: sale, error: saleError } = await (admin as any)
+      .rpc('rpc_create_sale', {
+        p_customer_id:         customerId,
+        p_seller_id:           systemUserId,
+        p_payment_method:      paymentMethod,
+        p_sale_origin:         'nuvemshop',
+        p_discount_amount:     0,
+        p_surcharge_amount:    0,
+        p_cashback_used:       0,
+        p_shipping_charged:    shippingCharged,
+        p_notes:               `Pedido Nuvemshop #${externalId}`,
+        p_items:               saleItems,
+        p_system_user_id:      systemUserId,
+        p_accumulate_cashback: true,
+      }) as unknown as { data: { id: number; sale_number: string } | null; error: { message: string } | null }
+
+    if (saleError || !sale) {
+      console.error('[webhook/order] Erro ao criar venda', saleError?.message, { externalId })
+      return NextResponse.json({ error: 'Erro ao criar venda no ERP.' }, { status: 500 })
+    }
+
+    // ── 11. Registrar movimentações de estoque por canal ────────────────────────
+    for (const item of mappedItens) {
+      await (admin as any)
+        .from('estoque_movimentacoes')
+        .insert({
+          product_variation_id: item.product_variation_id,
+          tipo:                 'saida',
+          origem:               'nuvemshop',
+          referencia_externa:   externalId,
+          quantidade:           item.quantidade,
+        })
+        .catch((err: unknown) =>
+          console.error('[webhook/order] Erro ao registrar estoque_movimentacoes', err)
+        )
+    }
+
+    // ── 12. Confirmar estoque final na Nuvemshop ─────────────────────────────────
+    for (const item of mappedItens) {
+      await pushVariantStockToNuvemshop(item.product_variation_id!, {
+        eventType:       'stock_confirm_ns',
+        externalOrderId: externalId,
+      })
+    }
+
+    // ── 13. Marcar pedido como processado ────────────────────────────────────────
+    await (admin as any)
+      .from('pedidos')
+      .update({
+        stock_processed:    true,
+        sale_id:            sale.id,
+        customer_id:        customerId,
+        operational_status: 'pronto',
+      })
+      .eq('id', pedidoId)
+
+    return NextResponse.json({ ok: true, imported: true, sale_id: sale.id, sale_number: sale.sale_number })
   } catch (err) {
     console.error('[webhook/order] Exceção não tratada', err)
     return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })

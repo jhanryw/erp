@@ -2,6 +2,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { adjustStock } from '@/services/estoque.service'
+import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -38,6 +39,10 @@ export async function POST(request: Request) {
       detail: `delta:${parsed.data.delta} reason:${parsed.data.reason}`,
       after:  { new_quantity: result.data.new_quantity, delta: result.data.delta },
     })
+
+    pushVariantStockToNuvemshop(parsed.data.product_variation_id, { eventType: 'stock_push_erp' })
+      .catch((err) => console.error('[POST /api/estoque/ajuste] Nuvemshop sync error', err))
+
     return NextResponse.json(result.data)
   } catch (err) {
     logError({
