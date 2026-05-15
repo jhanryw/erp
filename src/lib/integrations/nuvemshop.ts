@@ -64,6 +64,8 @@ export interface NuvemshopProductFullPayload {
   /** Ordered attribute type names, e.g. ["Cor", "Tamanho"] */
   attributeNames:  string[]
   variants:        NuvemshopVariantInput[]
+  /** Se false, cria o produto como oculto (rascunho). Default: false */
+  published?:      boolean
 }
 
 // ─── createNuvemshopProduct ───────────────────────────────────────────────────
@@ -117,7 +119,8 @@ export async function createNuvemshopProductFull(
   payload: NuvemshopProductFullPayload
 ): Promise<NuvemshopProductResponse> {
   const body: Record<string, unknown> = {
-    name: { pt: payload.name },
+    name:      { pt: payload.name },
+    published: payload.published ?? false,
   }
 
   if (payload.description) {

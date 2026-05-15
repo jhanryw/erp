@@ -192,7 +192,7 @@ export async function POST(request: Request) {
     }
 
     // ── 3. Cancelamento ─────────────────────────────────────────────────────────
-    if (event === 'orders/cancelled' || channelStatus === 'cancelled') {
+    if (event === 'orders/cancelled' || event === 'order/cancelled' || channelStatus === 'cancelled') {
       const saleId = existing?.sale_id ?? null
 
       if (saleId) {
