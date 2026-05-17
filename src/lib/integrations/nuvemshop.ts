@@ -193,7 +193,10 @@ export async function mapProductToNuvemshop(
 
   const { error } = (await (admin as any)
     .from('produto_map')
-    .insert({ produto_id: produtoId, external_id: externalId, source: 'nuvemshop' })
+    .upsert(
+      { produto_id: produtoId, external_id: externalId, source: 'nuvemshop' },
+      { onConflict: 'produto_id,source' }
+    )
   ) as { error: { message: string } | null }
 
   if (error) throw new Error(`mapProductToNuvemshop: ${error.message}`)
