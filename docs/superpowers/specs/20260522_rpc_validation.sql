@@ -1,150 +1,189 @@
 -- =============================================================================
 -- Validação pós-migration: rpc_create_sale com p_payments
 --
--- Execute cada bloco SEPARADAMENTE no SQL Editor do Supabase.
--- Todos os testes usam BEGIN/ROLLBACK — nenhum dado permanece no banco.
+-- Não requer substituição manual. Todos os valores (seller, customer,
+-- product_variation, unit_cost) são buscados dinamicamente do banco via
+-- subqueries inline.
 --
--- Substitua antes de rodar:
---   :seller_id     → um UUID válido de users (vendedor ativo)
---   :customer_id   → um INT válido de customers
---   :pvid          → um INT válido de product_variations com estoque > 0
---   :unit_cost     → o avg_cost da variação acima
+-- Execute cada bloco BEGIN/ROLLBACK SEPARADAMENTE no SQL Editor.
+-- Nenhum dado permanece no banco após os testes.
 -- =============================================================================
 
--- ─── Buscar valores reais para usar nos testes ────────────────────────────────
--- Rode primeiro para pegar os valores de substituição acima:
-
+-- =============================================================================
+-- PASSO 0 — Verificar que existe dados suficientes para os testes
+-- Esperado: 1 linha com todos os campos preenchidos
+-- =============================================================================
 SELECT
   u.id            AS seller_id,
-  u.company_id,
   c.id            AS customer_id,
   pv.id           AS pvid,
-  s.quantity      AS estoque_disponivel,
-  s.avg_cost      AS unit_cost
+  s.quantity      AS estoque,
+  s.avg_cost      AS unit_cost,
+  p.company_id
 FROM users u
-JOIN customers c ON c.company_id = u.company_id
-JOIN product_variations pv ON pv.id IN (
-  SELECT product_variation_id FROM stock WHERE quantity > 0 LIMIT 1
-)
-JOIN stock s ON s.product_variation_id = pv.id
+JOIN customers      c  ON c.company_id  = u.company_id
+JOIN products       p  ON p.company_id  = u.company_id
+JOIN product_variations pv ON pv.product_id = p.id
+JOIN stock          s  ON s.product_variation_id = pv.id
 WHERE u.role IN ('admin', 'seller')
+  AND s.quantity > 0
 LIMIT 1;
+-- Se não retornar linha: não há estoque disponível para testar.
 
 -- =============================================================================
 -- TESTE 1 — Path legado (p_payments = NULL)
--- Comportamento 100% idêntico ao original.
--- Esperado: sale criada, 1 linha em sale_payments, finance_entry de receita.
+-- Venda R$100 via Pix, caminho original sem alteração.
+-- Esperado: sale criada com payment_method='pix',
+--           1 linha em sale_payments (inserida pelo path legado).
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'pix',
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'pix'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 1 — legado',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           100.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_card_fee       := 0,
+  p_notes           := 'TESTE 1 — legado sem p_payments',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           100.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_card_fee        := 0,
   p_surcharge_amount:= 0,
-  p_payments       := NULL
+  p_payments        := NULL
 ) AS resultado;
 
--- Verificar: 1 linha em sale_payments, method = pix, net_amount = 100
-SELECT sp.method, sp.amount_tendered, sp.change_amount, sp.net_amount,
-       sp.fee_percentage, sp.fee_amount
+-- Verificar: 1 linha em sale_payments, method=pix, net_amount=100
+SELECT sp.method, sp.amount_tendered, sp.change_amount,
+       sp.net_amount, sp.fee_amount
 FROM sale_payments sp
-JOIN sales s ON s.id = sp.sale_id
 ORDER BY sp.created_at DESC LIMIT 1;
 
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 2 — Pix + Dinheiro (dois pagamentos, sem troco)
--- Venda de R$150: Pix R$80 + Dinheiro R$70
--- Esperado: sale criada com payment_method = 'pix' (dominante),
+-- TESTE 2 — Pix R$80 + Dinheiro R$70 (venda R$150, sem troco)
+-- Esperado: payment_method='pix' (dominante por maior net_amount),
 --           2 linhas em sale_payments.
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'pix',      -- ignorado pelo RPC quando p_payments != NULL
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'pix'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 2 — Pix + Dinheiro',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           150.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_card_fee       := 0,
-  p_surcharge_amount:= 0,
-  p_payments       := '[
-    {
-      "method":          "pix",
-      "amount_tendered": 80.00,
-      "change_amount":   0,
-      "net_amount":      80.00
-    },
-    {
-      "method":          "cash",
-      "amount_tendered": 70.00,
-      "change_amount":   0,
-      "net_amount":      70.00
-    }
+  p_notes           := 'TESTE 2 — Pix + Dinheiro',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           150.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payments        := '[
+    {"method":"pix",  "amount_tendered":80.00,"change_amount":0,"net_amount":80.00},
+    {"method":"cash", "amount_tendered":70.00,"change_amount":0,"net_amount":70.00}
   ]'::jsonb
 ) AS resultado;
 
--- Verificar: payment_method = pix (dominante), 2 linhas em sale_payments
-SELECT s.payment_method AS dominante,
-       sp.method, sp.net_amount
-FROM sales s
-JOIN sale_payments sp ON sp.sale_id = s.id
+-- Verificar dominante e os dois pagamentos
+SELECT s.payment_method AS dominante, s.total
+FROM sales s ORDER BY s.created_at DESC LIMIT 1;
+-- Esperado: pix | 150.00
+
+SELECT sp.method, sp.net_amount
+FROM sale_payments sp
+JOIN sales s ON s.id = sp.sale_id
 ORDER BY s.created_at DESC, sp.net_amount DESC;
+-- Esperado: 2 linhas — pix 80 e cash 70
 
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 3 — Dinheiro com troco via Pix
--- Venda R$80: cliente paga R$100 em dinheiro, troco R$20 via Pix
--- Esperado: 1 linha em sale_payments com change_amount=20, change_method='pix'
+-- TESTE 3 — Dinheiro R$100 com troco R$20 via Pix (venda R$80)
+-- Esperado: 1 linha em sale_payments com change_amount=20, change_method='pix',
+--           net_amount=80, amount_tendered=100.
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'cash',
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'cash'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 3 — Dinheiro troco Pix',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           80.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_payments       := '[
+  p_notes           := 'TESTE 3 — Dinheiro troco Pix',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           80.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payments        := '[
     {
       "method":          "cash",
       "amount_tendered": 100.00,
@@ -157,38 +196,53 @@ SELECT public.rpc_create_sale(
 
 SELECT sp.method, sp.amount_tendered, sp.change_amount,
        sp.change_method, sp.net_amount
-FROM sale_payments sp
-ORDER BY sp.created_at DESC LIMIT 1;
+FROM sale_payments sp ORDER BY sp.created_at DESC LIMIT 1;
 -- Esperado: cash | 100 | 20 | pix | 80
 
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 4 — Crédito parcelado + Pix
--- Venda R$300: Crédito 3x R$200 + Pix R$100
--- Esperado: payment_method = 'credit_card' (dominante),
---           fee_amount calculado para o crédito, finance_entry de taxa criada
+-- TESTE 4 — Crédito 3x R$200 + Pix R$100 (venda R$300)
+-- Esperado: payment_method='credit_card' (dominante),
+--           fee_amount calculado para o crédito (se houver taxa configurada),
+--           finance_entry de despesa criada para a taxa.
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'pix',
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'pix'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 4 — Crédito 3x + Pix',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           300.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_payments       := '[
+  p_notes           := 'TESTE 4 — Credito 3x + Pix',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           300.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payments        := '[
     {
       "method":          "credit_card",
       "amount_tendered": 200.00,
@@ -207,106 +261,128 @@ SELECT public.rpc_create_sale(
   ]'::jsonb
 ) AS resultado;
 
--- Verificar dominante e pagamentos
+-- Dominante e total
 SELECT s.payment_method AS dominante, s.total
 FROM sales s ORDER BY s.created_at DESC LIMIT 1;
 -- Esperado: credit_card | 300.00
 
+-- Pagamentos com taxa
 SELECT sp.method, sp.net_amount, sp.installments,
        sp.fee_percentage, sp.fee_amount, sp.card_brand
 FROM sale_payments sp
-ORDER BY sp.created_at DESC, sp.net_amount DESC;
--- Esperado: credit_card 3x com fee_amount calculado, pix sem taxa
+JOIN sales s ON s.id = sp.sale_id
+ORDER BY s.created_at DESC, sp.net_amount DESC;
+-- Esperado: credit_card 3x com fee calculado | pix sem taxa
 
--- Verificar finance_entry de taxa
+-- Finance entries da venda (receita + possível taxa de cartão)
 SELECT fe.type, fe.category, fe.description, fe.amount
 FROM finance_entries fe
 ORDER BY fe.created_at DESC LIMIT 3;
--- Esperado: despesa de taxa de cartão (se fee > 0 em payment_fee_settings)
 
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 5 — Falha: pagamento incompleto (SUM(net_amount) < total)
--- Esperado: EXCEPTION "Soma dos pagamentos ... difere do total"
+-- TESTE 5 — DEVE FALHAR: pagamento incompleto (soma < total)
+-- Venda R$200, pagamento R$100 apenas.
+-- Esperado: ERROR P0001 — "Soma dos pagamentos (100.00) difere do total (200.00)"
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'pix',
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'pix'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 5 — deve falhar',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           200.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_payments       := '[
-    {
-      "method":          "pix",
-      "amount_tendered": 100.00,
-      "change_amount":   0,
-      "net_amount":      100.00
-    }
+  p_notes           := 'TESTE 5 — deve falhar',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           200.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payments        := '[
+    {"method":"pix","amount_tendered":100.00,"change_amount":0,"net_amount":100.00}
   ]'::jsonb
 ) AS resultado;
--- Esperado: ERROR P0001 — Soma dos pagamentos (100) difere do total (200).
 
 ROLLBACK;
 
 -- =============================================================================
--- TESTE 6 — Falha: net_amount acima do total sem troco (excesso em net_amount)
--- Esperado: EXCEPTION "Soma dos pagamentos ... difere do total"
+-- TESTE 6 — DEVE FALHAR: net_amount acima do total sem troco declarado
+-- Venda R$200, net_amount=250 (excesso não declarado como troco).
+-- Esperado: ERROR P0001 — "Soma dos pagamentos (250.00) difere do total (200.00)"
 -- Correto seria: amount_tendered=250, change_amount=50, net_amount=200
 -- =============================================================================
 BEGIN;
 
 SELECT public.rpc_create_sale(
-  p_customer_id    := :customer_id,
-  p_seller_id      := ':seller_id'::uuid,
-  p_payment_method := 'cash',
-  p_sale_origin    := NULL,
-  p_discount_amount:= 0,
-  p_cashback_used  := 0,
+  p_customer_id     := (
+    SELECT c.id FROM customers c
+    JOIN users u ON u.company_id = c.company_id
+    WHERE u.role IN ('admin','seller') LIMIT 1
+  ),
+  p_seller_id       := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payment_method  := 'cash'::payment_method,
+  p_sale_origin     := NULL,
+  p_discount_amount := 0,
+  p_cashback_used   := 0,
   p_shipping_charged:= 0,
-  p_notes          := 'TESTE 6 — deve falhar',
-  p_items          := jsonb_build_array(jsonb_build_object(
-    'product_variation_id', :pvid,
-    'quantity',             1,
-    'unit_price',           200.00,
-    'unit_cost',            :unit_cost,
-    'discount_amount',      0
-  )),
-  p_system_user_id := ':seller_id'::uuid,
-  p_payments       := '[
-    {
-      "method":          "cash",
-      "amount_tendered": 250.00,
-      "change_amount":   0,
-      "net_amount":      250.00
-    }
+  p_notes           := 'TESTE 6 — deve falhar',
+  p_items           := (
+    SELECT jsonb_build_array(jsonb_build_object(
+      'product_variation_id', pv.id,
+      'quantity',             1,
+      'unit_price',           200.00,
+      'unit_cost',            s.avg_cost,
+      'discount_amount',      0
+    ))
+    FROM stock s
+    JOIN product_variations pv ON pv.id = s.product_variation_id
+    JOIN products p ON p.id = pv.product_id
+    JOIN users u ON u.company_id = p.company_id
+    WHERE u.role IN ('admin','seller') AND s.quantity > 0
+    LIMIT 1
+  ),
+  p_system_user_id  := (
+    SELECT id FROM users WHERE role IN ('admin','seller') LIMIT 1
+  ),
+  p_payments        := '[
+    {"method":"cash","amount_tendered":250.00,"change_amount":0,"net_amount":250.00}
   ]'::jsonb
 ) AS resultado;
--- Esperado: ERROR P0001 — Soma dos pagamentos (250) difere do total (200).
--- O excesso deve ser troco: amount_tendered=250, change_amount=50, net_amount=200
 
 ROLLBACK;
 
 -- =============================================================================
--- Se todos os testes passaram:
---   TESTE 1: venda legada criada, 1 linha em sale_payments ✓
---   TESTE 2: 2 pagamentos, dominante correto ✓
---   TESTE 3: troco em Pix registrado corretamente ✓
---   TESTE 4: taxa de cartão calculada, finance_entry criada ✓
---   TESTE 5: bloqueado por soma incorreta ✓
---   TESTE 6: bloqueado por net_amount acima do total ✓
---   → Pode prosseguir para alteração do frontend
+-- Se os testes passaram:
+--   TESTE 1 ✓ — legado: 1 linha em sale_payments, comportamento inalterado
+--   TESTE 2 ✓ — 2 pagamentos, dominante = pix
+--   TESTE 3 ✓ — troco via Pix registrado corretamente
+--   TESTE 4 ✓ — taxa de cartão calculada, finance_entry criada
+--   TESTE 5 ✓ — bloqueado por soma abaixo do total
+--   TESTE 6 ✓ — bloqueado por net_amount acima do total
+-- → Pode prosseguir para alteração do frontend
 -- =============================================================================
