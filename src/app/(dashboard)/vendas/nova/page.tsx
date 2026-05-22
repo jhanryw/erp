@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -26,6 +26,7 @@ export default function NovaVendaPage() {
   // Guarda nome exibível por variation_id para mostrar na lista de itens
   const [productNames, setProductNames] = useState<Record<number, string>>({})
   const router = useRouter()
+  const submitting = useRef(false)
   const supabase = createClient()
 
   const debouncedCustomer = useDebounce(customerSearch, 300)
@@ -155,6 +156,8 @@ export default function NovaVendaPage() {
   const total    = Math.max(0, gross - cashbackUsed)
 
   async function onSubmit(data: SaleFormData) {
+    if (submitting.current) return
+    submitting.current = true
     try {
       const res = await fetch('/api/vendas', {
         method: 'POST',
@@ -163,6 +166,7 @@ export default function NovaVendaPage() {
       })
       const json = await res.json()
       if (!res.ok) {
+        submitting.current = false
         toast.error('Erro ao registrar venda', { description: json.error ?? 'Erro desconhecido' })
         return
       }
@@ -171,6 +175,7 @@ export default function NovaVendaPage() {
       })
       router.push(`/vendas/${json.sale.id}`)
     } catch (err) {
+      submitting.current = false
       console.error('[onSubmit] erro inesperado:', err)
       toast.error('Erro inesperado ao registrar venda', {
         description: err instanceof Error ? err.message : 'Verifique o console para detalhes.',

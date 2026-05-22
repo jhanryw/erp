@@ -1,0 +1,49 @@
+{
+  "name": "Santtorini ERP",
+  "short_name": "Santtorini",
+  "description": "Sistema de gestão Santtorini",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "lang": "pt-BR",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Nova Venda",
+      "short_name": "Venda",
+      "description": "Registrar nova venda",
+      "url": "/vendas/nova",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Inventário Físico",
+      "short_name": "Inventário",
+      "description": "Contagem de estoque",
+      "url": "/estoque/inventario",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Alertas de Estoque",
+      "short_name": "Alertas",
+      "description": "Produtos em falta ou baixo estoque",
+      "url": "/estoque/alertas",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}
