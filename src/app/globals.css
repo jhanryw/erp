@@ -3,8 +3,51 @@
 @tailwind utilities;
 
 @layer base {
+  /* ── Light theme (default) ── */
   :root {
+    color-scheme: light;
+    --bg-root:     #F4F4F5;
+    --bg-base:     #FFFFFF;
+    --bg-elevated: #F9F9FB;
+    --bg-overlay:  #F0F0F2;
+    --bg-hover:    #E8E8EC;
+    --bg-active:   #DCDCE0;
+
+    --border:        #E4E4E7;
+    --border-strong: #D4D4D8;
+    --border-subtle: #F4F4F5;
+
+    --text-primary:   #09090B;
+    --text-secondary: #3F3F46;
+    --text-muted:     #71717A;
+    --text-disabled:  #A1A1AA;
+  }
+
+  /* ── Light theme shadows (override tailwind config) ── */
+  :root {
+    --shadow-card:     0 1px 3px 0 rgb(0 0 0 / 0.08), 0 1px 2px -1px rgb(0 0 0 / 0.06);
+    --shadow-elevated: 0 4px 6px -1px rgb(0 0 0 / 0.08), 0 2px 4px -2px rgb(0 0 0 / 0.06);
+    --shadow-modal:    0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.08);
+  }
+
+  /* ── Dark theme ── */
+  .dark {
     color-scheme: dark;
+    --bg-root:     #0A0A0A;
+    --bg-base:     #111111;
+    --bg-elevated: #1A1A1A;
+    --bg-overlay:  #222222;
+    --bg-hover:    #2A2A2A;
+    --bg-active:   #333333;
+
+    --border:        #27272A;
+    --border-strong: #3F3F46;
+    --border-subtle: #18181B;
+
+    --text-primary:   #FAFAFA;
+    --text-secondary: #A1A1AA;
+    --text-muted:     #71717A;
+    --text-disabled:  #52525B;
   }
 
   * {
@@ -64,7 +107,8 @@
 
   /* Card base */
   .card {
-    @apply bg-bg-base border border-border rounded-xl shadow-card;
+    @apply bg-bg-base border border-border rounded-xl;
+    box-shadow: var(--shadow-card);
   }
 
   /* Stat value */

@@ -1,8 +1,10 @@
 'use client'
 
 import { usePathname } from 'next/navigation'
-import { Bell, Search } from 'lucide-react'
+import { useTheme } from 'next-themes'
+import { Bell, Search, Sun, Moon } from 'lucide-react'
 import { MobileNav } from './mobile-nav'
+import { useEffect, useState } from 'react'
 
 const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
@@ -38,7 +40,10 @@ function getTitle(pathname: string): string {
 }
 
 export function Topbar() {
-  const pathname = usePathname()
+  const pathname          = usePathname()
+  const { theme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   return (
     <header className="h-14 flex items-center justify-between px-4 border-b border-border bg-bg-base/80 backdrop-blur sticky top-0 z-20">
@@ -54,11 +59,20 @@ export function Topbar() {
           <Search className="w-4 h-4" />
         </button>
 
+        {/* Toggle de tema */}
+        {mounted && (
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+            aria-label="Alternar tema"
+          >
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+        )}
+
         {/* Notificações (futuro) */}
         <button className="relative p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors">
           <Bell className="w-4 h-4" />
-          {/* badge de contagem */}
-          {/* <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-brand rounded-full" /> */}
         </button>
       </div>
     </header>

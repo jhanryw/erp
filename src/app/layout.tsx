@@ -35,28 +35,27 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="pt-BR" className="dark">
+    <html lang="pt-BR" suppressHydrationWarning>
       <head>
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-        <meta name="theme-color" content="#0a0a0a" />
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
       </head>
       <body className={`${inter.variable} font-sans`}>
         <Providers>
           {children}
           <Toaster
-            theme="dark"
+            theme="system"
             position="bottom-right"
             toastOptions={{
               classNames: {
-                toast: 'bg-bg-elevated border border-border text-text-primary',
-                description: 'text-text-secondary',
+                toast:        'bg-bg-elevated border border-border text-text-primary',
+                description:  'text-text-secondary',
                 actionButton: 'bg-brand text-white',
                 cancelButton: 'bg-bg-overlay text-text-secondary',
-                error: 'border-error/30 bg-error/10',
-                success: 'border-success/30 bg-success/10',
+                error:        'border-error/30 bg-error/10',
+                success:      'border-success/30 bg-success/10',
               },
             }}
           />

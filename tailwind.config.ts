@@ -10,7 +10,7 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Brand
+        // Brand (theme-invariant)
         brand: {
           DEFAULT: '#A71818',
           dark: '#8B1313',
@@ -20,33 +20,38 @@ const config: Config = {
           DEFAULT: '#F4A8A9',
           muted: '#E8888A',
         },
-        // Background tiers (dark-only)
+        // Background tiers — resolved via CSS variables
         bg: {
-          root: '#0A0A0A',
-          base: '#111111',
-          elevated: '#1A1A1A',
-          overlay: '#222222',
-          hover: '#2A2A2A',
-          active: '#333333',
+          root:     'var(--bg-root)',
+          base:     'var(--bg-base)',
+          elevated: 'var(--bg-elevated)',
+          overlay:  'var(--bg-overlay)',
+          hover:    'var(--bg-hover)',
+          active:   'var(--bg-active)',
         },
         // Borders
         border: {
-          DEFAULT: '#27272A',
-          strong: '#3F3F46',
-          subtle: '#18181B',
+          DEFAULT: 'var(--border)',
+          strong:  'var(--border-strong)',
+          subtle:  'var(--border-subtle)',
         },
         // Text
         text: {
-          primary: '#FAFAFA',
-          secondary: '#A1A1AA',
-          muted: '#71717A',
-          disabled: '#52525B',
+          primary:  'var(--text-primary)',
+          secondary:'var(--text-secondary)',
+          muted:    'var(--text-muted)',
+          disabled: 'var(--text-disabled)',
         },
-        // Semantic
+        // shadcn/ui aliases → nossos tokens (evita texto invisível)
+        muted: {
+          DEFAULT:    'var(--bg-overlay)',
+          foreground: 'var(--text-muted)',
+        },
+        // Semantic (theme-invariant)
         success: '#22C55E',
         warning: '#F59E0B',
-        error: '#EF4444',
-        info: '#3B82F6',
+        error:   '#EF4444',
+        info:    '#3B82F6',
       },
       fontFamily: {
         sans: ['var(--font-inter)', 'system-ui', 'sans-serif'],

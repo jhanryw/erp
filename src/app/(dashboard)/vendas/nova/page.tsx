@@ -842,7 +842,7 @@ export default function NovaVendaPage() {
                                     key={m}
                                     type="button"
                                     onClick={() => setDraftChangeMethod(m)}
-                                    className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                                    className={`flex-1 py-2.5 rounded-lg border text-sm font-medium transition-colors touch-manipulation ${
                                       draftChangeMethod === m
                                         ? 'bg-brand text-white border-brand'
                                         : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
@@ -869,7 +869,7 @@ export default function NovaVendaPage() {
                                 key={n}
                                 type="button"
                                 onClick={() => setDraftInstallments(n)}
-                                className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                                className={`px-3 py-2.5 rounded-lg border text-sm font-medium transition-colors touch-manipulation ${
                                   draftInstallments === n
                                     ? 'bg-brand text-white border-brand'
                                     : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
