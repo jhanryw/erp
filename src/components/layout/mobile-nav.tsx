@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -50,6 +50,12 @@ export function MobileNav() {
   const pathname = usePathname()
   const { userRole } = useUserContext()
 
+  // Bloquear scroll do body quando o drawer está aberto
+  useEffect(() => {
+    document.body.style.overflow = open ? 'hidden' : ''
+    return () => { document.body.style.overflow = '' }
+  }, [open])
+
   const visibleItems = MOBILE_NAV_ITEMS.filter(
     (item) => !item.minRole || hasMinRole(userRole, item.minRole)
   )
@@ -68,11 +74,13 @@ export function MobileNav() {
       {/* Drawer overlay */}
       {open && (
         <div className="fixed inset-0 z-50 lg:hidden">
+          {/* Overlay escuro — clique fora para fechar */}
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/50"
             onClick={() => setOpen(false)}
           />
-          <nav className="absolute left-0 top-0 bottom-0 w-72 bg-bg-elevated border-r border-border flex flex-col animate-slide-in-right">
+          {/* Drawer — 80vw, máximo 288px (w-72) */}
+          <nav className="absolute left-0 top-0 bottom-0 w-4/5 max-w-[288px] bg-bg-elevated border-r border-border flex flex-col animate-slide-in-left">
             <div className="flex items-center justify-between px-5 py-4 border-b border-border">
               <div className="flex items-center gap-2">
                 <div className="w-7 h-7 rounded-lg bg-brand flex items-center justify-center">

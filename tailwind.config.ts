@@ -76,6 +76,10 @@ const config: Config = {
           from: { transform: 'translateX(100%)' },
           to: { transform: 'translateX(0)' },
         },
+        'slide-in-left': {
+          from: { transform: 'translateX(-100%)' },
+          to: { transform: 'translateX(0)' },
+        },
         shimmer: {
           '0%': { backgroundPosition: '-200% 0' },
           '100%': { backgroundPosition: '200% 0' },
@@ -84,6 +88,7 @@ const config: Config = {
       animation: {
         'fade-in': 'fade-in 0.2s ease-out',
         'slide-in-right': 'slide-in-right 0.3s ease-out',
+        'slide-in-left':  'slide-in-left 0.25s ease-out',
         shimmer: 'shimmer 1.5s infinite linear',
       },
     },
