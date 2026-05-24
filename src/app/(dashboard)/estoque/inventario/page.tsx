@@ -15,7 +15,7 @@ import {
 import { Button }   from '@/components/ui/button'
 import { Input }    from '@/components/ui/input'
 import { Card, CardContent } from '@/components/ui/card'
-import { formatNumber } from '@/lib/format'
+import { formatNumber } from '@/lib/utils/currency'
 import type { InventarioItemInput } from '@/app/api/estoque/inventario/route'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -212,9 +212,9 @@ export default function InventarioFisicoPage() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" asChild>
-            <Link href="/estoque">Ver Estoque</Link>
-          </Button>
+          <Link href="/estoque">
+            <Button variant="outline">Ver Estoque</Button>
+          </Link>
           <Button onClick={() => setSavedResults(null)}>
             Novo Inventário
           </Button>

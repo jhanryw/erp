@@ -19,11 +19,12 @@ export type AuditAction =
   | 'create' | 'update' | 'delete'
   | 'cancel' | 'return' | 'adjust'
   | 'sku_manual_override'
+  | 'inventory_count'
 
 export type AuditResource =
   | 'product' | 'product_variation'
   | 'sale' | 'sale_item'
-  | 'stock_entry' | 'stock_adjustment'
+  | 'stock' | 'stock_entry' | 'stock_adjustment'
   | 'finance_entry'
   | 'supplier' | 'customer'
   | 'marketing_cost' | 'cashback_config'
