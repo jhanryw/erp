@@ -17,9 +17,24 @@ const itemSchema = z.object({
   discount_amount:      z.number().min(0).default(0),
 })
 
+const paymentEntrySchema = z.object({
+  method:          z.enum(['pix', 'cash', 'credit_card', 'debit_card']),
+  amount_tendered: z.number().positive(),
+  change_amount:   z.number().min(0).default(0),
+  change_method:   z.enum(['cash', 'pix']).optional(),
+  net_amount:      z.number().positive(),
+  installments:    z.number().int().min(1).max(12).default(1),
+  card_brand:      z.string().optional(),
+  acquirer:        z.string().optional(),
+  metadata:        z.record(z.unknown()).default({}),
+})
+
 const schema = z.object({
   customer_id:      z.number().int().positive(),
-  payment_method:   z.enum(['pix', 'card', 'cash']),
+  // Legado (campo único) — pode estar presente mesmo no novo fluxo como método dominante derivado
+  payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
+  // Novo fluxo multi-pagamento
+  payments:         z.array(paymentEntrySchema).min(1).optional(),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   // 'use' → aplica saldo existente, não gera novo cashback
@@ -31,7 +46,10 @@ const schema = z.object({
   shipping_charged: z.number().min(0).default(0),
   notes:            z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   items:            z.array(itemSchema).min(1),
-})
+}).refine(
+  (d) => d.payments != null || d.payment_method != null,
+  { message: 'Informe payment_method ou payments[].' }
+)
 
 export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('usuario')
@@ -65,11 +83,19 @@ export async function POST(request: Request) {
       )
     }
 
+    // Derivar payment_method do método dominante (maior net_amount) quando payments[] fornecido
+    let effectivePaymentMethod = parsed.data.payment_method ?? 'pix'
+    if (parsed.data.payments && parsed.data.payments.length > 0) {
+      const dominant = parsed.data.payments.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
+      effectivePaymentMethod = dominant.method
+    }
+
     // Garantir coerência: se cashback_action === 'use', cashback_used pode ser > 0;
     // se 'accumulate', forçar cashback_used = 0 independente do que foi enviado.
     const saleData = {
       ...parsed.data,
-      cashback_used: parsed.data.cashback_action === 'accumulate' ? 0 : parsed.data.cashback_used,
+      payment_method:  effectivePaymentMethod as 'pix' | 'card' | 'cash' | 'credit_card' | 'debit_card',
+      cashback_used:   parsed.data.cashback_action === 'accumulate' ? 0 : parsed.data.cashback_used,
     }
 
     // Criar venda via service (sale + itens + estoque + finance)

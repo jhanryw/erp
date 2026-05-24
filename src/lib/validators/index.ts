@@ -67,9 +67,36 @@ export const saleItemSchema = z.object({
   total_price: z.number().min(0),
 })
 
+// ─── Pagamento individual (novo fluxo multi-pagamento) ────────────────────────
+export const paymentEntrySchema = z.object({
+  method:          z.enum(['pix', 'cash', 'credit_card', 'debit_card']),
+  amount_tendered: z.number().positive(),
+  change_amount:   z.number().min(0).default(0),
+  change_method:   z.enum(['cash', 'pix']).optional(),
+  net_amount:      z.number().positive(),
+  installments:    z.number().int().min(1).max(12).default(1),
+  card_brand:      z.string().optional(),
+  acquirer:        z.string().optional(),
+  metadata:        z.record(z.unknown()).default({}),
+})
+  .refine(d => d.amount_tendered >= d.net_amount,
+    { message: 'Valor recebido deve ser ≥ valor cobrado' })
+  .refine(d => Math.abs(d.amount_tendered - d.change_amount - d.net_amount) < 0.01,
+    { message: 'Troco incoerente com os valores informados' })
+  .refine(d => d.change_amount === 0 || d.change_method != null,
+    { message: 'Informe a forma do troco' })
+  .refine(d => d.change_amount === 0 || d.method === 'cash',
+    { message: 'Troco só é permitido em dinheiro' })
+  .refine(d => d.installments === 1 || d.method === 'credit_card',
+    { message: 'Parcelamento só é permitido em cartão de crédito' })
+
+export type PaymentEntry = z.infer<typeof paymentEntrySchema>
+
 export const saleSchema = z.object({
   customer_id:      z.number().positive('Cliente obrigatório'),
-  payment_method:   z.enum(['pix', 'card', 'cash']),
+  // payment_method: mantido para compatibilidade — derivado do método dominante no submit
+  payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
+  payments:         z.array(paymentEntrySchema).min(1).optional(),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess(v => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other']).nullable().optional()),
   // 'use'      → aplica saldo existente como desconto, não gera novo cashback

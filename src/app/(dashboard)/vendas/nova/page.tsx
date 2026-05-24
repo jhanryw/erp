@@ -5,9 +5,9 @@ import { useRouter } from 'next/navigation'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
-import { Plus, Trash2, Search, ShoppingCart, Check, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, Search, ShoppingCart, Check, ChevronRight, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import { saleSchema, type SaleFormData } from '@/lib/validators'
+import { saleSchema, type SaleFormData, type PaymentEntry } from '@/lib/validators'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useQuery } from '@tanstack/react-query'
@@ -17,6 +17,15 @@ import { Select } from '@/components/ui/select'
 
 const STEPS = ['Cliente', 'Itens', 'Pagamento', 'Confirmar']
 
+type PaymentMethod = 'pix' | 'cash' | 'credit_card' | 'debit_card'
+
+const METHOD_LABELS: Record<PaymentMethod, string> = {
+  pix:         'PIX',
+  cash:        'Dinheiro',
+  credit_card: 'Crédito',
+  debit_card:  'Débito',
+}
+
 export default function NovaVendaPage() {
   const [step, setStep] = useState(0)
   const [customerSearch, setCustomerSearch] = useState('')
@@ -25,6 +34,18 @@ export default function NovaVendaPage() {
   const [cashbackBalance, setCashbackBalance] = useState(0)
   // Guarda nome exibível por variation_id para mostrar na lista de itens
   const [productNames, setProductNames] = useState<Record<number, string>>({})
+
+  // ─── Multi-pagamento ─────────────────────────────────────────────────────────
+  const [payments, setPayments] = useState<PaymentEntry[]>([])
+  const [showPaymentForm, setShowPaymentForm] = useState(false)
+  const [draftMethod, setDraftMethod]           = useState<PaymentMethod>('pix')
+  const [draftNetAmount, setDraftNetAmount]     = useState('')
+  const [draftTendered, setDraftTendered]       = useState('')
+  const [draftChangeMethod, setDraftChangeMethod] = useState<'cash' | 'pix'>('cash')
+  const [draftInstallments, setDraftInstallments] = useState(1)
+  const [draftCardBrand, setDraftCardBrand]     = useState('')
+  const [draftAcquirer, setDraftAcquirer]       = useState('')
+
   const router = useRouter()
   const submitting = useRef(false)
   const supabase = createClient()
@@ -43,7 +64,6 @@ export default function NovaVendaPage() {
     resolver: zodResolver(saleSchema),
     defaultValues: {
       items: [],
-      payment_method: 'pix' as const,
       cashback_action: 'accumulate' as const,
       discount_amount: 0,
       surcharge_amount: 0,
@@ -127,7 +147,6 @@ export default function NovaVendaPage() {
     const product = variation.products
     const price = variation.price_override ?? product.base_price
     const cost  = variation.cost_override  ?? product.base_cost
-    // Guarda nome para exibição na lista
     setProductNames((prev) => ({
       ...prev,
       [variation.id]: product?.name ?? `Variação #${variation.id}`,
@@ -155,14 +174,107 @@ export default function NovaVendaPage() {
   const gross    = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
   const total    = Math.max(0, gross - cashbackUsed)
 
+  // ─── Derivados multi-pagamento ─────────────────────────────────────────────
+  const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
+  const saldoRestante = total - totalPaid
+  const canFinalize   = payments.length > 0 && Math.abs(saldoRestante) < 0.01
+
+  // Draft: valores parseados
+  const draftNet      = parseFloat(draftNetAmount) || 0
+  const draftTend     = parseFloat(draftTendered)  || 0
+  // Para dinheiro: troco = tendered - net (se tendered > net e net > 0)
+  const draftChange   = draftMethod === 'cash' && draftTend > draftNet && draftNet > 0
+    ? Math.round((draftTend - draftNet) * 100) / 100
+    : 0
+
+  function openPaymentForm() {
+    // Pré-preencher com saldo restante
+    setDraftNetAmount(saldoRestante > 0 ? saldoRestante.toFixed(2) : '')
+    setDraftTendered(saldoRestante > 0 ? saldoRestante.toFixed(2) : '')
+    setDraftMethod('pix')
+    setDraftInstallments(1)
+    setDraftCardBrand('')
+    setDraftAcquirer('')
+    setDraftChangeMethod('cash')
+    setShowPaymentForm(true)
+  }
+
+  function addPayment() {
+    if (draftNet <= 0) {
+      toast.error('Informe um valor maior que zero')
+      return
+    }
+    // Impedir que o total pago ultrapasse o total da venda (para não-dinheiro)
+    // Para dinheiro, amount_tendered pode ser maior (gera troco)
+    const willExceed = draftMethod !== 'cash'
+      ? totalPaid + draftNet > total + 0.01
+      : totalPaid + draftNet > total + 0.01
+
+    if (willExceed) {
+      toast.error('Pagamento excede o valor total da venda', {
+        description: `Saldo restante: ${formatCurrency(saldoRestante)}`,
+      })
+      return
+    }
+
+    if (draftMethod === 'cash') {
+      if (draftTend < draftNet) {
+        toast.error('Valor entregue deve ser ≥ valor recebido')
+        return
+      }
+      if (draftChange > 0 && !draftChangeMethod) {
+        toast.error('Informe a forma do troco')
+        return
+      }
+    }
+
+    if ((draftMethod === 'credit_card' || draftMethod === 'debit_card') && draftInstallments > 1 && draftMethod !== 'credit_card') {
+      toast.error('Parcelamento só é permitido em cartão de crédito')
+      return
+    }
+
+    const entry: PaymentEntry = {
+      method:          draftMethod,
+      amount_tendered: draftMethod === 'cash' ? (draftTend > 0 ? draftTend : draftNet) : draftNet,
+      change_amount:   draftChange,
+      change_method:   draftChange > 0 ? draftChangeMethod : undefined,
+      net_amount:      draftNet,
+      installments:    draftInstallments,
+      card_brand:      draftCardBrand || undefined,
+      acquirer:        draftAcquirer  || undefined,
+      metadata:        {},
+    }
+
+    setPayments((prev) => [...prev, entry])
+    setShowPaymentForm(false)
+  }
+
+  function removePayment(idx: number) {
+    setPayments((prev) => prev.filter((_, i) => i !== idx))
+  }
+
   async function onSubmit(data: SaleFormData) {
     if (submitting.current) return
+    if (!canFinalize) {
+      toast.error('Pagamentos incompletos', {
+        description: `Falta ${formatCurrency(saldoRestante)} para totalizar a venda.`,
+      })
+      return
+    }
     submitting.current = true
+
+    // Método dominante = maior net_amount
+    const dominant = payments.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
+
     try {
       const res = await fetch('/api/vendas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          ...data,
+          payment_method: dominant.method,
+          payments,
+        }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -187,9 +299,7 @@ export default function NovaVendaPage() {
     /* pb-36 no mobile: 64px tab bar + ~80px sticky bar */
     <div className="max-w-4xl mx-auto space-y-5 pb-36 lg:pb-0">
 
-      {/* ── Stepper ─────────────────────────────────────────────
-          Mobile: ícone + rótulo só da etapa ativa
-          Desktop: tudo visível                                  */}
+      {/* ── Stepper ───────────────────────────────────────────── */}
       <div className="flex items-center gap-1.5 sm:gap-2">
         {STEPS.map((s, i) => (
           <div key={s} className="flex items-center gap-1.5 sm:gap-2">
@@ -204,7 +314,6 @@ export default function NovaVendaPage() {
             >
               {i < step ? <Check className="w-3.5 h-3.5" /> : i + 1}
             </div>
-            {/* Desktop: sempre visível / Mobile: só a etapa ativa */}
             <span className={`text-sm hidden sm:inline ${i === step ? 'text-text-primary font-medium' : 'text-text-muted'}`}>
               {s}
             </span>
@@ -220,8 +329,7 @@ export default function NovaVendaPage() {
 
       <form id="sale-form" onSubmit={handleSubmit(onSubmit)}>
 
-        {/* ── Sticky bar mobile (acima do bottom tab bar) ──────
-            Mostra total nas etapas 0-2 e botão Confirmar na 3  */}
+        {/* ── Sticky bar mobile ─────────────────────────────────── */}
         <div className="lg:hidden fixed bottom-16 left-0 right-0 z-20 bg-bg-elevated/95 backdrop-blur-md border-t border-border shadow-elevated">
           {step === 3 ? (
             <div className="p-3">
@@ -229,6 +337,7 @@ export default function NovaVendaPage() {
                 type="submit"
                 form="sale-form"
                 loading={isSubmitting}
+                disabled={!canFinalize}
                 className="w-full h-12 text-base font-semibold"
               >
                 <ShoppingCart className="w-5 h-5" />
@@ -252,7 +361,7 @@ export default function NovaVendaPage() {
                   type="button"
                   size="lg"
                   onClick={() => setStep(3)}
-                  disabled={fields.length === 0}
+                  disabled={!canFinalize}
                 >
                   Revisar
                 </Button>
@@ -420,7 +529,6 @@ export default function NovaVendaPage() {
                       const price = items[i]?.unit_price ?? 0
                       return (
                         <div key={field.id} className="p-3.5 rounded-xl bg-bg-overlay space-y-2.5">
-                          {/* Linha superior: nome + delete */}
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-semibold text-text-primary leading-snug truncate">
@@ -438,11 +546,8 @@ export default function NovaVendaPage() {
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
-
-                          {/* Linha inferior: +/- e total */}
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
-                              {/* Botões +/- com área de toque 44px */}
                               <button
                                 type="button"
                                 onClick={() => { if (qty > 1) setValue(`items.${i}.quantity`, qty - 1) }}
@@ -489,37 +594,10 @@ export default function NovaVendaPage() {
 
             {/* Step 3: Pagamento */}
             {step === 2 && (
-              <div className="card p-5 space-y-4">
+              <div className="card p-5 space-y-5">
                 <h3 className="text-sm font-semibold text-text-primary">Pagamento e Resumo</h3>
 
-                <Controller
-                  control={control}
-                  name="payment_method"
-                  render={({ field }) => (
-                    <Select label="Forma de Pagamento" required {...field}>
-                      <option value="pix">PIX</option>
-                      <option value="card">Cartão</option>
-                      <option value="cash">Dinheiro</option>
-                    </Select>
-                  )}
-                />
-
-                <Controller
-                  control={control}
-                  name="sale_origin"
-                  render={({ field }) => (
-                    <Select label="Origem da Venda" {...field} value={field.value ?? ''}>
-                      <option value="">Não informado</option>
-                      <option value="instagram">Instagram</option>
-                      <option value="referral">Indicação</option>
-                      <option value="paid_traffic">Tráfego Pago</option>
-                      <option value="website">Site</option>
-                      <option value="store">Loja Física</option>
-                      <option value="other">Outro</option>
-                    </Select>
-                  )}
-                />
-
+                {/* ── Ajustes financeiros ─────────────────────── */}
                 <div className="grid grid-cols-2 gap-3">
                   <Input
                     label="Desconto (R$)"
@@ -548,6 +626,7 @@ export default function NovaVendaPage() {
                   />
                 </div>
 
+                {/* ── Cashback ────────────────────────────────── */}
                 {cashbackBalance > 0 && (
                   <div className="space-y-3">
                     <p className="text-xs font-medium text-text-secondary">
@@ -581,7 +660,6 @@ export default function NovaVendaPage() {
                         </button>
                       ))}
                     </div>
-
                     {cashbackAction === 'use' && (
                       <Input
                         label={`Valor a usar (máx. ${formatCurrency(cashbackBalance)})`}
@@ -596,20 +674,252 @@ export default function NovaVendaPage() {
                   </div>
                 )}
 
+                {/* ── Origem da venda ─────────────────────────── */}
+                <Controller
+                  control={control}
+                  name="sale_origin"
+                  render={({ field }) => (
+                    <Select label="Origem da Venda" {...field} value={field.value ?? ''}>
+                      <option value="">Não informado</option>
+                      <option value="instagram">Instagram</option>
+                      <option value="referral">Indicação</option>
+                      <option value="paid_traffic">Tráfego Pago</option>
+                      <option value="website">Site</option>
+                      <option value="store">Loja Física</option>
+                      <option value="other">Outro</option>
+                    </Select>
+                  )}
+                />
+
+                {/* ── Observações ─────────────────────────────── */}
                 <Input
                   label="Observações"
                   placeholder="Opcional"
                   {...register('notes')}
                 />
 
+                {/* ── Totalizador do saldo ─────────────────────── */}
+                <div className="rounded-xl bg-bg-overlay p-4 space-y-1.5">
+                  <div className="flex justify-between text-sm text-text-secondary">
+                    <span>Total da venda</span>
+                    <span className="font-medium text-text-primary tabular-nums">{formatCurrency(total)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-text-secondary">
+                    <span>Total pago</span>
+                    <span className="font-medium text-success tabular-nums">{formatCurrency(totalPaid)}</span>
+                  </div>
+                  <div className={`flex justify-between text-sm font-bold border-t border-border/50 pt-1.5 mt-1 ${
+                    canFinalize ? 'text-success' : saldoRestante < 0 ? 'text-error' : 'text-text-primary'
+                  }`}>
+                    <span>{canFinalize ? 'Venda quitada' : saldoRestante < 0 ? 'Valor excedido' : 'Saldo restante'}</span>
+                    <span className="tabular-nums">
+                      {canFinalize ? '✓' : formatCurrency(Math.abs(saldoRestante))}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ── Lista de pagamentos adicionados ─────────── */}
+                {payments.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-text-secondary">Pagamentos registrados</p>
+                    {payments.map((p, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between p-3 rounded-lg bg-bg-overlay border border-border/50"
+                      >
+                        <div>
+                          <p className="text-sm font-semibold text-text-primary">
+                            {METHOD_LABELS[p.method]}
+                            {p.installments && p.installments > 1 ? ` ${p.installments}×` : ''}
+                            {p.card_brand ? ` · ${p.card_brand}` : ''}
+                          </p>
+                          <p className="text-xs text-text-muted">
+                            Líquido: {formatCurrency(p.net_amount)}
+                            {p.change_amount > 0
+                              ? ` · Troco: ${formatCurrency(p.change_amount)} (${p.change_method === 'pix' ? 'PIX' : 'dinheiro'})`
+                              : ''}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removePayment(idx)}
+                          className="flex items-center justify-center w-8 h-8 rounded-lg text-text-muted hover:text-error hover:bg-error/10 transition-colors"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* ── Formulário de novo pagamento ─────────────── */}
+                {showPaymentForm ? (
+                  <div className="rounded-xl border border-brand/30 bg-brand/5 p-4 space-y-4">
+                    <p className="text-sm font-semibold text-text-primary">Novo pagamento</p>
+
+                    {/* Método */}
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {(['pix', 'cash', 'credit_card', 'debit_card'] as PaymentMethod[]).map((m) => (
+                        <button
+                          key={m}
+                          type="button"
+                          onClick={() => {
+                            setDraftMethod(m)
+                            if (m !== 'credit_card') setDraftInstallments(1)
+                          }}
+                          className={`py-2.5 rounded-lg border text-sm font-medium transition-colors ${
+                            draftMethod === m
+                              ? 'bg-brand text-white border-brand'
+                              : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
+                          }`}
+                        >
+                          {METHOD_LABELS[m]}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Valor (net_amount) */}
+                    <Input
+                      label={draftMethod === 'cash' ? 'Valor cobrado (R$)' : 'Valor (R$)'}
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      inputMode="decimal"
+                      value={draftNetAmount}
+                      onChange={(e) => {
+                        setDraftNetAmount(e.target.value)
+                        // Para não-dinheiro: tendered = net
+                        if (draftMethod !== 'cash') setDraftTendered(e.target.value)
+                      }}
+                    />
+
+                    {/* Dinheiro: valor entregue */}
+                    {draftMethod === 'cash' && (
+                      <div className="space-y-3">
+                        <Input
+                          label="Valor entregue pelo cliente (R$)"
+                          type="number"
+                          step="0.01"
+                          min={draftNetAmount || '0'}
+                          inputMode="decimal"
+                          value={draftTendered}
+                          onChange={(e) => setDraftTendered(e.target.value)}
+                        />
+                        {draftChange > 0 && (
+                          <div className="space-y-2">
+                            <p className="text-sm text-text-secondary">
+                              Troco: <span className="font-bold text-text-primary">{formatCurrency(draftChange)}</span>
+                            </p>
+                            <div>
+                              <p className="text-xs font-medium text-text-secondary mb-1.5">Forma do troco</p>
+                              <div className="flex gap-2">
+                                {(['cash', 'pix'] as const).map((m) => (
+                                  <button
+                                    key={m}
+                                    type="button"
+                                    onClick={() => setDraftChangeMethod(m)}
+                                    className={`flex-1 py-2 rounded-lg border text-sm font-medium transition-colors ${
+                                      draftChangeMethod === m
+                                        ? 'bg-brand text-white border-brand'
+                                        : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
+                                    }`}
+                                  >
+                                    {m === 'cash' ? 'Dinheiro' : 'PIX'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Cartão de crédito: parcelamento */}
+                    {draftMethod === 'credit_card' && (
+                      <div className="space-y-3">
+                        <div className="space-y-1.5">
+                          <p className="text-xs font-medium text-text-secondary">Parcelas</p>
+                          <div className="flex gap-2 flex-wrap">
+                            {[1, 2, 3, 4, 6, 12].map((n) => (
+                              <button
+                                key={n}
+                                type="button"
+                                onClick={() => setDraftInstallments(n)}
+                                className={`px-3 py-1.5 rounded-lg border text-sm font-medium transition-colors ${
+                                  draftInstallments === n
+                                    ? 'bg-brand text-white border-brand'
+                                    : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
+                                }`}
+                              >
+                                {n}×
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Cartão: bandeira e adquirente */}
+                    {(draftMethod === 'credit_card' || draftMethod === 'debit_card') && (
+                      <div className="grid grid-cols-2 gap-3">
+                        <Input
+                          label="Bandeira"
+                          placeholder="Visa, Mastercard..."
+                          value={draftCardBrand}
+                          onChange={(e) => setDraftCardBrand(e.target.value)}
+                        />
+                        <Input
+                          label="Adquirente"
+                          placeholder="Stone, Cielo..."
+                          value={draftAcquirer}
+                          onChange={(e) => setDraftAcquirer(e.target.value)}
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => setShowPaymentForm(false)}
+                        className="flex-1"
+                      >
+                        Cancelar
+                      </Button>
+                      <Button
+                        type="button"
+                        onClick={addPayment}
+                        disabled={draftNet <= 0}
+                        className="flex-1"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Adicionar
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  !canFinalize && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={openPaymentForm}
+                      disabled={saldoRestante <= 0}
+                      className="w-full"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Adicionar Pagamento{saldoRestante > 0 ? ` · ${formatCurrency(saldoRestante)}` : ''}
+                    </Button>
+                  )
+                )}
+
                 <div className="flex gap-3 pt-1">
                   <Button type="button" variant="secondary" onClick={() => setStep(1)} className="flex-1 h-11">
                     Voltar
                   </Button>
-                  {/* Botão Revisar — oculto no mobile pois a sticky bar assume */}
                   <Button
                     type="button"
                     onClick={() => setStep(3)}
+                    disabled={!canFinalize}
                     className="flex-1 h-11 hidden sm:flex"
                   >
                     Revisar
@@ -672,22 +982,38 @@ export default function NovaVendaPage() {
                       {formatCurrency(total)}
                     </span>
                   </div>
+
+                  {/* Pagamentos resumidos */}
+                  {payments.length > 0 && (
+                    <div className="py-3 space-y-1.5">
+                      <p className="text-xs text-text-muted mb-2">Formas de pagamento</p>
+                      {payments.map((p, i) => (
+                        <div key={i} className="flex justify-between text-sm">
+                          <span className="text-text-secondary">
+                            {METHOD_LABELS[p.method]}
+                            {p.installments && p.installments > 1 ? ` ${p.installments}×` : ''}
+                            {p.card_brand ? ` · ${p.card_brand}` : ''}
+                          </span>
+                          <span className="font-medium">{formatCurrency(p.net_amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {Object.keys(errors).length > 0 && (
                   <div className="rounded-lg bg-error/10 border border-error/30 p-3 text-xs text-error space-y-1">
                     <p className="font-semibold">Corrija os erros antes de continuar:</p>
                     {errors.customer_id    && <p>• Cliente: {errors.customer_id.message}</p>}
-                    {errors.payment_method && <p>• Forma de pagamento: {errors.payment_method.message}</p>}
                     {errors.items          && <p>• Itens: {typeof errors.items.message === 'string' ? errors.items.message : 'Verifique os itens'}</p>}
                     {errors.discount_amount&& <p>• Desconto: {errors.discount_amount.message}</p>}
                     {errors.surcharge_amount&&<p>• Acréscimo: {errors.surcharge_amount.message}</p>}
                     {errors.cashback_used  && <p>• Cashback: {errors.cashback_used.message}</p>}
                     {errors.shipping_charged&&<p>• Frete: {errors.shipping_charged.message}</p>}
+                    {!canFinalize && <p>• Pagamentos: informe ao menos um pagamento que totalize o valor da venda.</p>}
                   </div>
                 )}
 
-                {/* Botões — visíveis no desktop; no mobile a sticky bar assume o Confirmar */}
                 <div className="flex gap-3 pt-1">
                   <Button type="button" variant="secondary" onClick={() => setStep(2)} className="flex-1 h-11">
                     Voltar
@@ -695,6 +1021,7 @@ export default function NovaVendaPage() {
                   <Button
                     type="submit"
                     loading={isSubmitting}
+                    disabled={!canFinalize}
                     className="flex-1 h-11 hidden sm:flex"
                   >
                     <ShoppingCart className="w-4 h-4" />
@@ -744,6 +1071,32 @@ export default function NovaVendaPage() {
                 <span>Total</span>
                 <span className="text-lg tabular-nums">{formatCurrency(total)}</span>
               </div>
+
+              {/* Saldo restante no sidebar */}
+              {step >= 2 && (
+                <div className={`flex justify-between text-sm font-medium border-t border-border pt-2 ${
+                  canFinalize ? 'text-success' : 'text-text-muted'
+                }`}>
+                  <span>{canFinalize ? 'Quitado' : 'Falta'}</span>
+                  <span className="tabular-nums">
+                    {canFinalize ? '✓' : formatCurrency(saldoRestante)}
+                  </span>
+                </div>
+              )}
+
+              {/* Botão de finalizar no desktop */}
+              {step === 3 && (
+                <Button
+                  type="submit"
+                  form="sale-form"
+                  loading={isSubmitting}
+                  disabled={!canFinalize}
+                  className="w-full mt-2"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  Confirmar Venda
+                </Button>
+              )}
             </div>
           </div>
         </div>

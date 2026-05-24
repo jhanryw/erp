@@ -24,7 +24,10 @@
 -- PARTE 1 — Idempotência: processing_lock em pedidos
 -- =============================================================================
 
+-- stock_processed foi definido em 012_nuvemshop_stock_integration (legado, nunca
+-- portado para supabase/migrations). ADD COLUMN IF NOT EXISTS é idempotente.
 ALTER TABLE public.pedidos
+  ADD COLUMN IF NOT EXISTS stock_processed        boolean     NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS processing_lock        boolean     NOT NULL DEFAULT false,
   ADD COLUMN IF NOT EXISTS processing_claimed_at  timestamptz;
 

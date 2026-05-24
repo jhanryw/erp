@@ -40,7 +40,11 @@ const STATUS_LABELS_PICKUP: Record<string, string> = {
 }
 
 const PAYMENT_LABELS: Record<string, string> = {
-  pix: 'PIX', card: 'Cartão', cash: 'Dinheiro',
+  pix:         'PIX',
+  card:        'Cartão',
+  cash:        'Dinheiro',
+  credit_card: 'Crédito',
+  debit_card:  'Débito',
 }
 
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {
@@ -84,7 +88,27 @@ async function getSale(id: string) {
     .eq('order_id', Number(id))
     .maybeSingle() as unknown as { data: { id: number; delivery_mode: string; status: string; notes: string | null } | null }
 
-  return { ...sale, shipment: shipment ?? null }
+  // Buscar pagamentos detalhados (sale_payments) — vazio para vendas legadas
+  const { data: salePayments } = await (admin as any)
+    .from('sale_payments')
+    .select('id, method, amount_tendered, change_amount, change_method, net_amount, installments, card_brand, acquirer, fee_amount')
+    .eq('sale_id', Number(id))
+    .order('net_amount', { ascending: false }) as unknown as {
+      data: {
+        id: number
+        method: string
+        amount_tendered: number
+        change_amount: number
+        change_method: string | null
+        net_amount: number
+        installments: number
+        card_brand: string | null
+        acquirer: string | null
+        fee_amount: number
+      }[] | null
+    }
+
+  return { ...sale, shipment: shipment ?? null, salePayments: salePayments ?? [] }
 }
 
 export default async function VendaDetalhePage({ params }: { params: { id: string } }) {
@@ -285,6 +309,62 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           </div>
         </div>
       </Card>
+
+      {/* Pagamentos detalhados (sale_payments) */}
+      {sale.salePayments && sale.salePayments.length > 0 ? (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">Formas de Pagamento</h3>
+          </CardHeader>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Método</TableHead>
+                <TableHead align="right">Valor cobrado</TableHead>
+                <TableHead align="right">Entregue</TableHead>
+                <TableHead align="right">Troco</TableHead>
+                <TableHead align="right">Taxa</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sale.salePayments.map((p: any) => (
+                <TableRow key={p.id}>
+                  <TableCell>
+                    <span className="font-medium text-text-primary">
+                      {PAYMENT_LABELS[p.method] ?? p.method}
+                      {p.installments > 1 ? ` ${p.installments}×` : ''}
+                    </span>
+                    {p.card_brand && (
+                      <span className="block text-xs text-text-muted">{p.card_brand}{p.acquirer ? ` · ${p.acquirer}` : ''}</span>
+                    )}
+                    {p.change_method && p.change_amount > 0 && (
+                      <span className="block text-xs text-text-muted">
+                        Troco via {p.change_method === 'pix' ? 'PIX' : 'dinheiro'}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell align="right" className="font-semibold">{formatCurrency(p.net_amount)}</TableCell>
+                  <TableCell align="right" muted>{formatCurrency(p.amount_tendered)}</TableCell>
+                  <TableCell align="right" muted>
+                    {p.change_amount > 0 ? formatCurrency(p.change_amount) : '—'}
+                  </TableCell>
+                  <TableCell align="right" muted>
+                    {p.fee_amount > 0 ? formatCurrency(p.fee_amount) : '—'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Card>
+      ) : (
+        /* Legado: exibe apenas o método registrado em sales.payment_method */
+        <Card padding="md">
+          <h3 className="text-sm font-semibold text-text-primary mb-2">Pagamento</h3>
+          <p className="text-sm text-text-secondary">
+            {PAYMENT_LABELS[sale.payment_method] ?? sale.payment_method}
+          </p>
+        </Card>
+      )}
 
       {sale.notes && (
         <Card padding="md">

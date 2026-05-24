@@ -18,9 +18,22 @@ export interface SaleItem {
   discount_amount: number
 }
 
+export interface PaymentEntry {
+  method: 'pix' | 'cash' | 'credit_card' | 'debit_card'
+  amount_tendered: number
+  change_amount?: number
+  change_method?: 'cash' | 'pix'
+  net_amount: number
+  installments?: number
+  card_brand?: string
+  acquirer?: string
+  metadata?: Record<string, unknown>
+}
+
 export interface CreateSaleInput {
   customer_id: number
-  payment_method: 'pix' | 'card' | 'cash'
+  /** Legado — derivado do método dominante quando payments[] é fornecido */
+  payment_method: 'pix' | 'card' | 'cash' | 'credit_card' | 'debit_card'
   sale_origin?: string | null
   /** 'use' → aplica saldo existente, não gera novo cashback; 'accumulate' → gera cashback normalmente */
   cashback_action?: 'use' | 'accumulate'
@@ -31,6 +44,8 @@ export interface CreateSaleInput {
   notes?: string | null
   items: SaleItem[]
   systemUserId: string
+  /** Novo fluxo multi-pagamento — quando presente, p_payments é enviado ao RPC principal */
+  payments?: PaymentEntry[]
 }
 
 export interface SaleResult {
@@ -215,21 +230,43 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   // Se a função ainda não suportar o parâmetro, o comportamento padrão (gerar cashback) é mantido.
   const accumulateCashback = input.cashback_action !== 'use'
 
+  // Novo fluxo: quando payments[] presente, chama RPC principal com p_payments
+  // Legado: chama wrapper com p_accumulate_cashback (sem p_payments)
+  const useMultiPayment = Array.isArray(input.payments) && input.payments.length > 0
+
+  const rpcParams = useMultiPayment
+    ? {
+        p_customer_id:      input.customer_id,
+        p_seller_id:        input.systemUserId,
+        p_payment_method:   input.payment_method,
+        p_sale_origin:      input.sale_origin ?? null,
+        p_discount_amount:  input.discount_amount,
+        p_surcharge_amount: input.surcharge_amount ?? 0,
+        p_cashback_used:    input.cashback_used,
+        p_shipping_charged: input.shipping_charged,
+        p_notes:            input.notes ?? null,
+        p_items:            input.items,
+        p_system_user_id:   input.systemUserId,
+        p_card_fee:         0,
+        p_payments:         input.payments,
+      }
+    : {
+        p_customer_id:         input.customer_id,
+        p_seller_id:           input.systemUserId,
+        p_payment_method:      input.payment_method,
+        p_sale_origin:         input.sale_origin ?? null,
+        p_discount_amount:     input.discount_amount,
+        p_surcharge_amount:    input.surcharge_amount ?? 0,
+        p_cashback_used:       input.cashback_used,
+        p_shipping_charged:    input.shipping_charged,
+        p_notes:               input.notes ?? null,
+        p_items:               input.items,
+        p_system_user_id:      input.systemUserId,
+        p_accumulate_cashback: accumulateCashback,
+      }
+
   const { data: sale, error } = await (admin as any)
-    .rpc('rpc_create_sale', {
-      p_customer_id:         input.customer_id,
-      p_seller_id:           input.systemUserId,
-      p_payment_method:      input.payment_method,
-      p_sale_origin:         input.sale_origin ?? null,
-      p_discount_amount:     input.discount_amount,
-      p_surcharge_amount:    input.surcharge_amount ?? 0,
-      p_cashback_used:       input.cashback_used,
-      p_shipping_charged:    input.shipping_charged,
-      p_notes:               input.notes ?? null,
-      p_items:               input.items,
-      p_system_user_id:      input.systemUserId,
-      p_accumulate_cashback: accumulateCashback,
-    }) as unknown as {
+    .rpc('rpc_create_sale', rpcParams) as unknown as {
       data: { id: number; sale_number: string } | null
       error: { code: string; message: string } | null
     }
