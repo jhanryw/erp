@@ -46,6 +46,7 @@ const schema = z.object({
   shipping_charged: z.number().min(0).default(0),
   notes:            z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   items:            z.array(itemSchema).min(1),
+  cash_session_id:  z.number().int().positive().nullable().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
   { message: 'Informe payment_method ou payments[].' }
@@ -99,7 +100,7 @@ export async function POST(request: Request) {
     }
 
     // Criar venda via service (sale + itens + estoque + finance)
-    const result = await createSale({ ...saleData, systemUserId: user.id })
+    const result = await createSale({ ...saleData, systemUserId: user.id, cashSessionId: parsed.data.cash_session_id ?? null })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
     const sale = result.data

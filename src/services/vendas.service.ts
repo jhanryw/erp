@@ -46,6 +46,8 @@ export interface CreateSaleInput {
   systemUserId: string
   /** Novo fluxo multi-pagamento — quando presente, p_payments é enviado ao RPC principal */
   payments?: PaymentEntry[]
+  /** ID da sessão de caixa física (nullable — vendas online não têm sessão) */
+  cashSessionId?: number | null
 }
 
 export interface SaleResult {
@@ -249,6 +251,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
         p_system_user_id:   input.systemUserId,
         p_card_fee:         0,
         p_payments:         input.payments,
+        p_cash_session_id:  input.cashSessionId ?? null,
       }
     : {
         p_customer_id:         input.customer_id,
@@ -263,6 +266,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
         p_items:               input.items,
         p_system_user_id:      input.systemUserId,
         p_accumulate_cashback: accumulateCashback,
+        p_cash_session_id:     input.cashSessionId ?? null,
       }
 
   const { data: sale, error } = await (admin as any)

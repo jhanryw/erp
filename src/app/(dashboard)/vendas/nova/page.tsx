@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -34,6 +34,16 @@ export default function NovaVendaPage() {
   const [cashbackBalance, setCashbackBalance] = useState(0)
   // Guarda nome exibível por variation_id para mostrar na lista de itens
   const [productNames, setProductNames] = useState<Record<number, string>>({})
+
+  // ─── Caixa aberto ────────────────────────────────────────────────────────────
+  const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
+
+  useEffect(() => {
+    fetch('/api/caixa')
+      .then((r) => r.json())
+      .then((json) => setCashSession(json.session ?? null))
+      .catch(() => setCashSession(null))
+  }, [])
 
   // ─── Multi-pagamento ─────────────────────────────────────────────────────────
   const [payments, setPayments] = useState<PaymentEntry[]>([])
@@ -272,8 +282,9 @@ export default function NovaVendaPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...data,
-          payment_method: dominant.method,
+          payment_method:  dominant.method,
           payments,
+          cash_session_id: deliveryMode === 'pickup' && cashSession ? cashSession.id : null,
         }),
       })
       const json = await res.json()
@@ -471,6 +482,19 @@ export default function NovaVendaPage() {
                   </div>
                 </div>
 
+                {/* Banner: caixa fechado bloqueando retirada */}
+                {deliveryMode === 'pickup' && cashSession === null && (
+                  <div className="rounded-xl bg-warning/10 border border-warning/40 p-4 space-y-2">
+                    <p className="text-sm font-semibold text-warning">Nenhum caixa aberto</p>
+                    <p className="text-xs text-text-secondary">
+                      Vendas de retirada exigem um caixa aberto.{' '}
+                      <a href="/caixa" className="underline font-medium text-warning hover:text-warning/80">
+                        Abrir caixa
+                      </a>
+                    </p>
+                  </div>
+                )}
+
                 {/* Busca de produto */}
                 <div className="relative">
                   <Input
@@ -583,7 +607,7 @@ export default function NovaVendaPage() {
                   <Button
                     type="button"
                     onClick={() => setStep(2)}
-                    disabled={fields.length === 0}
+                    disabled={fields.length === 0 || (deliveryMode === 'pickup' && cashSession === null)}
                     className="flex-1 h-11"
                   >
                     Continuar
