@@ -8,6 +8,66 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+async function sendSaleWebhook(
+  admin: SupabaseClient,
+  saleId: number,
+  customerId: number,
+  companyId: number,
+  webhookUrl: string,
+): Promise<void> {
+  const { data: existing } = await admin
+    .from('webhook_log')
+    .select('id')
+    .eq('sale_id', saleId)
+    .eq('event_type', 'sale_confirmed')
+    .eq('status', 'sent')
+    .maybeSingle()
+
+  if (existing) return
+
+  const [{ data: saleRow }, { data: customer }] = await Promise.all([
+    admin.from('sales').select('id, total, sale_date').eq('id', saleId).single(),
+    admin.from('customers').select('name, phone').eq('id', customerId).single(),
+  ])
+
+  const payload = {
+    sale_id:       saleId,
+    customer_name: customer?.name ?? null,
+    customer_phone: customer?.phone ?? null,
+    total:         saleRow?.total ?? null,
+    sale_date:     saleRow?.sale_date ?? null,
+  }
+
+  let status: 'sent' | 'failed' = 'failed'
+  let httpStatus: number | null = null
+  let errorMessage: string | null = null
+
+  try {
+    const res = await fetch(webhookUrl, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(payload),
+    })
+    httpStatus = res.status
+    status = res.ok ? 'sent' : 'failed'
+    if (!res.ok) errorMessage = `HTTP ${res.status}`
+  } catch (err) {
+    errorMessage = String(err)
+  }
+
+  await admin.from('webhook_log').insert({
+    event_type:    'sale_confirmed',
+    sale_id:       saleId,
+    company_id:    companyId,
+    payload,
+    webhook_url:   webhookUrl,
+    status,
+    http_status:   httpStatus,
+    error_message: errorMessage,
+  })
+}
 
 const itemSchema = z.object({
   product_variation_id: z.number().int().positive(),
@@ -116,10 +176,19 @@ export async function POST(request: Request) {
       (err) => console.error('[POST /api/vendas] Erro na sincronização Nuvemshop', err)
     )
 
+    const admin = createAdminClient()
+
+    // Webhook n8n pós-venda (não-fatal, fire-and-forget)
+    const n8nUrl = process.env.N8N_WEBHOOK_URL
+    if (n8nUrl) {
+      sendSaleWebhook(admin, sale.id, saleData.customer_id, user.company_id, n8nUrl).catch(
+        (err) => console.error('[POST /api/vendas] Webhook n8n error', err)
+      )
+    }
+
     // Criar envio automaticamente após a venda
     const { delivery_mode } = saleData
     const shipmentStatus = delivery_mode === 'pickup' ? 'aguardando_retirada' : 'aguardando_confirmacao'
-    const admin = createAdminClient()
     await (admin as any)
       .from('shipments')
       .insert({

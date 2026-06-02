@@ -1174,18 +1174,6 @@ BEGIN
          v_current_avg_cost, p_reason, v_company_id
   FROM product_variations pv WHERE pv.id = p_product_variation_id;
 
-  IF p_delta < 0 THEN
-    INSERT INTO finance_entries (
-      type, category, description, amount, reference_date, created_by, company_id
-    )
-    VALUES (
-      'expense', 'other_expense',
-      'Ajuste de estoque (' || p_reason || '): ' || ABS(p_delta)::text || ' un.',
-      ROUND(ABS(p_delta) * v_current_avg_cost, 2),
-      CURRENT_DATE, p_system_user_id, v_company_id
-    );
-  END IF;
-
   RETURN jsonb_build_object(
     'new_quantity',      v_new_qty,
     'previous_quantity', v_current_qty,
