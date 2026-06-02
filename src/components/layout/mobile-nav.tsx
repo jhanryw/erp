@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import {
   Menu, X, LayoutDashboard, ShoppingCart, Users,
   Package, Warehouse, Truck, TrendingUp, DollarSign,
-  BarChart3, Brain, Settings, Gift, Gem, Plus,
+  BarChart3, Brain, Settings, Gift, Gem, Plus, Wallet,
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { useUserContext } from '@/components/layout/user-context'
@@ -23,6 +23,7 @@ interface MobileNavItem {
 const MOBILE_NAV_ITEMS: MobileNavItem[] = [
   { label: 'Dashboard',    href: '/',            icon: LayoutDashboard },
   { label: 'Vendas',       href: '/vendas',       icon: ShoppingCart },
+  { label: 'Caixa',        href: '/caixa',        icon: Wallet },
   { label: 'Clientes',     href: '/clientes',     icon: Users },
   { label: 'Produtos',     href: '/produtos',     icon: Package },
   { label: 'Estoque',      href: '/estoque',      icon: Warehouse },
