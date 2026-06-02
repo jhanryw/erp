@@ -32,6 +32,14 @@ export default function ConfigVariacoesPage() {
     // cache: 'no-store' garante que o browser nunca sirva a resposta anterior
     const res  = await fetch('/api/variacoes', { cache: 'no-store' })
     const json = await res.json()
+
+    if (!res.ok) {
+      console.error('[variacoes] GET falhou:', json)
+      toast.error('Erro ao carregar variações', { description: json.error ?? String(json) })
+      setLoading(false)
+      return  // mantém a lista anterior em vez de limpar tudo
+    }
+
     setTypes(json.types ?? [])
     setLoading(false)
   }
