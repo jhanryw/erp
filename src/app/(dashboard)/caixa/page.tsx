@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { Wallet, ArrowDownLeft, ArrowUpRight, Receipt, X, Clock, Lock } from 'lucide-react'
+import { Wallet, ArrowDownLeft, ArrowUpRight, Receipt, X, Clock, Lock, History } from 'lucide-react'
+import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { formatCurrency } from '@/lib/utils/currency'
@@ -154,9 +155,17 @@ export default function CaixaPage() {
   if (session === null) {
     return (
       <div className="max-w-lg mx-auto space-y-5 pb-10">
-        <div className="flex items-center gap-3">
-          <Wallet className="w-6 h-6 text-text-muted" />
-          <h1 className="text-xl font-bold text-text-primary">Caixa</h1>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Wallet className="w-6 h-6 text-text-muted" />
+            <h1 className="text-xl font-bold text-text-primary">Caixa</h1>
+          </div>
+          <Link href="/caixa/historico">
+            <Button variant="secondary" size="sm">
+              <History className="w-3.5 h-3.5" />
+              Histórico
+            </Button>
+          </Link>
         </div>
 
         <div className="card p-5 space-y-4">
@@ -203,9 +212,17 @@ export default function CaixaPage() {
 
   return (
     <div className="max-w-lg mx-auto space-y-5 pb-10">
-      <div className="flex items-center gap-3">
-        <Wallet className="w-6 h-6 text-success" />
-        <h1 className="text-xl font-bold text-text-primary">Caixa</h1>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Wallet className="w-6 h-6 text-success" />
+          <h1 className="text-xl font-bold text-text-primary">Caixa</h1>
+        </div>
+        <Link href="/caixa/historico">
+          <Button variant="secondary" size="sm">
+            <History className="w-3.5 h-3.5" />
+            Histórico
+          </Button>
+        </Link>
       </div>
 
       {/* ── Status do caixa ─────────────────────────────────────────────────── */}
