@@ -8,14 +8,14 @@ export async function GET() {
 
   const { data: types, error } = (await admin
     .from('variation_types')
-    .select('id, name, slug, variation_values(id, value, slug)')
+    .select('id, name, slug, variation_values(id, value, slug, sku_code, normalized_name)')
     .eq('active', true)
     .order('name')) as unknown as {
     data: {
       id: number
       name: string
       slug: string
-      variation_values: { id: number; value: string; slug: string }[]
+      variation_values: { id: number; value: string; slug: string; sku_code: string | null; normalized_name: string | null }[]
     }[] | null
     error: any
   }
