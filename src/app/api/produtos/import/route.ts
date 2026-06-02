@@ -13,10 +13,12 @@ import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
-  size_value_id: z.number().int().positive().nullable().optional(),
+  color_name:     z.string().min(1).nullable().optional(),   // usado quando a cor não existe ainda
+  size_value_id:  z.number().int().positive().nullable().optional(),
+  size_name:      z.string().min(1).nullable().optional(),   // usado quando o tamanho não existe ainda
   price_override: z.coerce.number().positive().nullable().optional(),
-  cost_override: z.coerce.number().min(0).nullable().optional(),
-  initial_stock: z.coerce.number().int().min(0).default(0),
+  cost_override:  z.coerce.number().min(0).nullable().optional(),
+  initial_stock:  z.coerce.number().int().min(0).default(0),
 })
 
 const productSchema = z.object({
@@ -92,36 +94,53 @@ export async function POST(request: Request) {
           let colorSkuCode: string | undefined
           let sizeSkuCode:  string | undefined
 
+          // Cor: resolve por ID (existente) ou por nome (cria se não existir)
           if (v.color_value_id) {
             const { data: colorType } = (await admin
               .from('variation_values')
               .select('variation_type_id, value, sku_code')
               .eq('id', v.color_value_id)
-              .single()) as unknown as { data: { variation_type_id: number, value: string, sku_code: string | null } | null }
+              .single()) as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
 
             if (colorType) {
               colorSkuCode = colorType.sku_code ?? await getOrCreateColorSkuCode(colorType.value, admin)
-              attrs.push({
-                variation_type_id: colorType.variation_type_id,
-                variation_value_id: v.color_value_id,
-              })
+              attrs.push({ variation_type_id: colorType.variation_type_id, variation_value_id: v.color_value_id })
             }
+          } else if (v.color_name) {
+            const result = await getOrCreateColorSkuCode(v.color_name, admin)
+            colorSkuCode = result
+            // Buscar o ID que foi criado/encontrado
+            const { data: colorRow } = (await admin
+              .from('variation_values')
+              .select('id, variation_type_id')
+              .eq('normalized_name', v.color_name.toLowerCase().trim().replace(/\s+/g, '_'))
+              .limit(1)
+              .single()) as unknown as { data: { id: number; variation_type_id: number } | null }
+            if (colorRow) attrs.push({ variation_type_id: colorRow.variation_type_id, variation_value_id: colorRow.id })
           }
 
+          // Tamanho: resolve por ID (existente) ou por nome (cria se não existir)
           if (v.size_value_id) {
             const { data: sizeType } = (await admin
               .from('variation_values')
               .select('variation_type_id, value, sku_code')
               .eq('id', v.size_value_id)
-              .single()) as unknown as { data: { variation_type_id: number, value: string, sku_code: string | null } | null }
+              .single()) as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
 
             if (sizeType) {
               sizeSkuCode = sizeType.sku_code ?? await getOrCreateSizeSkuCode(sizeType.value, admin)
-              attrs.push({
-                variation_type_id: sizeType.variation_type_id,
-                variation_value_id: v.size_value_id,
-              })
+              attrs.push({ variation_type_id: sizeType.variation_type_id, variation_value_id: v.size_value_id })
             }
+          } else if (v.size_name) {
+            const result = await getOrCreateSizeSkuCode(v.size_name, admin)
+            sizeSkuCode = result
+            const { data: sizeRow } = (await admin
+              .from('variation_values')
+              .select('id, variation_type_id')
+              .eq('normalized_name', v.size_name.toLowerCase().trim().replace(/\s+/g, '_'))
+              .limit(1)
+              .single()) as unknown as { data: { id: number; variation_type_id: number } | null }
+            if (sizeRow) attrs.push({ variation_type_id: sizeRow.variation_type_id, variation_value_id: sizeRow.id })
           }
 
           const baseSku = generateSKUFromCodes({

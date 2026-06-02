@@ -9,7 +9,7 @@ import Papa from 'papaparse'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { ArrowLeft, Upload, FileType, Check, AlertTriangle, AlertCircle, RefreshCw } from 'lucide-react'
+import { ArrowLeft, Upload, FileType, Check, AlertTriangle, AlertCircle, RefreshCw, CheckCircle2, XCircle } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 
 import { parseImportRows, type ImportRow, type ParsedProduct, type ErrorWarning, type DbData } from '@/lib/utils/import-parser'
@@ -26,6 +26,10 @@ export default function ImportarProdutosPage() {
   const [parsedProducts, setParsedProducts] = useState<ParsedProduct[]>([])
   const [issues, setIssues] = useState<ErrorWarning[]>([])
   const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<{
+    imported: number
+    errors: string[]
+  } | null>(null)
 
   // Carregar dados de referência
   useEffect(() => {
@@ -118,29 +122,31 @@ export default function ImportarProdutosPage() {
     }
 
     setImporting(true)
-    
+    setImportResult(null)
+
     try {
       const res = await fetch('/api/produtos/import', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(parsedProducts)
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsedProducts),
       })
 
       const json = await res.json()
-      
-      if (!res.ok) {
-        toast.error('Falha na importação', { description: json.error || json.message })
-        if (json.errors && json.errors.length > 0) {
-           setIssues([{ row: 0, message: json.errors[0], type: 'error' }])
-        }
-      } else {
-        toast.success(json.message)
+      const imported: number = json.imported ?? 0
+      const errors: string[] = json.errors ?? []
+
+      setImportResult({ imported, errors })
+
+      if (errors.length === 0) {
+        toast.success(`${imported} produto${imported !== 1 ? 's' : ''} importado${imported !== 1 ? 's' : ''} com sucesso!`)
         router.push('/produtos')
         router.refresh()
+      } else if (imported > 0) {
+        toast.warning(`${imported} importado${imported !== 1 ? 's' : ''}, ${errors.length} com falha — veja detalhes abaixo`)
+      } else {
+        toast.error('Nenhum produto foi importado — veja os erros abaixo')
       }
-    } catch (err) {
+    } catch {
       toast.error('Falha inesperada ao importar')
     } finally {
       setImporting(false)
@@ -225,6 +231,66 @@ export default function ImportarProdutosPage() {
                {importing ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Check className="w-4 h-4 mr-2" />}
                Confirmar Importação
             </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Resultado do import */}
+      {importResult && (
+        <Card className="p-6 space-y-4">
+          <h3 className="text-lg font-medium border-b border-border pb-2">Resultado da Importação</h3>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex items-center gap-3 p-4 rounded-lg bg-success/10 border border-success/20">
+              <CheckCircle2 className="w-6 h-6 text-success shrink-0" />
+              <div>
+                <p className="text-2xl font-semibold text-success">{importResult.imported}</p>
+                <p className="text-xs text-success/80 uppercase tracking-wide">Produto{importResult.imported !== 1 ? 's' : ''} importado{importResult.imported !== 1 ? 's' : ''}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 p-4 rounded-lg bg-error/10 border border-error/20">
+              <XCircle className="w-6 h-6 text-error shrink-0" />
+              <div>
+                <p className="text-2xl font-semibold text-error">{importResult.errors.length}</p>
+                <p className="text-xs text-error/80 uppercase tracking-wide">Falha{importResult.errors.length !== 1 ? 's' : ''}</p>
+              </div>
+            </div>
+          </div>
+
+          {importResult.errors.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-text-primary">Produtos que falharam:</p>
+              <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                {importResult.errors.map((err, i) => {
+                  // Formato da API: "Produto Nome: razão" — separa nome do motivo
+                  const colonIdx = err.indexOf(':')
+                  const label  = colonIdx > 0 ? err.slice(0, colonIdx).trim() : `Produto ${i + 1}`
+                  const reason = colonIdx > 0 ? err.slice(colonIdx + 1).trim() : err
+                  return (
+                    <div key={i} className="flex items-start gap-3 p-3 rounded-md bg-error/8 border border-error/20 text-sm">
+                      <XCircle className="w-4 h-4 text-error mt-0.5 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-medium text-error truncate">{label}</p>
+                        <p className="text-text-muted text-xs mt-0.5">{reason}</p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-border">
+            {importResult.imported > 0 && (
+              <Button variant="outline" onClick={() => { router.push('/produtos'); router.refresh() }}>
+                Ver produtos importados
+              </Button>
+            )}
+            {importResult.errors.length > 0 && (
+              <Button variant="ghost" onClick={() => setImportResult(null)}>
+                Fechar e corrigir arquivo
+              </Button>
+            )}
           </div>
         </Card>
       )}

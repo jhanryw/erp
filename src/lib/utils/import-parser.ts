@@ -31,7 +31,9 @@ export type ParsedProduct = {
   variants: {
     sku_variation: string
     color_value_id?: number
+    color_name?: string      // enviado quando a cor não existe ainda (será criada pela API)
     size_value_id?: number
+    size_name?: string       // enviado quando o tamanho não existe ainda (será criado pela API)
     price_override?: number
     cost_override?: number
     initial_stock: number
@@ -95,29 +97,38 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     }
 
     let color_value_id: number | undefined = undefined
+    let color_name: string | undefined = undefined
     if (corStr) {
       const cMatch = dbData.colors.find(c => c.value.toLowerCase() === corStr.trim().toLowerCase())
-      if (cMatch) color_value_id = cMatch.id
-      else newIssues.push({ row: rowNum, message: `Cor '${corStr}' não encontrada no sistema`, type: 'error' })
+      if (cMatch) {
+        color_value_id = cMatch.id
+      } else {
+        // Cor nova — será criada automaticamente pela API durante o import
+        color_name = corStr.trim()
+        newIssues.push({ row: rowNum, message: `Cor '${corStr}' não existe ainda — será criada automaticamente`, type: 'warning' })
+      }
     }
 
     let size_value_id: number | undefined = undefined
+    let size_name: string | undefined = undefined
     if (tamanhoStr) {
       const sMatch = dbData.sizes.find(c => c.value.toLowerCase() === tamanhoStr.trim().toLowerCase())
-      if (sMatch) size_value_id = sMatch.id
-      else newIssues.push({ row: rowNum, message: `Tamanho '${tamanhoStr}' não encontrado no sistema`, type: 'error' })
+      if (sMatch) {
+        size_value_id = sMatch.id
+      } else {
+        // Tamanho novo — será criado automaticamente pela API durante o import
+        size_name = tamanhoStr.trim()
+        newIssues.push({ row: rowNum, message: `Tamanho '${tamanhoStr}' não existe ainda — será criado automaticamente`, type: 'warning' })
+      }
     }
 
     const origin = origemStr.toLowerCase().includes('propria') || origemStr.toLowerCase().includes('própria') ? 'own_brand' : 'third_party'
 
-    let sku_variacao = ''
-    try {
-      if (tipo && modelo) {
-        sku_variacao = generateSKU({ tipo, modelo, cor: corStr || undefined, tamanho: tamanhoStr || undefined, ano: ano || undefined })
-      }
-    } catch {
-      newIssues.push({ row: rowNum, message: `Erro ao gerar SKU (campos inválidos)`, type: 'error' })
-    }
+    // SKU de variação gerado apenas para detecção de duplicatas no preview.
+    // A API gera o SKU definitivo usando getOrCreate* com os códigos reais.
+    const sku_variacao = tipo && modelo
+      ? `${tipo}-${modelo}-${corStr}-${tamanhoStr}-${ano}`.toLowerCase().replace(/\s+/g, '_')
+      : ''
 
     const mapKey = `${tipo}-${modelo}`
     
@@ -141,12 +152,14 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     
     const exists = product.variants.some(v => v.sku_variation === sku_variacao)
     if (exists) {
-      newIssues.push({ row: rowNum, message: `Combinação de Cor/Tamanho gera SKU duplicado '${sku_variacao}'`, type: 'error' })
-    } else if (sku_variacao) {
+      newIssues.push({ row: rowNum, message: `Combinação de Cor/Tamanho duplicada na linha ${rowNum}`, type: 'error' })
+    } else {
       product.variants.push({
         sku_variation: sku_variacao,
         color_value_id,
+        color_name,
         size_value_id,
+        size_name,
         cost_override: pCusto !== product.base_cost ? pCusto : undefined,
         price_override: pPreco !== product.base_price ? pPreco : undefined,
         initial_stock: estoque
