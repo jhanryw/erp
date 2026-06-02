@@ -4,7 +4,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
-import { generateSKU } from '@/lib/sku/sku-map'
+import { generateSKUFromCodes } from '@/lib/sku/sku-map'
+import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
@@ -289,24 +290,23 @@ export async function PUT(
 
     for (const v of variations_to_add) {
 
-      // Resolver valor textual de cor e tamanho a partir dos IDs (igual ao POST)
-      let colorValue: string | undefined
-      let sizeValue:  string | undefined
+      // Resolver sku_code de cor e tamanho a partir dos IDs
+      let colorSkuCode: string | undefined
+      let sizeSkuCode:  string | undefined
 
       const attrs: { product_variation_id: number; variation_type_id: number; variation_value_id: number }[] = []
 
       if (v.color_value_id) {
         const { data: colorType } = await admin
           .from('variation_values')
-          .select('variation_type_id, value')
+          .select('variation_type_id, value, sku_code')
           .eq('id', v.color_value_id)
-          .single() as unknown as { data: { variation_type_id: number; value: string } | null }
+          .single() as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
 
         if (colorType) {
-          colorValue = colorType.value
-          // attrs preenchido após termos o pv.id
+          colorSkuCode = colorType.sku_code ?? await getOrCreateColorSkuCode(colorType.value, admin)
           attrs.push({
-            product_variation_id: 0, // placeholder — substituído abaixo
+            product_variation_id: 0,
             variation_type_id: colorType.variation_type_id,
             variation_value_id: v.color_value_id,
           })
@@ -316,14 +316,14 @@ export async function PUT(
       if (v.size_value_id) {
         const { data: sizeType } = await admin
           .from('variation_values')
-          .select('variation_type_id, value')
+          .select('variation_type_id, value, sku_code')
           .eq('id', v.size_value_id)
-          .single() as unknown as { data: { variation_type_id: number; value: string } | null }
+          .single() as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
 
         if (sizeType) {
-          sizeValue = sizeType.value
+          sizeSkuCode = sizeType.sku_code ?? await getOrCreateSizeSkuCode(sizeType.value, admin)
           attrs.push({
-            product_variation_id: 0, // placeholder — substituído abaixo
+            product_variation_id: 0,
             variation_type_id: sizeType.variation_type_id,
             variation_value_id: v.size_value_id,
           })
@@ -333,12 +333,12 @@ export async function PUT(
       // Gerar SKU base no servidor — nunca usa valor vindo do cliente
       let baseSku: string
       try {
-        baseSku = generateSKU({
-          tipo:    productMeta.tipo,
-          modelo:  productMeta.modelo,
-          cor:     colorValue,
-          tamanho: sizeValue,
-          ano:     productMeta.ano,
+        baseSku = generateSKUFromCodes({
+          tipo:         productMeta.tipo,
+          modelo:       productMeta.modelo,
+          corCode:      colorSkuCode,
+          tamanhoCode:  sizeSkuCode,
+          ano:          productMeta.ano,
         })
       } catch (err) {
         return NextResponse.json(

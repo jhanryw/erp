@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
+import { assignSkuCode } from '@/lib/sku/sku-dynamic'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -45,7 +46,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: msg }, { status: 500 })
   }
 
-  return NextResponse.json({ value: data }, { status: 201 })
+  // Atribuir sku_code e normalized_name automaticamente após o INSERT
+  let skuCode: string | undefined
+  if (data) {
+    try {
+      skuCode = await assignSkuCode(data.id, parsed.data.variation_type_id, parsed.data.value, admin)
+    } catch (skuErr) {
+      // Não bloqueia a criação do valor — SKU será atribuído na primeira vez que o item for usado num produto
+      console.error('[POST /api/variacoes/valores] Falha ao atribuir sku_code:', skuErr)
+    }
+  }
+
+  return NextResponse.json({ value: { ...data, sku_code: skuCode } }, { status: 201 })
 }
 
 export async function DELETE(request: Request) {

@@ -329,3 +329,62 @@ export function generateSKU(params: GenerateSKUParams): string {
 export function generateParentSKU(tipo: string, modelo: string, ano: string): string {
   return generateSKU({ tipo, modelo, cor: undefined, tamanho: undefined, ano })
 }
+
+// ─── Geração de SKU a partir de códigos diretos ───────────────────────────────
+
+export interface GenerateSKUFromCodesParams {
+  tipo:          string
+  modelo:        string
+  /** Código de 2 dígitos da cor (ex: '38'). undefined → '00' (produto pai). */
+  corCode?:      string
+  /** Código de 2 dígitos do tamanho (ex: '02'). undefined → '00' (produto pai). */
+  tamanhoCode?:  string
+  ano?:          string
+}
+
+/**
+ * Gera o SKU de 10 dígitos usando os códigos de cor e tamanho diretamente,
+ * sem consultar o mapa hardcoded. Usado com getOrCreateColorSkuCode /
+ * getOrCreateSizeSkuCode para suportar cores e tamanhos novos dinamicamente.
+ *
+ * @example
+ * generateSKUFromCodes({ tipo: 'calcinha', modelo: 'sem_costura', corCode: '47', tamanhoCode: '02', ano: '2026' })
+ * // → '0204470226'
+ */
+export function generateSKUFromCodes(params: GenerateSKUFromCodesParams): string {
+  if (!params.tipo)   throw new Error('Tipo é obrigatório para gerar SKU')
+  if (!params.modelo) throw new Error('Modelo é obrigatório para gerar SKU')
+
+  const normTipo = normalizeKey(params.tipo)
+  const TT = SKU_TIPO[normTipo as keyof typeof SKU_TIPO]
+  if (!TT) {
+    throw new Error(`Tipo de produto '${params.tipo}' não encontrado no mapa oficial. Tipos válidos: ${Object.keys(SKU_TIPO).join(', ')}`)
+  }
+
+  const modelMap = SKU_MODELO[TT]
+  if (!modelMap) {
+    throw new Error(`Tipo '${params.tipo}' não possui modelos definidos no mapa oficial`)
+  }
+  const normModelo = normalizeKey(params.modelo)
+  const MM = modelMap[normModelo]
+  if (!MM) {
+    throw new Error(`Modelo '${params.modelo}' não encontrado para o tipo '${params.tipo}'. Modelos válidos: ${Object.keys(modelMap).join(', ')}`)
+  }
+
+  const CC = params.corCode     ?? '00'
+  const TS = params.tamanhoCode ?? '00'
+
+  const normAno = params.ano ? String(params.ano).trim() : new Date().getFullYear().toString()
+  const AA = SKU_ANO[normAno]
+  if (!AA) {
+    const anosValidos = Object.keys(SKU_ANO).filter(k => k.length === 4).join(', ')
+    throw new Error(`Ano '${normAno}' não suportado no mapa oficial. Anos válidos: ${anosValidos}`)
+  }
+
+  const sku = `${TT}${MM}${CC}${TS}${AA}`
+  if (sku.length !== 10) {
+    throw new Error(`Falha interna na geração do SKU: comprimento incorreto (${sku.length}). Gerado: '${sku}'`)
+  }
+
+  return sku
+}

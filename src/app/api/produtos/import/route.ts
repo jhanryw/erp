@@ -6,7 +6,8 @@ import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
-import { generateSKU, generateParentSKU } from '@/lib/sku/sku-map'
+import { generateParentSKU, generateSKUFromCodes } from '@/lib/sku/sku-map'
+import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 
@@ -88,18 +89,18 @@ export async function POST(request: Request) {
       if (variants && variants.length > 0 && product) {
         for (const v of variants) {
           const attrs: any[] = []
-          let colorValue = ''
-          let sizeValue = ''
+          let colorSkuCode: string | undefined
+          let sizeSkuCode:  string | undefined
 
           if (v.color_value_id) {
             const { data: colorType } = (await admin
               .from('variation_values')
-              .select('variation_type_id, value')
+              .select('variation_type_id, value, sku_code')
               .eq('id', v.color_value_id)
-              .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
+              .single()) as unknown as { data: { variation_type_id: number, value: string, sku_code: string | null } | null }
 
             if (colorType) {
-              colorValue = colorType.value
+              colorSkuCode = colorType.sku_code ?? await getOrCreateColorSkuCode(colorType.value, admin)
               attrs.push({
                 variation_type_id: colorType.variation_type_id,
                 variation_value_id: v.color_value_id,
@@ -110,12 +111,12 @@ export async function POST(request: Request) {
           if (v.size_value_id) {
             const { data: sizeType } = (await admin
               .from('variation_values')
-              .select('variation_type_id, value')
+              .select('variation_type_id, value, sku_code')
               .eq('id', v.size_value_id)
-              .single()) as unknown as { data: { variation_type_id: number, value: string } | null }
+              .single()) as unknown as { data: { variation_type_id: number, value: string, sku_code: string | null } | null }
 
             if (sizeType) {
-              sizeValue = sizeType.value
+              sizeSkuCode = sizeType.sku_code ?? await getOrCreateSizeSkuCode(sizeType.value, admin)
               attrs.push({
                 variation_type_id: sizeType.variation_type_id,
                 variation_value_id: v.size_value_id,
@@ -123,7 +124,13 @@ export async function POST(request: Request) {
             }
           }
 
-          const baseSku = generateSKU({ tipo: productData.tipo, modelo: productData.modelo, cor: colorValue || undefined, tamanho: sizeValue || undefined, ano: productData.ano })
+          const baseSku = generateSKUFromCodes({
+            tipo:        productData.tipo,
+            modelo:      productData.modelo,
+            corCode:     colorSkuCode,
+            tamanhoCode: sizeSkuCode,
+            ano:         productData.ano,
+          })
 
           const insertResult = await insertVariationWithRetry(
             baseSku,
