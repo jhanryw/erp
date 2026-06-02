@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
 import { cancelCashMovement } from '@/services/caixa.service'
+import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -27,6 +28,16 @@ export async function POST(request: Request) {
 
   const result = await cancelCashMovement(parsed.data.movement_id, user.id, parsed.data.cancellation_reason)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'cancel_movement', resource: 'cash_movement',
+    resourceId: parsed.data.movement_id,
+    after: {
+      cancellation_reason: parsed.data.cancellation_reason,
+      cancelled_at: result.data.cancelled_at,
+    },
+  })
 
   return NextResponse.json({ cancelled: result.data })
 }

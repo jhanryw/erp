@@ -1,17 +1,18 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { BarChart3, Users, Package, Truck, DollarSign, Warehouse, FileText, ArrowRight } from 'lucide-react'
+import { BarChart3, Users, Package, Truck, DollarSign, Warehouse, FileText, ArrowRight, Shield } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
 const REPORTS = [
-  { href: '/relatorios/vendas', icon: BarChart3, title: 'Vendas', description: 'Faturamento, ticket médio, cancelamentos, por período e canal.', formats: ['Excel', 'PDF', 'CSV'] },
-  { href: '/relatorios/produtos', icon: Package, title: 'Produtos', description: 'Performance, margem, volume vendido, ABC por produto.', formats: ['Excel', 'CSV'] },
-  { href: '/relatorios/clientes', icon: Users, title: 'Clientes', description: 'Base de clientes, RFM, ticket médio, origem, cashback.', formats: ['Excel', 'CSV'] },
-  { href: '/relatorios/fornecedores', icon: Truck, title: 'Fornecedores', description: 'Compras, margem, volume, giro por fornecedor.', formats: ['Excel', 'PDF'] },
-  { href: '/relatorios/financeiro', icon: DollarSign, title: 'Financeiro', description: 'DRE mensal, fluxo de caixa, despesas por categoria.', formats: ['Excel', 'PDF'] },
-  { href: '/relatorios/estoque', icon: Warehouse, title: 'Estoque', description: 'Posição atual, movimentações, alertas, giro.', formats: ['Excel', 'CSV'] },
-  { href: '/relatorios/marketing', icon: FileText, title: 'Marketing', description: 'CAC, ROI, investimento por canal e campanha.', formats: ['Excel', 'PDF'] },
+  { href: '/relatorios/vendas',       icon: BarChart3,  title: 'Vendas',      description: 'Faturamento, ticket médio, cancelamentos, por período e canal.', formats: ['Excel', 'PDF', 'CSV'] },
+  { href: '/relatorios/produtos',     icon: Package,    title: 'Produtos',    description: 'Performance, margem, volume vendido, ABC por produto.', formats: ['Excel', 'CSV'] },
+  { href: '/relatorios/clientes',     icon: Users,      title: 'Clientes',    description: 'Base de clientes, RFM, ticket médio, origem, cashback.', formats: ['Excel', 'CSV'] },
+  { href: '/relatorios/fornecedores', icon: Truck,      title: 'Fornecedores', description: 'Compras, margem, volume, giro por fornecedor.', formats: ['Excel', 'PDF'] },
+  { href: '/relatorios/financeiro',   icon: DollarSign, title: 'Financeiro',  description: 'DRE mensal, fluxo de caixa, despesas por categoria.', formats: ['Excel', 'PDF'] },
+  { href: '/relatorios/estoque',      icon: Warehouse,  title: 'Estoque',     description: 'Posição atual, movimentações, alertas, giro.', formats: ['Excel', 'CSV'] },
+  { href: '/relatorios/marketing',    icon: FileText,   title: 'Marketing',   description: 'CAC, ROI, investimento por canal e campanha.', formats: ['Excel', 'PDF'] },
+  { href: '/relatorios/auditoria',    icon: Shield,     title: 'Auditoria',   description: 'Cancelamentos, reaberturas de caixa, ajustes de estoque, exclusões e alterações financeiras.', formats: ['Tempo real'] },
 ]
 
 export default async function RelatoriosPage() {

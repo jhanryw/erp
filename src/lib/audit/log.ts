@@ -20,6 +20,8 @@ export type AuditAction =
   | 'cancel' | 'return' | 'adjust'
   | 'sku_manual_override'
   | 'inventory_count'
+  | 'open_cash' | 'close_cash' | 'reopen_cash'
+  | 'add_movement' | 'cancel_movement'
 
 export type AuditResource =
   | 'product' | 'product_variation'
@@ -30,6 +32,7 @@ export type AuditResource =
   | 'marketing_cost' | 'cashback_config'
   | 'shipping_config'
   | 'monthly_sales_goals'
+  | 'cash_session' | 'cash_movement'
 
 export interface AuditPayload {
   action:      AuditAction

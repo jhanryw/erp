@@ -139,6 +139,29 @@ export async function cancelCashMovement(
   return success(data!)
 }
 
+export async function reopenCashSession(
+  sessionId: number,
+  userId: string,
+  reason: string
+): Promise<Outcome<{ id: number; status: string; reopened_at: string }>> {
+  const admin = createAdminClient()
+
+  const { data, error } = await (admin as any)
+    .rpc('rpc_reopen_cash_session', {
+      p_session_id: sessionId,
+      p_user_id:    userId,
+      p_reason:     reason,
+    }) as unknown as {
+      data: { id: number; status: string; reopened_at: string } | null
+      error: { code: string; message: string } | null
+    }
+
+  if (error) {
+    return failure(error.message, error.code === 'P0001' ? 400 : 500)
+  }
+  return success(data!)
+}
+
 export async function closeCashSession(
   sessionId: number,
   userId: string,

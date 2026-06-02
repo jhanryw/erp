@@ -1597,5 +1597,717 @@ CREATE POLICY "customers_company" ON public.customers FOR ALL TO authenticated
   USING (company_id = public.current_company_id());
 
 -- =============================================================================
+-- 29.5 MÓDULO DE CAIXA
+--      (migrations 20260522_sale_payments + 20260522_cash_register + RPCs)
+-- =============================================================================
+
+-- ── Extensão do enum payment_method ─────────────────────────────────────────
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum
+    WHERE  enumtypid = 'public.payment_method'::regtype
+      AND  enumlabel = 'credit_card'
+  ) THEN ALTER TYPE public.payment_method ADD VALUE 'credit_card'; END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_enum
+    WHERE  enumtypid = 'public.payment_method'::regtype
+      AND  enumlabel = 'debit_card'
+  ) THEN ALTER TYPE public.payment_method ADD VALUE 'debit_card'; END IF;
+END
+$$;
+
+-- ── sale_payments ────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.sale_payments (
+  id               BIGSERIAL             PRIMARY KEY,
+  sale_id          INT                   NOT NULL REFERENCES public.sales(id)     ON DELETE CASCADE,
+  company_id       INT                   NOT NULL REFERENCES public.companies(id),
+  method           public.payment_method NOT NULL,
+  amount_tendered  NUMERIC(10,2)         NOT NULL,
+  change_amount    NUMERIC(10,2)         NOT NULL DEFAULT 0,
+  change_method    TEXT,
+  net_amount       NUMERIC(10,2)         NOT NULL,
+  installments     INT                   NOT NULL DEFAULT 1,
+  card_brand       TEXT,
+  acquirer         TEXT,
+  fee_percentage   NUMERIC(6,4)          NOT NULL DEFAULT 0,
+  fee_amount       NUMERIC(10,2)         NOT NULL DEFAULT 0,
+  metadata         JSONB                 NOT NULL DEFAULT '{}',
+  created_by       UUID                  REFERENCES public.users(id),
+  created_at       TIMESTAMPTZ           NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT sp_cash_only_change         CHECK (change_amount = 0 OR method = 'cash'),
+  CONSTRAINT sp_change_method_required   CHECK (change_amount = 0 OR change_method IS NOT NULL),
+  CONSTRAINT sp_change_method_valid      CHECK (change_method IS NULL OR change_method IN ('cash', 'pix')),
+  CONSTRAINT sp_change_nonnegative       CHECK (change_amount >= 0),
+  CONSTRAINT sp_amount_tendered_gte      CHECK (amount_tendered >= net_amount),
+  CONSTRAINT sp_net_amount_eq            CHECK (ROUND(net_amount,2) = ROUND(amount_tendered - change_amount,2)),
+  CONSTRAINT sp_net_amount_positive      CHECK (net_amount > 0),
+  CONSTRAINT sp_installments_credit_only CHECK (installments = 1 OR method = 'credit_card'),
+  CONSTRAINT sp_installments_positive    CHECK (installments >= 1),
+  CONSTRAINT sp_fee_nonnegative          CHECK (fee_amount >= 0 AND fee_percentage >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sale_payments_sale_id
+  ON public.sale_payments (sale_id);
+CREATE INDEX IF NOT EXISTS idx_sale_payments_company_date
+  ON public.sale_payments (company_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sale_payments_method
+  ON public.sale_payments (company_id, method, created_at DESC);
+
+CREATE OR REPLACE FUNCTION public.get_dominant_payment_method(p_sale_id int)
+RETURNS public.payment_method
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE v_method public.payment_method;
+BEGIN
+  SELECT method INTO v_method FROM public.sale_payments
+  WHERE  sale_id = p_sale_id ORDER BY net_amount DESC LIMIT 1;
+  IF v_method IS NULL THEN
+    SELECT payment_method INTO v_method FROM public.sales WHERE id = p_sale_id;
+  END IF;
+  RETURN v_method;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_dominant_payment_method(int) TO service_role, authenticated;
+
+ALTER TABLE public.sale_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "sale_payments_company" ON public.sale_payments;
+CREATE POLICY "sale_payments_company" ON public.sale_payments FOR SELECT TO authenticated
+  USING (company_id = public.current_company_id() AND public.get_user_role() IN ('admin', 'gerente'));
+
+-- ── cash_register_sessions ───────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.cash_register_sessions (
+  id                      BIGSERIAL     PRIMARY KEY,
+  company_id              INT           NOT NULL REFERENCES public.companies(id),
+  status                  TEXT          NOT NULL DEFAULT 'open'
+                            CHECK (status IN ('open', 'closed')),
+  opened_by               UUID          NOT NULL REFERENCES public.users(id),
+  opened_at               TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  opening_amount_cash     NUMERIC(10,2) NOT NULL DEFAULT 0 CHECK (opening_amount_cash >= 0),
+  notes_open              TEXT,
+  closed_by               UUID          REFERENCES public.users(id),
+  closed_at               TIMESTAMPTZ,
+  counted_cash            NUMERIC(10,2) CHECK (counted_cash >= 0),
+  notes_close             TEXT,
+  closing_confirmed_by    UUID          REFERENCES public.users(id),
+  total_sales             NUMERIC(10,2),
+  total_cash              NUMERIC(10,2),
+  total_pix               NUMERIC(10,2),
+  total_credit_card       NUMERIC(10,2),
+  total_debit_card        NUMERIC(10,2),
+  total_card_fees         NUMERIC(10,2),
+  total_cash_change       NUMERIC(10,2),
+  total_pix_change        NUMERIC(10,2),
+  total_sangria           NUMERIC(10,2),
+  total_suprimento        NUMERIC(10,2),
+  total_expenses          NUMERIC(10,2),
+  expected_cash           NUMERIC(10,2),
+  cash_difference         NUMERIC(10,2),
+  created_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at              TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+
+  CONSTRAINT crs_closed_requires_closed_at    CHECK (status = 'open' OR closed_at IS NOT NULL),
+  CONSTRAINT crs_closed_requires_counted_cash CHECK (status = 'open' OR counted_cash IS NOT NULL),
+  CONSTRAINT crs_closed_by_with_closed_at     CHECK (closed_at IS NULL OR closed_by IS NOT NULL)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_sessions_one_open_per_company
+  ON public.cash_register_sessions (company_id) WHERE status = 'open';
+CREATE INDEX IF NOT EXISTS idx_cash_sessions_company_opened
+  ON public.cash_register_sessions (company_id, opened_at DESC);
+
+-- ── cash_movements ───────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS public.cash_movements (
+  id                    BIGSERIAL     PRIMARY KEY,
+  cash_session_id       BIGINT        NOT NULL REFERENCES public.cash_register_sessions(id),
+  company_id            INT           NOT NULL REFERENCES public.companies(id),
+  type                  TEXT          NOT NULL CHECK (type IN ('sangria', 'suprimento', 'expense')),
+  method                TEXT          NOT NULL DEFAULT 'cash'
+                          CHECK (method IN ('cash', 'pix', 'credit_card', 'debit_card')),
+  amount                NUMERIC(10,2) NOT NULL CHECK (amount > 0),
+  description           TEXT          NOT NULL,
+  reference_sale_id     BIGINT        REFERENCES public.sales(id),
+  metadata              JSONB         NOT NULL DEFAULT '{}',
+  created_by            UUID          NOT NULL REFERENCES public.users(id),
+  created_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  cancelled_at          TIMESTAMPTZ,
+  cancelled_by          UUID          REFERENCES public.users(id),
+  cancellation_reason   TEXT,
+
+  CONSTRAINT cm_sangria_suprimento_cash_only
+    CHECK (type NOT IN ('sangria', 'suprimento') OR method = 'cash'),
+  CONSTRAINT cm_cancel_coherence
+    CHECK (cancelled_at IS NULL OR (cancelled_by IS NOT NULL AND cancellation_reason IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_cash_movements_session
+  ON public.cash_movements (cash_session_id);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_active
+  ON public.cash_movements (cash_session_id) WHERE cancelled_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_cash_movements_company_date
+  ON public.cash_movements (company_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cash_movements_reference_sale
+  ON public.cash_movements (reference_sale_id) WHERE reference_sale_id IS NOT NULL;
+
+-- ── cash_session_id em sales (nullable) ──────────────────────────────────────
+
+ALTER TABLE public.sales
+  ADD COLUMN IF NOT EXISTS cash_session_id BIGINT
+    REFERENCES public.cash_register_sessions(id);
+
+CREATE INDEX IF NOT EXISTS idx_sales_cash_session
+  ON public.sales (cash_session_id) WHERE cash_session_id IS NOT NULL;
+
+-- ── RLS: leitura de caixa (escrita apenas via RPC SECURITY DEFINER) ──────────
+
+ALTER TABLE public.cash_register_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.cash_movements          ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "cash_sessions_company_read" ON public.cash_register_sessions;
+CREATE POLICY "cash_sessions_company_read" ON public.cash_register_sessions
+  FOR SELECT TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "cash_movements_company_read" ON public.cash_movements;
+CREATE POLICY "cash_movements_company_read" ON public.cash_movements
+  FOR SELECT TO authenticated
+  USING (company_id = public.current_company_id());
+
+GRANT SELECT ON public.cash_register_sessions TO authenticated;
+GRANT SELECT ON public.cash_movements          TO authenticated;
+
+-- ── rpc_open_cash_session ─────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.rpc_open_cash_session(
+  p_user_id             uuid,
+  p_opening_amount_cash numeric DEFAULT 0,
+  p_notes               text    DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_company_id int; v_session_id bigint; v_opened_at timestamptz;
+BEGIN
+  SELECT company_id INTO v_company_id FROM users WHERE id = p_user_id;
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Usuário não está associado a uma empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM cash_register_sessions WHERE company_id = v_company_id AND status = 'open') THEN
+    RAISE EXCEPTION 'Já existe um caixa aberto para esta empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  INSERT INTO cash_register_sessions (company_id, status, opened_by, opened_at, opening_amount_cash, notes_open)
+  VALUES (v_company_id, 'open', p_user_id, NOW(),
+          GREATEST(0, COALESCE(p_opening_amount_cash, 0)),
+          NULLIF(TRIM(COALESCE(p_notes, '')), ''))
+  RETURNING id, opened_at INTO v_session_id, v_opened_at;
+
+  RETURN jsonb_build_object(
+    'id', v_session_id,
+    'opened_at', v_opened_at,
+    'opening_amount_cash', GREATEST(0, COALESCE(p_opening_amount_cash, 0))
+  );
+EXCEPTION
+  WHEN unique_violation THEN
+    RAISE EXCEPTION 'Já existe um caixa aberto para esta empresa.' USING ERRCODE = 'P0001';
+END;
+$$;
+
+-- ── rpc_add_cash_movement ─────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.rpc_add_cash_movement(
+  p_session_id        bigint,
+  p_user_id           uuid,
+  p_type              text,
+  p_amount            numeric,
+  p_description       text,
+  p_method            text    DEFAULT 'cash',
+  p_reference_sale_id bigint  DEFAULT NULL,
+  p_metadata          jsonb   DEFAULT '{}'
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_company_id int; v_sess_status text; v_sess_company int;
+  v_movement_id bigint; v_created_at timestamptz;
+BEGIN
+  IF p_type NOT IN ('sangria', 'suprimento', 'expense') THEN
+    RAISE EXCEPTION 'Tipo inválido: %. Use sangria, suprimento ou expense.', p_type USING ERRCODE = 'P0001';
+  END IF;
+  IF p_method NOT IN ('cash', 'pix', 'credit_card', 'debit_card') THEN
+    RAISE EXCEPTION 'Método inválido: %.', p_method USING ERRCODE = 'P0001';
+  END IF;
+  IF p_type IN ('sangria', 'suprimento') AND p_method != 'cash' THEN
+    RAISE EXCEPTION 'Sangria e suprimento são sempre em dinheiro físico.' USING ERRCODE = 'P0001';
+  END IF;
+  IF COALESCE(p_amount, 0) <= 0 THEN
+    RAISE EXCEPTION 'Valor deve ser maior que zero.' USING ERRCODE = 'P0001';
+  END IF;
+  IF TRIM(COALESCE(p_description, '')) = '' THEN
+    RAISE EXCEPTION 'Descrição obrigatória.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT company_id INTO v_company_id FROM users WHERE id = p_user_id;
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Usuário não associado a uma empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT status, company_id INTO v_sess_status, v_sess_company
+  FROM cash_register_sessions WHERE id = p_session_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Sessão de caixa #% não encontrada.', p_session_id USING ERRCODE = 'P0001';
+  END IF;
+  IF v_sess_status = 'closed' THEN
+    RAISE EXCEPTION 'Caixa fechado. Não é possível registrar movimentos.' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_sess_company != v_company_id THEN
+    RAISE EXCEPTION 'Acesso negado à sessão de caixa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  INSERT INTO cash_movements (cash_session_id, company_id, type, method, amount, description,
+    reference_sale_id, metadata, created_by)
+  VALUES (p_session_id, v_company_id, p_type, p_method, p_amount, TRIM(p_description),
+    p_reference_sale_id, COALESCE(p_metadata, '{}'), p_user_id)
+  RETURNING id, created_at INTO v_movement_id, v_created_at;
+
+  RETURN jsonb_build_object('id', v_movement_id, 'type', p_type, 'method', p_method,
+    'amount', p_amount, 'created_at', v_created_at);
+END;
+$$;
+
+-- ── rpc_close_cash_session ────────────────────────────────────────────────────
+
+CREATE OR REPLACE FUNCTION public.rpc_close_cash_session(
+  p_session_id   bigint,
+  p_user_id      uuid,
+  p_counted_cash numeric,
+  p_notes        text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_company_id        int;
+  v_sess              record;
+  v_total_sales       numeric := 0;
+  v_total_cash        numeric := 0;
+  v_total_pix         numeric := 0;
+  v_total_credit      numeric := 0;
+  v_total_debit       numeric := 0;
+  v_total_card_fees   numeric := 0;
+  v_total_cash_change numeric := 0;
+  v_total_pix_change  numeric := 0;
+  v_cash_tendered     numeric := 0;
+  v_expense_cash      numeric := 0;
+  v_total_sangria     numeric := 0;
+  v_total_suprimento  numeric := 0;
+  v_total_expenses    numeric := 0;
+  v_expected_cash     numeric;
+  v_cash_difference   numeric;
+BEGIN
+  SELECT company_id INTO v_company_id FROM users WHERE id = p_user_id;
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Usuário não associado a uma empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT * INTO v_sess FROM cash_register_sessions WHERE id = p_session_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Sessão de caixa #% não encontrada.', p_session_id USING ERRCODE = 'P0001';
+  END IF;
+  IF v_sess.company_id != v_company_id THEN
+    RAISE EXCEPTION 'Acesso negado à sessão de caixa.' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_sess.status = 'closed' THEN
+    RAISE EXCEPTION 'Caixa já fechado.' USING ERRCODE = 'P0001';
+  END IF;
+  IF COALESCE(p_counted_cash, -1) < 0 THEN
+    RAISE EXCEPTION 'Valor contado não pode ser negativo.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT
+    COALESCE(SUM(s.total), 0),
+    COALESCE(SUM(sp.net_amount) FILTER (WHERE sp.method = 'pix'),         0),
+    COALESCE(SUM(sp.net_amount) FILTER (WHERE sp.method = 'cash'),        0),
+    COALESCE(SUM(sp.net_amount) FILTER (WHERE sp.method = 'credit_card'), 0),
+    COALESCE(SUM(sp.net_amount) FILTER (WHERE sp.method = 'debit_card'),  0),
+    COALESCE(SUM(sp.fee_amount) FILTER (WHERE sp.method IN ('credit_card', 'debit_card')), 0),
+    COALESCE(SUM(sp.change_amount) FILTER (WHERE sp.method='cash' AND sp.change_method='cash'), 0),
+    COALESCE(SUM(sp.change_amount) FILTER (WHERE sp.method='cash' AND sp.change_method='pix'),  0),
+    COALESCE(SUM(sp.amount_tendered) FILTER (WHERE sp.method = 'cash'), 0)
+  INTO
+    v_total_sales, v_total_pix, v_total_cash, v_total_credit, v_total_debit,
+    v_total_card_fees, v_total_cash_change, v_total_pix_change, v_cash_tendered
+  FROM sales s
+  JOIN sale_payments sp ON sp.sale_id = s.id
+  WHERE s.cash_session_id = p_session_id
+    AND s.status NOT IN ('cancelled', 'returned');
+
+  SELECT
+    COALESCE(SUM(amount) FILTER (WHERE type = 'sangria'),                     0),
+    COALESCE(SUM(amount) FILTER (WHERE type = 'suprimento'),                  0),
+    COALESCE(SUM(amount) FILTER (WHERE type = 'expense'),                     0),
+    COALESCE(SUM(amount) FILTER (WHERE type = 'expense' AND method = 'cash'), 0)
+  INTO v_total_sangria, v_total_suprimento, v_total_expenses, v_expense_cash
+  FROM cash_movements
+  WHERE cash_session_id = p_session_id AND cancelled_at IS NULL;
+
+  v_expected_cash := ROUND(
+    v_sess.opening_amount_cash + v_cash_tendered - v_total_cash_change
+    + v_total_suprimento - v_total_sangria - v_expense_cash
+  , 2);
+
+  v_cash_difference := ROUND(p_counted_cash - v_expected_cash, 2);
+
+  UPDATE cash_register_sessions
+  SET
+    status            = 'closed',   closed_by         = p_user_id,
+    closed_at         = NOW(),       counted_cash       = p_counted_cash,
+    notes_close       = NULLIF(TRIM(COALESCE(p_notes,'')), ''),
+    updated_at        = NOW(),
+    total_sales       = ROUND(v_total_sales,       2),
+    total_cash        = ROUND(v_total_cash,        2),
+    total_pix         = ROUND(v_total_pix,         2),
+    total_credit_card = ROUND(v_total_credit,      2),
+    total_debit_card  = ROUND(v_total_debit,       2),
+    total_card_fees   = ROUND(v_total_card_fees,   2),
+    total_cash_change = ROUND(v_total_cash_change, 2),
+    total_pix_change  = ROUND(v_total_pix_change,  2),
+    total_sangria     = ROUND(v_total_sangria,    2),
+    total_suprimento  = ROUND(v_total_suprimento, 2),
+    total_expenses    = ROUND(v_total_expenses,   2),
+    expected_cash     = v_expected_cash,
+    cash_difference   = v_cash_difference
+  WHERE id = p_session_id;
+
+  RETURN jsonb_build_object(
+    'id', p_session_id, 'status', 'closed', 'closed_at', NOW(),
+    'total_sales', ROUND(v_total_sales,2), 'total_cash', ROUND(v_total_cash,2),
+    'total_pix', ROUND(v_total_pix,2), 'total_credit_card', ROUND(v_total_credit,2),
+    'total_debit_card', ROUND(v_total_debit,2), 'total_card_fees', ROUND(v_total_card_fees,2),
+    'total_cash_change', ROUND(v_total_cash_change,2), 'total_pix_change', ROUND(v_total_pix_change,2),
+    'total_sangria', ROUND(v_total_sangria,2), 'total_suprimento', ROUND(v_total_suprimento,2),
+    'total_expenses', ROUND(v_total_expenses,2),
+    'expected_cash', v_expected_cash, 'counted_cash', p_counted_cash,
+    'cash_difference', v_cash_difference
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.rpc_open_cash_session(uuid, numeric, text)       TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_add_cash_movement(bigint, uuid, text, numeric, text, text, bigint, jsonb) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_close_cash_session(bigint, uuid, numeric, text) TO service_role, authenticated;
+
+-- =============================================================================
+-- 30. CONTROLES DE SEGURANÇA, AUDITORIA E ANTI-FRAUDE
+--     (migration 20260602_security_audit_controls)
+-- =============================================================================
+
+-- ── 30a. Trigger de auditoria para tabelas de caixa e usuários ───────────────
+--
+-- Insere em audit_logs usando campos do próprio registro para derivar user_id,
+-- sem depender de auth.uid() que pode ser NULL dentro de RPCs SECURITY DEFINER.
+
+CREATE OR REPLACE FUNCTION public.audit_cash_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_record_id text;
+  v_action    text;
+  v_user_id   uuid;
+BEGIN
+  v_record_id := COALESCE(NEW.id::text, OLD.id::text);
+
+  v_action := CASE TG_OP
+    WHEN 'INSERT' THEN 'create'
+    WHEN 'UPDATE' THEN 'update'
+    WHEN 'DELETE' THEN 'delete'
+    ELSE TG_OP
+  END;
+
+  IF TG_TABLE_NAME = 'cash_register_sessions' THEN
+    v_user_id := CASE
+      WHEN TG_OP = 'DELETE'                           THEN OLD.opened_by
+      WHEN TG_OP = 'UPDATE' AND NEW.status = 'closed' THEN NEW.closed_by
+      ELSE NEW.opened_by
+    END;
+  ELSIF TG_TABLE_NAME = 'cash_movements' THEN
+    v_user_id := CASE
+      WHEN TG_OP = 'UPDATE' AND NEW.cancelled_at IS NOT NULL THEN NEW.cancelled_by
+      WHEN TG_OP = 'DELETE'                                  THEN OLD.created_by
+      ELSE NEW.created_by
+    END;
+  ELSIF TG_TABLE_NAME = 'users' THEN
+    v_user_id := COALESCE(NEW.id, OLD.id);
+  ELSE
+    v_user_id := auth.uid();
+  END IF;
+
+  INSERT INTO public.audit_logs (
+    ts, user_id, user_role, action, resource, resource_id, before_data, after_data
+  )
+  VALUES (
+    NOW(),
+    v_user_id,
+    (SELECT role::text FROM public.users WHERE id = v_user_id),
+    v_action,
+    TG_TABLE_NAME,
+    v_record_id,
+    CASE WHEN TG_OP IN ('UPDATE', 'DELETE') THEN to_jsonb(OLD) ELSE NULL END,
+    CASE WHEN TG_OP IN ('INSERT', 'UPDATE') THEN to_jsonb(NEW) ELSE NULL END
+  );
+
+  RETURN COALESCE(NEW, OLD);
+EXCEPTION WHEN OTHERS THEN
+  RETURN COALESCE(NEW, OLD);
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_audit_cash_sessions ON public.cash_register_sessions;
+CREATE TRIGGER trg_audit_cash_sessions
+  AFTER INSERT OR UPDATE OR DELETE ON public.cash_register_sessions
+  FOR EACH ROW EXECUTE FUNCTION public.audit_cash_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_cash_movements ON public.cash_movements;
+CREATE TRIGGER trg_audit_cash_movements
+  AFTER INSERT OR UPDATE OR DELETE ON public.cash_movements
+  FOR EACH ROW EXECUTE FUNCTION public.audit_cash_trigger();
+
+DROP TRIGGER IF EXISTS trg_audit_users_role ON public.users;
+CREATE TRIGGER trg_audit_users_role
+  AFTER UPDATE ON public.users
+  FOR EACH ROW
+  WHEN (
+    OLD.role IS DISTINCT FROM NEW.role
+    OR OLD.active IS DISTINCT FROM NEW.active
+  )
+  EXECUTE FUNCTION public.audit_cash_trigger();
+
+-- ── 30b. rpc_cancel_cash_movement — sangria/suprimento exigem gerente/admin ──
+
+CREATE OR REPLACE FUNCTION public.rpc_cancel_cash_movement(
+  p_movement_id         bigint,
+  p_user_id             uuid,
+  p_cancellation_reason text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_company_id  int;
+  v_user_role   text;
+  v_movement    record;
+BEGIN
+  IF TRIM(COALESCE(p_cancellation_reason, '')) = '' THEN
+    RAISE EXCEPTION 'Motivo de cancelamento obrigatório.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT company_id, role INTO v_company_id, v_user_role FROM users WHERE id = p_user_id;
+
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Usuário não associado a uma empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT
+    cm.id, cm.type, cm.created_by, cm.cancelled_at,
+    crs.status AS session_status, crs.company_id AS session_company
+  INTO v_movement
+  FROM cash_movements cm
+  JOIN cash_register_sessions crs ON crs.id = cm.cash_session_id
+  WHERE cm.id = p_movement_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Movimento #% não encontrado.', p_movement_id USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_movement.session_company != v_company_id THEN
+    RAISE EXCEPTION 'Acesso negado.' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_movement.session_status = 'closed' THEN
+    RAISE EXCEPTION 'Caixa fechado. Não é possível cancelar movimentos.' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_movement.cancelled_at IS NOT NULL THEN
+    RAISE EXCEPTION 'Movimento #% já foi cancelado.', p_movement_id USING ERRCODE = 'P0001';
+  END IF;
+
+  -- sangria/suprimento: apenas gerente ou admin
+  IF v_movement.type IN ('sangria', 'suprimento') THEN
+    IF v_user_role NOT IN ('gerente', 'admin') THEN
+      RAISE EXCEPTION 'Cancelamento de sangria/suprimento exige gerente ou administrador.'
+        USING ERRCODE = 'P0001';
+    END IF;
+  ELSE
+    IF v_movement.created_by != p_user_id AND v_user_role NOT IN ('gerente', 'admin') THEN
+      RAISE EXCEPTION 'Apenas o criador da despesa ou gerente/admin podem cancelar.'
+        USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
+  UPDATE cash_movements
+  SET cancelled_at = NOW(), cancelled_by = p_user_id,
+      cancellation_reason = TRIM(p_cancellation_reason)
+  WHERE id = p_movement_id;
+
+  RETURN jsonb_build_object(
+    'id',                  p_movement_id,
+    'type',                v_movement.type,
+    'cancelled_at',        NOW(),
+    'cancellation_reason', TRIM(p_cancellation_reason)
+  );
+END;
+$$;
+
+-- ── 30c. rpc_reopen_cash_session — apenas admin, com log obrigatório ─────────
+
+CREATE OR REPLACE FUNCTION public.rpc_reopen_cash_session(
+  p_session_id bigint,
+  p_user_id    uuid,
+  p_reason     text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_company_id int;
+  v_user_role  text;
+  v_sess       record;
+BEGIN
+  IF TRIM(COALESCE(p_reason, '')) = '' THEN
+    RAISE EXCEPTION 'Motivo de reabertura obrigatório.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT company_id, role INTO v_company_id, v_user_role FROM users WHERE id = p_user_id;
+
+  IF v_company_id IS NULL THEN
+    RAISE EXCEPTION 'Usuário não associado a uma empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_user_role != 'admin' THEN
+    RAISE EXCEPTION 'Apenas administradores podem reabrir um caixa fechado.'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM cash_register_sessions
+    WHERE company_id = v_company_id AND status = 'open'
+  ) THEN
+    RAISE EXCEPTION 'Já existe um caixa aberto para esta empresa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT * INTO v_sess FROM cash_register_sessions WHERE id = p_session_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Sessão de caixa #% não encontrada.', p_session_id USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_sess.company_id != v_company_id THEN
+    RAISE EXCEPTION 'Acesso negado à sessão de caixa.' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_sess.status = 'open' THEN
+    RAISE EXCEPTION 'Esta sessão de caixa já está aberta.' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Log com snapshot do estado fechado antes de limpar
+  INSERT INTO public.audit_logs (
+    ts, user_id, user_role, action, resource, resource_id, before_data, after_data, detail
+  )
+  VALUES (
+    NOW(), p_user_id, v_user_role,
+    'reopen_cash', 'cash_register_sessions', p_session_id::text,
+    to_jsonb(v_sess), NULL, TRIM(p_reason)
+  );
+
+  UPDATE cash_register_sessions
+  SET
+    status               = 'open',
+    closed_by            = NULL, closed_at           = NULL,
+    counted_cash         = NULL, notes_close         = NULL,
+    closing_confirmed_by = NULL,
+    total_sales          = NULL, total_cash          = NULL,
+    total_pix            = NULL, total_credit_card   = NULL,
+    total_debit_card     = NULL, total_card_fees     = NULL,
+    total_cash_change    = NULL, total_pix_change    = NULL,
+    total_sangria        = NULL, total_suprimento    = NULL,
+    total_expenses       = NULL, expected_cash       = NULL,
+    cash_difference      = NULL, updated_at          = NOW()
+  WHERE id = p_session_id;
+
+  RETURN jsonb_build_object(
+    'id',          p_session_id,
+    'status',      'open',
+    'reopened_at', NOW(),
+    'reopened_by', p_user_id,
+    'reason',      TRIM(p_reason)
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.rpc_reopen_cash_session(bigint, uuid, text)
+  TO service_role, authenticated;
+
+GRANT EXECUTE ON FUNCTION public.rpc_cancel_cash_movement(bigint, uuid, text)
+  TO service_role, authenticated;
+
+-- ── 30d. RLS — bloquear escrita direta em tabelas de caixa ───────────────────
+--
+-- Todas as escritas legítimas passam por RPCs SECURITY DEFINER.
+-- Sem policies de INSERT/UPDATE/DELETE para authenticated = bloqueado.
+
+DROP POLICY IF EXISTS "cash_sessions_insert"        ON public.cash_register_sessions;
+DROP POLICY IF EXISTS "cash_sessions_update"        ON public.cash_register_sessions;
+DROP POLICY IF EXISTS "cash_sessions_delete"        ON public.cash_register_sessions;
+DROP POLICY IF EXISTS "cash_sessions_company_write" ON public.cash_register_sessions;
+
+DROP POLICY IF EXISTS "cash_movements_insert"        ON public.cash_movements;
+DROP POLICY IF EXISTS "cash_movements_update"        ON public.cash_movements;
+DROP POLICY IF EXISTS "cash_movements_delete"        ON public.cash_movements;
+DROP POLICY IF EXISTS "cash_movements_company_write" ON public.cash_movements;
+
+-- ── 30e. RLS — imutabilidade de audit_logs ───────────────────────────────────
+--
+-- Sem policies de UPDATE/DELETE = bloqueado para authenticated.
+-- INSERT somente via service_role (RPCs SECURITY DEFINER + app server-side).
+
+DROP POLICY IF EXISTS "audit_logs_insert" ON public.audit_logs;
+DROP POLICY IF EXISTS "audit_logs_update" ON public.audit_logs;
+DROP POLICY IF EXISTS "audit_logs_delete" ON public.audit_logs;
+
+-- ── 30f. View de relatório de auditoria ──────────────────────────────────────
+
+CREATE OR REPLACE VIEW public.v_audit_report AS
+SELECT
+  al.id, al.ts,
+  al.user_id, u.name AS user_name,
+  al.user_role, al.action, al.resource, al.resource_id,
+  al.before_data, al.after_data, al.detail,
+  al.ip_address, al.request_id
+FROM  public.audit_logs al
+LEFT  JOIN public.users u ON u.id = al.user_id
+ORDER BY al.ts DESC;
+
+GRANT SELECT ON public.v_audit_report TO authenticated;
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================

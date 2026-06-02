@@ -3,10 +3,13 @@ export const dynamic = 'force-dynamic'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ReabrirCaixaButton } from './_components/reabrir-button'
 
 async function getSession(id: number) {
   const admin = createAdminClient()
@@ -56,6 +59,11 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
   const id = parseInt(params.id, 10)
   if (isNaN(id)) notFound()
 
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const isAdmin = profile?.role === 'admin'
+
   const [session, movements] = await Promise.all([getSession(id), getMovements(id)])
   if (!session) notFound()
 
@@ -71,9 +79,12 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
             <p className="text-sm text-text-muted">{formatDate(session.opened_at)}</p>
           </div>
         </div>
-        <Link href="/caixa/historico">
-          <Button variant="secondary" size="sm">← Histórico</Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {isAdmin && <ReabrirCaixaButton sessionId={id} />}
+          <Link href="/caixa/historico">
+            <Button variant="secondary" size="sm">← Histórico</Button>
+          </Link>
+        </div>
       </div>
 
       {/* Resumo financeiro */}

@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
 import { addCashMovement } from '@/services/caixa.service'
+import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -42,6 +43,19 @@ export async function POST(request: Request) {
   })
 
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'add_movement', resource: 'cash_movement',
+    resourceId: result.data.id,
+    after: {
+      type:        parsed.data.type,
+      method:      parsed.data.method,
+      amount:      parsed.data.amount,
+      description: parsed.data.description,
+      session_id:  parsed.data.session_id,
+    },
+  })
 
   return NextResponse.json({ movement: result.data }, { status: 201 })
 }

@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
 import { closeCashSession } from '@/services/caixa.service'
+import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -28,6 +29,18 @@ export async function POST(request: Request) {
 
   const result = await closeCashSession(parsed.data.session_id, user.id, parsed.data.counted_cash, parsed.data.notes)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+
+  auditLog({
+    userId: user.id, userRole: user.role,
+    action: 'close_cash', resource: 'cash_session',
+    resourceId: parsed.data.session_id,
+    after: {
+      counted_cash:    result.data.counted_cash,
+      expected_cash:   result.data.expected_cash,
+      cash_difference: result.data.cash_difference,
+      total_sales:     result.data.total_sales,
+    },
+  })
 
   return NextResponse.json({ summary: result.data })
 }
