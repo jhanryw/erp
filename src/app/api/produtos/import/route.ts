@@ -62,7 +62,15 @@ export async function POST(request: Request) {
     const { variants, ...productData } = item
 
     try {
-      const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
+      // Gera o SKU pai. Se tipo/modelo não forem códigos do mapa, usa fallback
+      // baseado no nome do produto para não bloquear o import.
+      let parentSku: string
+      try {
+        parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
+      } catch {
+        const hash = Buffer.from(productData.name).toString('base64').replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase()
+        parentSku = `IMP${hash}${productData.ano ?? '00'}`
+      }
 
       // 1. Criar produto — se já existir (mesmo SKU = reposição), usa o existente
       let product: { id: number } | null = null

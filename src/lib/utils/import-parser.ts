@@ -124,17 +124,18 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
 
     const origin = origemStr.toLowerCase().includes('propria') || origemStr.toLowerCase().includes('própria') ? 'own_brand' : 'third_party'
 
-    // SKU de variação gerado apenas para detecção de duplicatas no preview.
-    // A API gera o SKU definitivo usando getOrCreate* com os códigos reais.
-    const sku_variacao = tipo && modelo
-      ? `${tipo}-${modelo}-${corStr}-${tamanhoStr}-${ano}`.toLowerCase().replace(/\s+/g, '_')
-      : ''
+    // SKU de variação: chave única por cor+tamanho dentro do mesmo produto.
+    // A API gera o SKU definitivo — este é só para detecção de duplicatas no preview.
+    const sku_variacao = `${corStr}-${tamanhoStr}`.toLowerCase().replace(/\s+/g, '_')
 
-    const mapKey = `${tipo}-${modelo}`
-    
+    // Agrupa pelo nome do produto (case-insensitive + trim).
+    // Mesmas linhas com mesmo nome = variantes do mesmo produto.
+    // Nomes diferentes = produtos diferentes, mesmo que tipo/modelo sejam iguais.
+    const mapKey = nome_produto.trim().toLowerCase()
+
     if (!productMap.has(mapKey)) {
       productMap.set(mapKey, {
-        name: nome_produto,
+        name: nome_produto.trim(),
         tipo,
         modelo,
         ano,
@@ -149,10 +150,10 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     }
 
     const product = productMap.get(mapKey)!
-    
+
     const exists = product.variants.some(v => v.sku_variation === sku_variacao)
     if (exists) {
-      newIssues.push({ row: rowNum, message: `Combinação de Cor/Tamanho duplicada na linha ${rowNum}`, type: 'error' })
+      newIssues.push({ row: rowNum, message: `"${nome_produto.trim()}" — cor+tamanho duplicados: ${corStr} / ${tamanhoStr}`, type: 'error' })
     } else {
       product.variants.push({
         sku_variation: sku_variacao,
