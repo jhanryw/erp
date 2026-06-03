@@ -64,8 +64,10 @@ export async function POST(request: Request) {
     try {
       const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
 
-      // 1. Criar produto
-      const { data: product, error: productError } = (await admin
+      // 1. Criar produto — se já existir (mesmo SKU = reposição), usa o existente
+      let product: { id: number } | null = null
+
+      const { data: insertedProduct, error: productError } = (await admin
         .from('products')
         .insert({
           ...productData,
@@ -79,12 +81,28 @@ export async function POST(request: Request) {
         .single()) as unknown as { data: { id: number } | null; error: any }
 
       if (productError) {
-        throw new Error(
-          `Produto ${productData.name}: ` +
-            (productError.code === '23503'
-              ? 'Categoria ou fornecedor inválido.'
-              : productError.message)
-        )
+        if (productError.code === '23505') {
+          // Produto já existe — busca pelo SKU para reposição de estoque
+          const { data: existing } = (await admin
+            .from('products')
+            .select('id')
+            .eq('sku', parentSku)
+            .single()) as unknown as { data: { id: number } | null }
+          if (existing) {
+            product = existing
+          } else {
+            throw new Error(`Produto ${productData.name}: já existe mas não foi possível localizá-lo.`)
+          }
+        } else {
+          throw new Error(
+            `Produto ${productData.name}: ` +
+              (productError.code === '23503'
+                ? 'Categoria ou fornecedor inválido.'
+                : productError.message)
+          )
+        }
+      } else {
+        product = insertedProduct
       }
 
       // 2. Criar variantes (se houver)
@@ -151,37 +169,56 @@ export async function POST(request: Request) {
             ano:         productData.ano,
           })
 
-          const insertResult = await insertVariationWithRetry(
-            baseSku,
-            {
-              product_id:    product.id,
-              cost_override: v.cost_override ?? null,
-              price_override: v.price_override ?? null,
-              active: true,
-            },
-            admin,
-          )
+          // Verificar se a variante já existe (reposição)
+          const { data: existingVariant } = (await admin
+            .from('product_variations')
+            .select('id')
+            .eq('product_id', product.id)
+            .like('sku_variation', `${baseSku}%`)
+            .limit(1)
+            .single()) as unknown as { data: { id: number } | null }
 
-          if (!insertResult.ok) {
-            throw new Error(`Erro ao criar variante (base ${baseSku}): ${insertResult.message}`)
+          let pvId: number
+
+          if (existingVariant) {
+            // Variante já existe → apenas soma o estoque (reposição)
+            pvId = existingVariant.id
+          } else {
+            // Variante nova → cria normalmente
+            const insertResult = await insertVariationWithRetry(
+              baseSku,
+              {
+                product_id:    product.id,
+                cost_override: v.cost_override ?? null,
+                price_override: v.price_override ?? null,
+                active: true,
+              },
+              admin,
+            )
+
+            if (!insertResult.ok) {
+              throw new Error(`Erro ao criar variante (base ${baseSku}): ${insertResult.message}`)
+            }
+
+            pvId = insertResult.pv.id
+
+            if (attrs.length > 0) {
+              await admin.from('product_variation_attributes').insert(
+                attrs.map(a => ({ ...a, product_variation_id: pvId })) as any
+              )
+            }
           }
 
-          const { pv } = insertResult
-
-          if (attrs.length > 0) {
-            const finalAttrs = attrs.map(a => ({ ...a, product_variation_id: pv.id }))
-            await admin.from('product_variation_attributes').insert(finalAttrs as any)
-          }
-
-          // 3. Carga inicial via RPC — rastreável como tipo 'initial' em stock_movements.
-          // Sem stock_lot nem finance_entry (carga pré-operação). Trigger bloqueia insert direto.
-          const stockInit = await initializeStock({
-            product_variation_id: pv.id,
-            quantity: v.initial_stock,
-            avg_cost: v.cost_override ?? productData.base_cost,
-          }, user.id)
-          if (!stockInit.ok) {
-            throw new Error(`Erro ao inicializar estoque: ${stockInit.error}`)
+          // 3. Carga/reposição de estoque via RPC
+          if (v.initial_stock > 0) {
+            const stockInit = await initializeStock({
+              product_variation_id: pvId,
+              quantity: v.initial_stock,
+              avg_cost: v.cost_override ?? productData.base_cost,
+            }, user.id)
+            if (!stockInit.ok) {
+              throw new Error(`Erro ao registrar estoque: ${stockInit.error}`)
+            }
           }
         }
       }

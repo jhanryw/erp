@@ -158,15 +158,24 @@ BEGIN
     UPDATE variation_values AS vv
     SET sku_code = mapping.code
     FROM (VALUES
-      ('unico', '00'),
-      ('pp',    '05'),
-      ('p',     '01'),
-      ('p_m',   '07'),
-      ('m',     '02'),
-      ('g',     '03'),
-      ('g_gg',  '08'),
-      ('gg',    '04'),
-      ('xgg',   '06')
+      ('unico',      '00'),
+      ('pp',         '05'),
+      ('p',          '01'),
+      ('p_m',        '07'),
+      ('m',          '02'),
+      ('g',          '03'),
+      ('g_gg',       '08'),
+      ('gg',         '04'),
+      ('xg',         '06'),
+      ('xgg',        '06'),
+      ('g1',         '09'),
+      ('g2',         '10'),
+      ('g3',         '11'),
+      ('m_infantil', '12'),
+      ('g_infantil', '13'),
+      ('48',         '14'),
+      ('50',         '15'),
+      ('52',         '16')
     ) AS mapping(norm, code)
     WHERE vv.variation_type_id = v_tamanho_id
       AND vv.normalized_name   = mapping.norm
@@ -190,7 +199,9 @@ BEGIN
       (v_cor_id, 'Estampado',          'estampado',           'estampado',           '52', true),
       (v_cor_id, 'Preto com Branco',   'preto-com-branco',    'preto_com_branco',    '53', true),
       (v_cor_id, 'Preto com Verde',    'preto-com-verde',     'preto_com_verde',     '54', true),
-      (v_cor_id, 'Rosa Seco',          'rosa-seco',           'rosa_seco',           '55', true)
+      (v_cor_id, 'Rosa Seco',          'rosa-seco',           'rosa_seco',           '55', true),
+      (v_cor_id, 'Azul',              'azul',                'azul',                '07', true),
+      (v_cor_id, 'Rosa Claro',        'rosa-claro',          'rosa_claro',          '56', true)
     ON CONFLICT (variation_type_id, slug) DO UPDATE
       SET normalized_name = EXCLUDED.normalized_name,
           sku_code        = EXCLUDED.sku_code

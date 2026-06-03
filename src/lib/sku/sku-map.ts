@@ -188,22 +188,46 @@ export const SKU_COR: Record<string, string> = {
   rose:            '42',
   chumbo:          '43',
   verde_militar:   '44',
-  azul_petroleo:   '45',
-  caqui:           '46',
+  azul_petroleo:      '45',
+  caqui:              '46',
+  // Adicionados via migration dinâmica
+  verde_agua:         '47',
+  purple:             '48',
+  malva:              '49',
+  preto_com_vermelho: '50',
+  branco_com_rosa:    '51',
+  estampado:          '52',
+  preto_com_branco:   '53',
+  preto_com_verde:    '54',
+  rosa_seco:          '55',
+  // Novos
+  rosa_claro:         '56',
 }
 
 // ─── Tamanhos ─────────────────────────────────────────────────────────────────
 
 export const SKU_TAMANHO: Record<string, string> = {
-  unico: '00',
-  pp:    '05',
-  p:     '01',
-  p_m:  '07',
-  m:    '02',
-  g:    '03',
-  g_gg: '08',
-  gg:   '04',
-  xgg:  '06',
+  // Tamanhos base
+  unico:      '00',
+  pp:         '05',
+  p:          '01',
+  p_m:        '07',
+  m:          '02',
+  g:          '03',
+  g_gg:       '08',
+  gg:         '04',
+  xg:         '06',  // alias de xgg para compatibilidade
+  xgg:        '06',
+  // Tamanhos estendidos
+  g1:         '09',
+  g2:         '10',
+  g3:         '11',
+  m_infantil: '12',
+  g_infantil: '13',
+  // Numeração europeia (lingerie/fitness)
+  '48':       '14',
+  '50':       '15',
+  '52':       '16',
 }
 
 // ─── Anos de coleção ──────────────────────────────────────────────────────────
