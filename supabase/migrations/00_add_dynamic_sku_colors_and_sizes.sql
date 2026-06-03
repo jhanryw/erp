@@ -201,7 +201,8 @@ BEGIN
       (v_cor_id, 'Preto com Verde',    'preto-com-verde',     'preto_com_verde',     '54', true),
       (v_cor_id, 'Rosa Seco',          'rosa-seco',           'rosa_seco',           '55', true),
       (v_cor_id, 'Azul',              'azul',                'azul',                '07', true),
-      (v_cor_id, 'Rosa Claro',        'rosa-claro',          'rosa_claro',          '56', true)
+      (v_cor_id, 'Rosa Claro',        'rosa-claro',          'rosa_claro',          '56', true),
+      (v_cor_id, 'Verde',             'verde',               'verde',               '08', true)
     ON CONFLICT (variation_type_id, slug) DO UPDATE
       SET normalized_name = EXCLUDED.normalized_name,
           sku_code        = EXCLUDED.sku_code
