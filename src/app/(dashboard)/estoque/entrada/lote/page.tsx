@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback, useId } from 'react'
+import { useState, useEffect, useMemo, useCallback, useId, useRef } from 'react'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -13,6 +13,8 @@ import {
   Grid3X3,
   ChevronDown,
   ChevronUp,
+  Search,
+  X,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -81,6 +83,111 @@ function buildGrid(variations: Variation[]) {
 
 function blockTotalQty(block: ProductBlock) {
   return Object.values(block.quantities).reduce((s, q) => s + (q || 0), 0)
+}
+
+// ─── Busca de produto com digitação ──────────────────────────────────────────
+
+function ProductSearchInput({
+  products,
+  value,
+  onChange,
+}: {
+  products: ProductMeta[]
+  value: number | null
+  onChange: (id: number | null) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [open, setOpen]   = useState(false)
+  const wrapperRef        = useRef<HTMLDivElement>(null)
+
+  const selected = products.find(p => p.id === value)
+
+  // Fecha dropdown ao clicar fora
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setOpen(false)
+        setQuery('')
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return products.slice(0, 30)
+    return products
+      .filter(p => p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))
+      .slice(0, 30)
+  }, [products, query])
+
+  function handleSelect(p: ProductMeta) {
+    onChange(p.id)
+    setQuery('')
+    setOpen(false)
+  }
+
+  function handleClear() {
+    onChange(null)
+    setQuery('')
+    setOpen(false)
+  }
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <label className="label-base">Produto *</label>
+
+      {selected && !open ? (
+        // Produto selecionado — mostra nome com botão para trocar
+        <div className="input-base flex items-center justify-between gap-2 cursor-default">
+          <span className="text-sm text-text-primary truncate">{selected.name}</span>
+          <button
+            type="button"
+            onClick={handleClear}
+            className="shrink-0 text-text-muted hover:text-error transition-colors"
+            title="Trocar produto"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ) : (
+        // Campo de busca
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
+          <input
+            type="text"
+            className="input-base pl-9"
+            placeholder="Digite o nome ou SKU do produto..."
+            value={query}
+            autoComplete="off"
+            onChange={e => { setQuery(e.target.value); setOpen(true) }}
+            onFocus={() => setOpen(true)}
+          />
+        </div>
+      )}
+
+      {open && (
+        <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-20 overflow-hidden max-h-64 overflow-y-auto">
+          {filtered.length === 0 ? (
+            <p className="px-4 py-3 text-sm text-text-muted">Nenhum produto encontrado</p>
+          ) : (
+            filtered.map(p => (
+              <button
+                key={p.id}
+                type="button"
+                onMouseDown={() => handleSelect(p)}
+                className="w-full flex items-center justify-between px-4 py-3 hover:bg-bg-hover text-left transition-colors border-b border-border/50 last:border-0"
+              >
+                <span className="text-sm text-text-primary truncate flex-1 mr-3">{p.name}</span>
+                <code className="text-xs text-text-muted shrink-0">{p.sku}</code>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ─── Componente do bloco de produto ──────────────────────────────────────────
@@ -158,23 +265,11 @@ function ProductBlockCard({
         <CardContent className="space-y-4">
           {/* Seletor de produto + custo unitário */}
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_160px] gap-4">
-            <div>
-              <label className="label-base">Produto *</label>
-              <select
-                className="input-base"
-                value={block.productId ?? ''}
-                onChange={(e) =>
-                  onProductChange(block.blockId, e.target.value ? Number(e.target.value) : null)
-                }
-              >
-                <option value="">Selecione um produto...</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} — {p.sku}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <ProductSearchInput
+              products={products}
+              value={block.productId}
+              onChange={(id) => onProductChange(block.blockId, id)}
+            />
             <Input
               label="Custo Unitário (R$) *"
               type="number"
