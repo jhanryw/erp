@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Plus, Users, ChevronRight } from 'lucide-react'
+import { Plus, Users, ChevronRight, Cake } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
@@ -96,12 +96,20 @@ export default async function ClientesPage() {
           </p>
         </div>
 
-        <Link href="/clientes/novo">
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />
-            Novo Cliente
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link href="/clientes/aniversariantes">
+            <Button variant="outline">
+              <Cake className="mr-2 h-4 w-4" />
+              Aniversariantes
+            </Button>
+          </Link>
+          <Link href="/clientes/novo">
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />
+              Novo Cliente
+            </Button>
+          </Link>
+        </div>
       </div>
 
       {customers.length === 0 ? (
