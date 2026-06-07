@@ -29,15 +29,16 @@ async function sendSaleWebhook(
 
   const [{ data: saleRow }, { data: customer }] = await Promise.all([
     admin.from('sales').select('id, total, sale_date').eq('id', saleId).single(),
-    admin.from('customers').select('name, phone').eq('id', customerId).single(),
+    (admin as any).from('customers').select('name, phone, is_anonymous').eq('id', customerId).single() as Promise<{ data: { name: string; phone: string; is_anonymous: boolean } | null }>,
   ])
 
   const payload = {
-    sale_id:       saleId,
-    customer_name: customer?.name ?? null,
+    sale_id:        saleId,
+    customer_name:  customer?.name ?? null,
     customer_phone: customer?.phone ?? null,
-    total:         saleRow?.total ?? null,
-    sale_date:     saleRow?.sale_date ?? null,
+    total:          saleRow?.total ?? null,
+    sale_date:      saleRow?.sale_date ?? null,
+    is_anonymous:   (customer as any)?.is_anonymous ?? false,
   }
 
   let status: 'sent' | 'failed' = 'failed'
