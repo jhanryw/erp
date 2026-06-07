@@ -41,8 +41,10 @@ DROP FUNCTION IF EXISTS public.sync_stock_from_lots();
 --
 --   SUM(stock_movements.quantity por variação) = saldo físico correto
 --
--- Ajustamos apenas variações com saldo acima do ledger (excesso gerado pelo
--- bug). Variações com saldo abaixo do ledger não são tocadas.
+-- Ajustamos apenas variações onde:
+--   a) stock.quantity > movements_sum  (excesso gerado pelo bug duplo)
+--   b) movements_sum >= 0             (ledger saudável; ledger negativo é
+--                                      inconsistência separada — não tocamos)
 
 DO $$
 BEGIN
@@ -60,6 +62,7 @@ BEGIN
     GROUP BY product_variation_id
   ) mv
   WHERE s.product_variation_id = mv.product_variation_id
-    AND s.quantity > mv.movements_sum;   -- apenas saldos inflados pelo bug
+    AND s.quantity > mv.movements_sum   -- saldo inflado pelo bug
+    AND mv.movements_sum >= 0;          -- evita violar stock_non_negative
 END;
 $$;
