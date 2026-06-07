@@ -178,12 +178,19 @@ export async function POST(request: Request) {
 
     const admin = createAdminClient()
 
-    // Webhook n8n pós-venda (não-fatal, fire-and-forget)
+    // Webhook n8n pós-venda — pula para clientes avulsos (is_anonymous = true)
     const n8nUrl = process.env.N8N_WEBHOOK_URL
     if (n8nUrl) {
-      sendSaleWebhook(admin, sale.id, saleData.customer_id, user.company_id, n8nUrl).catch(
-        (err) => console.error('[POST /api/vendas] Webhook n8n error', err)
-      )
+      const { data: custRow } = await (admin as any)
+        .from('customers')
+        .select('is_anonymous')
+        .eq('id', saleData.customer_id)
+        .maybeSingle() as { data: { is_anonymous: boolean } | null }
+      if (!custRow?.is_anonymous) {
+        sendSaleWebhook(admin, sale.id, saleData.customer_id, user.company_id, n8nUrl).catch(
+          (err) => console.error('[POST /api/vendas] Webhook n8n error', err)
+        )
+      }
     }
 
     // Criar envio automaticamente após a venda
