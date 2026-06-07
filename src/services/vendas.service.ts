@@ -227,10 +227,16 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   const admin = createAdminClient() // admin client: RPC SECURITY DEFINER, equivalente ao service_role
 
   // accumulate_cashback = true  → gera novo cashback ao fechar a venda (padrão)
-  // accumulate_cashback = false → não gera cashback (cliente optou por usar o saldo existente)
-  // Nota: a RPC precisa honrar p_accumulate_cashback para controlar a geração.
-  // Se a função ainda não suportar o parâmetro, o comportamento padrão (gerar cashback) é mantido.
-  const accumulateCashback = input.cashback_action !== 'use'
+  // accumulate_cashback = false → não gera cashback (cliente optou por usar o saldo existente,
+  //                               ou cliente é anônimo/avulso)
+  const { data: customerMeta } = await (admin as any)
+    .from('customers')
+    .select('is_anonymous')
+    .eq('id', input.customer_id)
+    .single() as { data: { is_anonymous?: boolean } | null }
+
+  const isAnonymous = customerMeta?.is_anonymous === true
+  const accumulateCashback = input.cashback_action !== 'use' && !isAnonymous
 
   // Novo fluxo: quando payments[] presente, chama RPC principal com p_payments
   // Legado: chama wrapper com p_accumulate_cashback (sem p_payments)

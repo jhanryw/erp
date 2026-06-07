@@ -30,6 +30,7 @@ async function getBirthdayCustomers(): Promise<{
     .from('customers')
     .select('id, name, phone, birth_date, city')
     .not('birth_date', 'is', null)
+    .eq('is_anonymous', false)
     .order('birth_date')
 
   if (error || !data) return { today: [], thisMonth: [] }

@@ -47,8 +47,10 @@ type StockStatusRow = {
 async function getStockData(search?: string) {
   const supabase = createAdminClient()
 
-  let itemsQuery = supabase
-    .from('mv_stock_status')
+  // vw_stock_live é uma view normal (não materializada) — sempre reflete o stock atual.
+  // mv_stock_status é materializada e só atualiza com refresh explícito, mostrando dados velhos.
+  let itemsQuery = (supabase as any)
+    .from('vw_stock_live')
     .select('*')
     .order('product_name', { ascending: true })
     .order('current_qty', { ascending: true })
@@ -62,8 +64,8 @@ async function getStockData(search?: string) {
   const [stockItems, summary] = await Promise.all([
     itemsQuery,
     // Agrega todos os registros; product_id necessário para contagem de produtos distintos
-    supabase
-      .from('mv_stock_status')
+    (supabase as any)
+      .from('vw_stock_live')
       .select('product_id, current_qty, stock_value_at_cost, stock_value_at_price'),
   ])
 

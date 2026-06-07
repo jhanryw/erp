@@ -60,8 +60,8 @@ export default function InventarioFisicoPage() {
   const { data: items = [], isLoading } = useQuery<StockItem[]>({
     queryKey: ['inventario-estoque'],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('mv_stock_status')
+      const { data, error } = await (supabase as any)
+        .from('vw_stock_live')
         .select(
           'product_variation_id, product_name, sku_variation, sku_parent, tamanho, cor, current_qty'
         )
