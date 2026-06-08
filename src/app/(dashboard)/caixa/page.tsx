@@ -46,9 +46,11 @@ export default function CaixaPage() {
   const [movMethod, setMovMethod] = useState<PaymentMethod>('cash')
 
   // Formulário de fechamento
-  const [showClose,     setShowClose]     = useState(false)
-  const [closeCounted,  setCloseCounted]  = useState('')
-  const [closeNotes,    setCloseNotes]    = useState('')
+  const [showClose,       setShowClose]       = useState(false)
+  const [closeCounted,    setCloseCounted]    = useState('')
+  const [closeNotes,      setCloseNotes]      = useState('')
+  const [expectedCash,    setExpectedCash]    = useState<number | null>(null)
+  const [loadingPreview,  setLoadingPreview]  = useState(false)
 
   async function fetchSession() {
     try {
@@ -115,6 +117,26 @@ export default function CaixaPage() {
     }
   }
 
+  async function openCloseForm() {
+    if (!session) return
+    setLoadingPreview(true)
+    setExpectedCash(null)
+    setCloseCounted('')
+    setCloseNotes('')
+    try {
+      const r    = await fetch(`/api/caixa/fechar?session_id=${session.id}`)
+      const json = await r.json()
+      if (r.ok && typeof json.expected_cash === 'number') {
+        setExpectedCash(json.expected_cash)
+      }
+    } catch {
+      // preview não-fatal: mostra o form sem o valor esperado
+    } finally {
+      setLoadingPreview(false)
+      setShowClose(true)
+    }
+  }
+
   async function handleClose() {
     if (!session) return
     setLoading(true)
@@ -134,6 +156,7 @@ export default function CaixaPage() {
       setShowClose(false)
       setCloseCounted('')
       setCloseNotes('')
+      setExpectedCash(null)
       await fetchSession()
     } catch {
       toast.error('Erro inesperado')
@@ -272,8 +295,9 @@ export default function CaixaPage() {
 
           <button
             type="button"
-            onClick={() => { setShowClose(true); setCloseCounted(''); setCloseNotes('') }}
-            className="card p-4 flex flex-col items-center gap-2 border-error/20 hover:bg-error/5 hover:border-error/40 transition-colors active:scale-[0.97]"
+            onClick={openCloseForm}
+            disabled={loadingPreview}
+            className="card p-4 flex flex-col items-center gap-2 border-error/20 hover:bg-error/5 hover:border-error/40 transition-colors active:scale-[0.97] disabled:opacity-60"
           >
             <Lock className="w-6 h-6 text-error" />
             <span className="text-sm font-medium text-error">Fechar caixa</span>
@@ -366,15 +390,32 @@ export default function CaixaPage() {
             <h2 className="text-base font-semibold text-text-primary">Fechar caixa</h2>
             <button
               type="button"
-              onClick={() => setShowClose(false)}
+              onClick={() => { setShowClose(false); setExpectedCash(null) }}
               className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
+          {/* Valor esperado calculado pelo sistema */}
+          {expectedCash !== null && (
+            <div className="rounded-xl bg-bg-overlay border border-border p-4 space-y-1">
+              <p className="text-xs text-text-muted">Dinheiro esperado no caixa</p>
+              <p className="text-2xl font-bold tabular-nums text-text-primary">
+                {formatCurrency(expectedCash)}
+              </p>
+              <p className="text-xs text-text-muted">
+                Fundo inicial + dinheiro recebido − troco pago − sangrias + suprimentos
+              </p>
+            </div>
+          )}
+
           <Input
-            label="Dinheiro contado em caixa (R$)"
+            label={
+              expectedCash !== null
+                ? `Dinheiro contado fisicamente (esperado: ${formatCurrency(expectedCash)})`
+                : 'Dinheiro contado em caixa (R$)'
+            }
             type="number"
             step="0.01"
             min="0"
@@ -383,6 +424,24 @@ export default function CaixaPage() {
             value={closeCounted}
             onChange={(e) => setCloseCounted(e.target.value)}
           />
+
+          {/* Diferença em tempo real */}
+          {expectedCash !== null && closeCounted !== '' && (
+            (() => {
+              const counted = parseFloat(closeCounted) || 0
+              const diff    = Math.round((counted - expectedCash) * 100) / 100
+              const ok      = Math.abs(diff) < 0.01
+              return (
+                <div className={`rounded-lg p-3 text-sm font-medium ${
+                  ok ? 'bg-success/10 text-success' : 'bg-error/10 text-error'
+                }`}>
+                  {ok
+                    ? '✓ Valores conferem — caixa pode ser fechado'
+                    : `Diferença de ${diff > 0 ? '+' : ''}${formatCurrency(diff)} — ajuste o valor antes de fechar`}
+                </div>
+              )
+            })()
+          )}
 
           <Input
             label="Observações (opcional)"
@@ -396,7 +455,11 @@ export default function CaixaPage() {
             variant="danger"
             loading={loading}
             onClick={handleClose}
-            disabled={closeCounted === ''}
+            disabled={
+              closeCounted === '' ||
+              (expectedCash !== null &&
+                Math.abs((parseFloat(closeCounted) || 0) - expectedCash) > 0.01)
+            }
             className="w-full h-11"
           >
             Confirmar fechamento

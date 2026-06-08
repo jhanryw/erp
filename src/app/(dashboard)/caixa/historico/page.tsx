@@ -18,6 +18,7 @@ type Session = {
   status: string
   opening_amount_cash: number
   counted_cash: number | null
+  expected_cash: number | null
   total_sales: number | null
   total_cash: number | null
   total_pix: number | null
@@ -34,7 +35,8 @@ async function getSessions(): Promise<Session[]> {
   const { data } = await admin
     .from('cash_register_sessions')
     .select(`
-      id, status, opened_at, closed_at, opening_amount_cash, counted_cash,
+      id, status, opened_at, closed_at, opening_amount_cash,
+      counted_cash, expected_cash,
       total_sales, total_cash, total_pix, total_credit_card, total_debit_card,
       total_sangria, total_suprimento, total_expenses, cash_difference
     `)
@@ -89,6 +91,9 @@ export default async function HistoricoCaixaPage() {
               <TableBody>
                 {closed.map((s) => {
                   const diff = s.cash_difference ?? 0
+                  // counted_cash = dinheiro físico contado ao fechar (o que estava na gaveta)
+                  // total_cash   = soma das vendas pagas em dinheiro (detalhe na página interna)
+                  const dinheiroFisico = s.counted_cash ?? s.expected_cash ?? 0
                   return (
                     <TableRow key={s.id}>
                       <TableCell muted>{formatDate(s.opened_at)}</TableCell>
@@ -96,7 +101,9 @@ export default async function HistoricoCaixaPage() {
                         {formatCurrency(s.total_sales ?? 0)}
                       </TableCell>
                       <TableCell align="right" className="tabular-nums text-text-secondary">
-                        {formatCurrency(s.total_cash ?? 0)}
+                        <span title={`Vendas em dinheiro: ${formatCurrency(s.total_cash ?? 0)}`}>
+                          {formatCurrency(dinheiroFisico)}
+                        </span>
                       </TableCell>
                       <TableCell align="right" className="tabular-nums text-text-secondary">
                         {formatCurrency(s.total_pix ?? 0)}
