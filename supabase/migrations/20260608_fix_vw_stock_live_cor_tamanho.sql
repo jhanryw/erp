@@ -15,7 +15,11 @@
 -- IDEMPOTENTE: CREATE OR REPLACE VIEW.
 -- =============================================================================
 
-CREATE OR REPLACE VIEW public.vw_stock_live AS
+-- DROP necessário porque CREATE OR REPLACE não permite mudar posição de colunas.
+-- Sem dependências bloqueantes (a view só é lida, sem views filhas ou funções).
+DROP VIEW IF EXISTS public.vw_stock_live CASCADE;
+
+CREATE VIEW public.vw_stock_live AS
 SELECT
   s.product_variation_id,
   p.id                                                                        AS product_id,
