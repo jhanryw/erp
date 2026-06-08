@@ -108,15 +108,15 @@ export async function createCustomer(
   input: CustomerInput & { cpf: string },
   createdBy: string,
   companyId: number | null
-): Promise<ServiceOutcome<{ id: number | string }>> {
+): Promise<ServiceOutcome<{ id: number | string; name: string; cpf: string; phone: string }>> {
   const admin = createAdminClient() // admin client: INSERT em customers
 
   const { data, error } = await admin
     .from('customers')
     .insert({ ...input, created_by: createdBy, company_id: companyId } as any)
-    .select('id')
+    .select('id, name, cpf, phone')
     .single() as unknown as {
-      data: { id: number | string } | null
+      data: { id: number | string; name: string; cpf: string; phone: string } | null
       error: { code: string; message: string } | null
     }
 

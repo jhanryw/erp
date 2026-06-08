@@ -130,7 +130,7 @@ export default function NovaVendaPage() {
         .limit(5)
       return data ?? []
     },
-    enabled: debouncedCustomer.length >= 2,
+    enabled: (debouncedCustomer?.length ?? 0) >= 2,
   })
 
   const { data: products = [] } = useQuery({
@@ -175,7 +175,7 @@ export default function NovaVendaPage() {
   async function selectCustomer(customer: any) {
     setSelectedCustomer(customer)
     setValue('customer_id', customer.id)
-    setCustomerSearch(customer.name)
+    setCustomerSearch(customer.name ?? '')
 
     const { data } = await supabase
       .from('v_cashback_balance')
