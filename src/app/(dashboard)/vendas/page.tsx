@@ -33,6 +33,7 @@ const PAYMENT_LABELS: Record<string, string> = {
   cash:        'Dinheiro',
   credit_card: 'Crédito',
   debit_card:  'Débito',
+  cashback:    'Crédito de Troca',
 }
 
 type SaleCustomer = { id: number; name: string; cpf: string | null }

@@ -46,6 +46,7 @@ const PAYMENT_LABELS: Record<string, string> = {
   cash:        'Dinheiro',
   credit_card: 'Crédito',
   debit_card:  'Débito',
+  cashback:    'Crédito de Troca',
 }
 
 const SHIPMENT_STATUS_LABELS: Record<string, string> = {

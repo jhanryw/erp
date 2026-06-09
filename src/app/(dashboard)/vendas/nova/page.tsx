@@ -23,11 +23,12 @@ const STEPS = ['Itens', 'Pagamento', 'Cliente', 'Confirmar']
 type PaymentMethod = 'pix' | 'cash' | 'credit_card' | 'debit_card'
 type CustomerMode = 'search' | 'create' | 'anonymous'
 
-const METHOD_LABELS: Record<PaymentMethod, string> = {
+const METHOD_LABELS: Record<string, string> = {
   pix:         'PIX',
   cash:        'Dinheiro',
   credit_card: 'Crédito',
   debit_card:  'Débito',
+  cashback:    'Crédito de Troca',
 }
 
 export default function NovaVendaPage() {
@@ -291,7 +292,11 @@ export default function NovaVendaPage() {
 
   const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
   const saldoRestante = total - totalPaid
-  const canFinalize   = payments.length > 0 && Math.abs(saldoRestante) < 0.01
+  // Pode finalizar se: (a) pagamentos cobrem o total, OU
+  // (b) total é zero porque foi 100% coberto por crédito/cashback
+  const canFinalize   = total <= 0.009
+    ? cashbackUsed > 0
+    : payments.length > 0 && Math.abs(saldoRestante) < 0.01
 
   const draftNet    = parseFloat(draftNetAmount) || 0
   const draftTend   = parseFloat(draftTendered)  || 0
@@ -353,7 +358,10 @@ export default function NovaVendaPage() {
       return
     }
     submitting.current = true
-    const dominant = payments.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
+    // Quando crédito cobre 100%, payments fica vazio — usa 'cashback' como método
+    const dominant = payments.length > 0
+      ? payments.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
+      : { method: 'cashback' }
 
     try {
       const res = await fetch('/api/vendas', {
