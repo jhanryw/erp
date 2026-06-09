@@ -366,12 +366,12 @@ export default function NovaVendaPage() {
       return
     }
     submitting.current = true
-    // Quando crédito cobre 100%, payments deve ser vazio (useEffect já limpou,
-    // mas garantimos aqui também para evitar divergência no RPC)
-    const paymentsToSend = total <= 0.009 ? [] : payments
-    const dominant = paymentsToSend.length > 0
+    // Quando crédito cobre 100%: não envia payments[] (API exige min(1) se presente)
+    // e usa 'pix' como payment_method placeholder (total=0, método não importa)
+    const paymentsToSend = total <= 0.009 ? undefined : payments
+    const dominant = paymentsToSend && paymentsToSend.length > 0
       ? paymentsToSend.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
-      : { method: 'cashback' }
+      : { method: 'pix' }
 
     try {
       const res = await fetch('/api/vendas', {
@@ -380,14 +380,18 @@ export default function NovaVendaPage() {
         body: JSON.stringify({
           ...data,
           payment_method:  dominant.method,
-          payments:        paymentsToSend,
+          ...(paymentsToSend ? { payments: paymentsToSend } : {}),
           cash_session_id: deliveryMode === 'pickup' && cashSession ? cashSession.id : null,
         }),
       })
       const json = await res.json()
       if (!res.ok) {
         submitting.current = false
-        toast.error('Erro ao registrar venda', { description: json.error ?? 'Erro desconhecido' })
+        // json.error pode ser objeto Zod — serializar para evitar React error #31
+        const errMsg = typeof json.error === 'string'
+          ? json.error
+          : (json.error?.formErrors?.[0] ?? JSON.stringify(json.error) ?? 'Erro desconhecido')
+        toast.error('Erro ao registrar venda', { description: errMsg })
         return
       }
       toast.success('Venda registrada!', {
