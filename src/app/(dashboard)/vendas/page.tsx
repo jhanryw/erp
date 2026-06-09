@@ -21,6 +21,7 @@ import { PageSearch } from '@/components/ui/page-search'
 import { Pagination } from '@/components/ui/pagination'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { ORIGIN_LABELS, ORIGIN_COLORS } from '@/lib/constants/origins'
 import type { SaleStatus } from '@/types/database.types'
 
 export const dynamic = 'force-dynamic'
@@ -46,6 +47,7 @@ type SaleRow = {
   discount_amount: number | null
   cashback_used:   number | null
   payment_method:  string | null
+  sale_origin:     string | null
   status:          SaleStatus
   sale_date:       string
   created_at:      string
@@ -60,7 +62,7 @@ async function getSales(companyId: number, search?: string, page = 1) {
     .from('sales')
     .select(`
       id, sale_number, total, discount_amount, cashback_used,
-      payment_method, status, sale_date, created_at,
+      payment_method, sale_origin, status, sale_date, created_at,
       customers:customer_id (id, name, cpf),
       users:seller_id (id, name)
     `, { count: 'exact' })
@@ -196,6 +198,7 @@ export default async function VendasPage({
                   <TableHead>Data</TableHead>
                   <TableHead>Total</TableHead>
                   <TableHead>Pagamento</TableHead>
+                  <TableHead>Origem</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Vendedor</TableHead>
                 </TableRow>
@@ -233,6 +236,19 @@ export default async function VendasPage({
 
                       <TableCell>
                         {PAYMENT_LABELS[sale.payment_method ?? ''] ?? sale.payment_method ?? '—'}
+                      </TableCell>
+
+                      <TableCell>
+                        {sale.sale_origin ? (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
+                            style={{ backgroundColor: ORIGIN_COLORS[sale.sale_origin] ?? ORIGIN_COLORS.other }}
+                          >
+                            {ORIGIN_LABELS[sale.sale_origin] ?? sale.sale_origin}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-text-muted">—</span>
+                        )}
                       </TableCell>
 
                       <TableCell>
