@@ -238,42 +238,31 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   const isAnonymous = customerMeta?.is_anonymous === true
   const accumulateCashback = input.cashback_action !== 'use' && !isAnonymous
 
-  // Novo fluxo: quando payments[] presente, chama RPC principal com p_payments
-  // Legado: chama wrapper com p_accumulate_cashback (sem p_payments)
-  const useMultiPayment = Array.isArray(input.payments) && input.payments.length > 0
+  // Sempre usa o RPC principal (com p_payments) — o wrapper legado com
+  // p_accumulate_cashback não tem p_cash_session_id, os dois não coexistem.
+  //
+  // Regras para p_payments:
+  //   - payments[] com itens  → passa direto (path multi-pagamento)
+  //   - payments[] vazio []   → passa [] : total deve ser 0 (cashback 100%)
+  //   - payments undefined    → passa null: RPC usa p_payment_method (path legado)
+  const p_payments = input.payments !== undefined ? input.payments : null
 
-  const rpcParams = useMultiPayment
-    ? {
-        p_customer_id:      input.customer_id,
-        p_seller_id:        input.systemUserId,
-        p_payment_method:   input.payment_method,
-        p_sale_origin:      input.sale_origin ?? null,
-        p_discount_amount:  input.discount_amount,
-        p_surcharge_amount: input.surcharge_amount ?? 0,
-        p_cashback_used:    input.cashback_used,
-        p_shipping_charged: input.shipping_charged,
-        p_notes:            input.notes ?? null,
-        p_items:            input.items,
-        p_system_user_id:   input.systemUserId,
-        p_card_fee:         0,
-        p_payments:         input.payments,
-        p_cash_session_id:  input.cashSessionId ?? null,
-      }
-    : {
-        p_customer_id:         input.customer_id,
-        p_seller_id:           input.systemUserId,
-        p_payment_method:      input.payment_method,
-        p_sale_origin:         input.sale_origin ?? null,
-        p_discount_amount:     input.discount_amount,
-        p_surcharge_amount:    input.surcharge_amount ?? 0,
-        p_cashback_used:       input.cashback_used,
-        p_shipping_charged:    input.shipping_charged,
-        p_notes:               input.notes ?? null,
-        p_items:               input.items,
-        p_system_user_id:      input.systemUserId,
-        p_accumulate_cashback: accumulateCashback,
-        p_cash_session_id:     input.cashSessionId ?? null,
-      }
+  const rpcParams = {
+    p_customer_id:      input.customer_id,
+    p_seller_id:        input.systemUserId,
+    p_payment_method:   input.payment_method,
+    p_sale_origin:      input.sale_origin ?? null,
+    p_discount_amount:  input.discount_amount,
+    p_surcharge_amount: input.surcharge_amount ?? 0,
+    p_cashback_used:    input.cashback_used,
+    p_shipping_charged: input.shipping_charged,
+    p_notes:            input.notes ?? null,
+    p_items:            input.items,
+    p_system_user_id:   input.systemUserId,
+    p_card_fee:         0,
+    p_payments,
+    p_cash_session_id:  input.cashSessionId ?? null,
+  }
 
   const { data: sale, error } = await (admin as any)
     .rpc('rpc_create_sale', rpcParams) as unknown as {

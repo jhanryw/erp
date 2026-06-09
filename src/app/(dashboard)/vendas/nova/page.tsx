@@ -366,12 +366,12 @@ export default function NovaVendaPage() {
       return
     }
     submitting.current = true
-    // Quando crédito cobre 100%: não envia payments[] (API exige min(1) se presente)
-    // e usa 'pix' como payment_method placeholder (total=0, método não importa)
-    const paymentsToSend = total <= 0.009 ? undefined : payments
-    const dominant = paymentsToSend && paymentsToSend.length > 0
+    // Quando crédito cobre 100%: envia payments:[] (array vazio)
+    // O RPC aceita [] quando total=0 — não insere sale_payments zerado
+    const paymentsToSend = total <= 0.009 ? [] : payments
+    const dominant = paymentsToSend.length > 0
       ? paymentsToSend.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
-      : { method: 'pix' }
+      : { method: 'pix' }  // placeholder — total=0, método não importa
 
     try {
       const res = await fetch('/api/vendas', {
@@ -380,7 +380,7 @@ export default function NovaVendaPage() {
         body: JSON.stringify({
           ...data,
           payment_method:  dominant.method,
-          ...(paymentsToSend ? { payments: paymentsToSend } : {}),
+          payments:        paymentsToSend,
           cash_session_id: deliveryMode === 'pickup' && cashSession ? cashSession.id : null,
         }),
       })

@@ -94,8 +94,8 @@ const schema = z.object({
   customer_id:      z.number().int().positive(),
   // Legado (campo único) — pode estar presente mesmo no novo fluxo como método dominante derivado
   payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
-  // Novo fluxo multi-pagamento
-  payments:         z.array(paymentEntrySchema).min(1).optional(),
+  // Novo fluxo multi-pagamento ([] = total zerado por cashback, sem pagamento em dinheiro)
+  payments:         z.array(paymentEntrySchema).optional(),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   // 'use' → aplica saldo existente, não gera novo cashback
