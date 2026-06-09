@@ -290,6 +290,14 @@ export default function NovaVendaPage() {
   const gross    = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
   const total    = Math.max(0, gross - cashbackUsed)
 
+  // Quando o crédito cobre 100% do valor, limpa pagamentos já adicionados
+  // (evita que o RPC receba payments[sum=X] com total=0 e rejeite por divergência)
+  useEffect(() => {
+    if (total <= 0.009 && cashbackUsed > 0) {
+      setPayments(prev => prev.length > 0 ? [] : prev)
+    }
+  }, [total, cashbackUsed])
+
   const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
   const saldoRestante = total - totalPaid
   // Pode finalizar se: (a) pagamentos cobrem o total, OU
@@ -358,9 +366,11 @@ export default function NovaVendaPage() {
       return
     }
     submitting.current = true
-    // Quando crédito cobre 100%, payments fica vazio — usa 'cashback' como método
-    const dominant = payments.length > 0
-      ? payments.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
+    // Quando crédito cobre 100%, payments deve ser vazio (useEffect já limpou,
+    // mas garantimos aqui também para evitar divergência no RPC)
+    const paymentsToSend = total <= 0.009 ? [] : payments
+    const dominant = paymentsToSend.length > 0
+      ? paymentsToSend.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
       : { method: 'cashback' }
 
     try {
@@ -370,7 +380,7 @@ export default function NovaVendaPage() {
         body: JSON.stringify({
           ...data,
           payment_method:  dominant.method,
-          payments,
+          payments:        paymentsToSend,
           cash_session_id: deliveryMode === 'pickup' && cashSession ? cashSession.id : null,
         }),
       })
