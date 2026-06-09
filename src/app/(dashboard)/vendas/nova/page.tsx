@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 
-const STEPS = ['Itens', 'Pagamento', 'Cliente', 'Confirmar']
+const STEPS = ['Itens', 'Cliente', 'Pagamento', 'Confirmar']
 
 type PaymentMethod = 'pix' | 'cash' | 'credit_card' | 'debit_card'
 type CustomerMode = 'search' | 'create' | 'anonymous'
@@ -461,8 +461,8 @@ export default function NovaVendaPage() {
                 </p>
                 <p className="text-xl font-bold text-text-primary tabular-nums">{formatCurrency(total)}</p>
               </div>
-              {step === 1 && canFinalize && (
-                <Button type="button" size="lg" onClick={() => setStep(2)}>
+              {step === 2 && canFinalize && (
+                <Button type="button" size="lg" onClick={() => setStep(3)}>
                   Próximo
                 </Button>
               )}
@@ -625,9 +625,9 @@ export default function NovaVendaPage() {
             )}
 
             {/* ════════════════════════════════════════
-                STEP 1 — PAGAMENTO
+                STEP 2 — PAGAMENTO
             ════════════════════════════════════════ */}
-            {step === 1 && (
+            {step === 2 && (
               <div className="card p-5 space-y-5">
                 <h3 className="text-sm font-semibold text-text-primary">Pagamento e Resumo</h3>
 
@@ -903,12 +903,12 @@ export default function NovaVendaPage() {
                 )}
 
                 <div className="flex gap-3 pt-1">
-                  <Button type="button" variant="secondary" onClick={() => setStep(0)} className="flex-1 h-11">
+                  <Button type="button" variant="secondary" onClick={() => setStep(1)} className="flex-1 h-11">
                     Voltar
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => setStep(2)}
+                    onClick={() => setStep(3)}
                     disabled={!canFinalize}
                     className="flex-1 h-11"
                   >
@@ -919,9 +919,9 @@ export default function NovaVendaPage() {
             )}
 
             {/* ════════════════════════════════════════
-                STEP 2 — CLIENTE
+                STEP 1 — CLIENTE
             ════════════════════════════════════════ */}
-            {step === 2 && (
+            {step === 1 && (
               <div className="card p-5 space-y-4">
                 <h3 className="text-sm font-semibold text-text-primary">Identificar Cliente</h3>
 
@@ -1115,12 +1115,12 @@ export default function NovaVendaPage() {
                 )}
 
                 <div className="flex gap-3 pt-1">
-                  <Button type="button" variant="secondary" onClick={() => setStep(1)} className="flex-1 h-11">
+                  <Button type="button" variant="secondary" onClick={() => setStep(0)} className="flex-1 h-11">
                     Voltar
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => setStep(3)}
+                    onClick={() => setStep(2)}
                     disabled={!selectedCustomer}
                     className="flex-1 h-11"
                   >
@@ -1272,14 +1272,14 @@ export default function NovaVendaPage() {
                 <span className="text-lg tabular-nums">{formatCurrency(total)}</span>
               </div>
 
-              {step >= 2 && selectedCustomer && (
+              {step >= 1 && selectedCustomer && (
                 <div className="flex justify-between text-xs text-text-muted border-t border-border pt-2">
                   <span>Cliente</span>
                   <span className="font-medium text-text-secondary truncate max-w-[120px]">{selectedCustomer.name}</span>
                 </div>
               )}
 
-              {step >= 1 && (
+              {step >= 2 && (
                 <div className={`flex justify-between text-sm font-medium border-t border-border pt-2 ${
                   canFinalize ? 'text-success' : 'text-text-muted'
                 }`}>

@@ -228,7 +228,6 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
       }
 
       router.push(`/vendas/${saleId}`)
-      router.refresh()
     } finally {
       setLoading(false)
     }
