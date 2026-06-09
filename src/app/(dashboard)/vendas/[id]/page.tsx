@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Package, Truck, Printer } from 'lucide-react'
+import { ArrowLeft, Package, Truck, Printer, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { SaleStatusBadge } from '@/components/ui/badge'
@@ -175,6 +175,12 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           </div>
         </div>
         <div className="flex gap-2">
+          <Link href={`/vendas/${sale.id}/editar`}>
+            <Button variant="outline" size="sm">
+              <Pencil className="w-3.5 h-3.5 mr-1.5" />
+              Editar
+            </Button>
+          </Link>
           {!isPickup && (
             <Link href={`/vendas/${sale.id}/imprimir`} target="_blank">
               <Button variant="outline" size="sm">
