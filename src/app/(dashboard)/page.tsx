@@ -11,26 +11,84 @@ import { DailySalesChart } from '@/components/modules/dashboards/daily-sales-cha
 import { TopProductsWidget } from '@/components/modules/dashboards/top-products-widget'
 import { StockAlertsWidget } from '@/components/modules/dashboards/stock-alerts-widget'
 import { RefreshViewsButton } from '@/components/modules/dashboards/refresh-views-button'
+import { DateRangePicker } from '@/components/modules/dashboards/date-range-picker'
+import { SalesByOriginChart } from '@/components/modules/dashboards/sales-by-origin-chart'
+import { OriginBreakdownWidget } from '@/components/modules/dashboards/origin-breakdown-widget'
 import { formatCurrency } from '@/lib/utils/currency'
 import { hasMinRole } from '@/types/roles'
+import { brazilDate, brazilSubDays } from '@/lib/utils/date'
+import type { RangePreset } from '@/components/modules/dashboards/date-range-picker'
 
 export const dynamic = 'force-dynamic'
 
-export default async function DashboardPage() {
-  // O layout já verifica autenticação — aqui apenas lemos o role para o serviço
+type SearchParams = Promise<{
+  range?: string
+  from?: string
+  to?: string
+}>
+
+function resolveDateRange(range?: string, from?: string, to?: string): {
+  dateFrom: string
+  dateTo: string
+  activeRange: RangePreset | 'custom'
+  rangeLabel: string
+} {
+  const today = brazilDate()
+
+  if (range === 'today') {
+    return { dateFrom: today, dateTo: today, activeRange: 'today', rangeLabel: 'Hoje' }
+  }
+  if (range === 'yesterday') {
+    const y = brazilSubDays(1)
+    return { dateFrom: y, dateTo: y, activeRange: 'yesterday', rangeLabel: 'Ontem' }
+  }
+  if (range === '7d') {
+    return { dateFrom: brazilSubDays(6), dateTo: today, activeRange: '7d', rangeLabel: 'Últimos 7 dias' }
+  }
+  if (range === '90d') {
+    return { dateFrom: brazilSubDays(89), dateTo: today, activeRange: '90d', rangeLabel: 'Últimos 90 dias' }
+  }
+  if (range === 'year') {
+    const year = today.substring(0, 4)
+    return { dateFrom: `${year}-01-01`, dateTo: today, activeRange: 'year', rangeLabel: `Ano ${year}` }
+  }
+  if (range === 'custom' && from && to && from <= to) {
+    const [fy, fm, fd] = from.split('-')
+    const [ty, tm, td] = to.split('-')
+    return {
+      dateFrom: from,
+      dateTo: to,
+      activeRange: 'custom',
+      rangeLabel: `${fd}/${fm}/${fy} – ${td}/${tm}/${ty}`,
+    }
+  }
+
+  // Default: últimos 30 dias
+  return { dateFrom: brazilSubDays(29), dateTo: today, activeRange: '30d', rangeLabel: 'Últimos 30 dias' }
+}
+
+export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
+  const { range, from, to } = await searchParams
+
+  const { dateFrom, dateTo, activeRange, rangeLabel } = resolveDateRange(range, from, to)
+
   const supabase = createClient()
   const { data: { user } } = await supabase.auth.getUser()
   const profile = user ? await getUserProfile(user.id, user.email) : null
   const role = profile?.role ?? 'usuario'
 
-  const data = await getDashboardData(role)
+  const data = await getDashboardData(role, dateFrom, dateTo)
 
   const todayAvgTicket =
     data.today.orders > 0 ? data.today.revenue / data.today.orders : 0
 
+  // Rótulo dinâmico do período para os cards
+  const periodLabel = rangeLabel
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* ── Cabeçalho ──────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
           <p className="text-sm text-muted-foreground">
@@ -49,6 +107,14 @@ export default async function DashboardPage() {
         </div>
       </div>
 
+      {/* ── Seletor de período ──────────────────────────────────────── */}
+      <DateRangePicker
+        activeRange={activeRange}
+        dateFrom={activeRange === 'custom' ? dateFrom : undefined}
+        dateTo={activeRange === 'custom' ? dateTo : undefined}
+      />
+
+      {/* ── KPI Cards — Hoje ───────────────────────────────────────── */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Faturamento Hoje"
@@ -65,40 +131,70 @@ export default async function DashboardPage() {
         />
 
         <StatCard
-          title="Faturamento 30 dias"
-          value={formatCurrency(data.month.revenue)}
-          subtitle={`${data.month.orders} pedido${data.month.orders !== 1 ? 's' : ''}`}
+          title={`Faturamento — ${periodLabel}`}
+          value={formatCurrency(data.period.revenue)}
+          subtitle={`${data.period.orders} pedido${data.period.orders !== 1 ? 's' : ''}`}
           icon={<Users className="h-4 w-4" />}
         />
 
-        {data.showFinancials && data.month.grossMarginPct !== null ? (
+        {data.showFinancials && data.period.grossMarginPct !== null ? (
           <StatCard
             title="Margem Bruta"
-            value={`${data.month.grossMarginPct.toFixed(1)}%`}
-            subtitle="Últimos 30 dias"
+            value={`${data.period.grossMarginPct.toFixed(1)}%`}
+            subtitle={periodLabel}
             icon={<Package className="h-4 w-4" />}
           />
         ) : (
           <StatCard
             title="Ticket Médio"
-            value={formatCurrency(data.month.avgTicket)}
-            subtitle="Últimos 30 dias"
+            value={formatCurrency(data.period.avgTicket)}
+            subtitle={periodLabel}
             icon={<Package className="h-4 w-4" />}
           />
         )}
       </div>
 
+      {/* ── Gráfico de faturamento diário ──────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <h2 className="text-lg font-semibold">Faturamento — {periodLabel}</h2>
+        </CardHeader>
+        <CardContent>
+          <DailySalesChart data={data.dailySeries} />
+        </CardContent>
+      </Card>
+
+      {/* ── Origem de venda ────────────────────────────────────────── */}
       <div className="grid gap-6 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader>
-            <h2 className="text-lg font-semibold">Faturamento — Últimos 30 dias</h2>
+            <h2 className="text-lg font-semibold">Vendas por Origem — {periodLabel}</h2>
+            <p className="text-sm text-muted-foreground">
+              Faturamento diário empilhado por canal de captação
+            </p>
           </CardHeader>
           <CardContent>
-            <DailySalesChart data={data.dailySeries} />
+            <SalesByOriginChart
+              dailyOriginSeries={data.dailyOriginSeries}
+              originBreakdown={data.originBreakdown}
+            />
           </CardContent>
         </Card>
 
         <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold">Breakdown por Canal</h2>
+            <p className="text-sm text-muted-foreground">{periodLabel}</p>
+          </CardHeader>
+          <CardContent>
+            <OriginBreakdownWidget origins={data.originBreakdown} />
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── Top Produtos + Alertas ──────────────────────────────────── */}
+      <div className="grid gap-6 xl:grid-cols-3">
+        <Card className="xl:col-span-2">
           <CardHeader>
             <h2 className="text-lg font-semibold">Top Produtos</h2>
           </CardHeader>
@@ -106,22 +202,22 @@ export default async function DashboardPage() {
             <TopProductsWidget products={data.topProducts} />
           </CardContent>
         </Card>
-      </div>
 
-      {data.stockAlerts.length > 0 && (
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold">Alertas de Estoque</h2>
-            <p className="text-sm text-muted-foreground">
-              {data.stockAlerts.length} produto
-              {data.stockAlerts.length > 1 ? 's' : ''} com estoque baixo
-            </p>
-          </CardHeader>
-          <CardContent>
-            <StockAlertsWidget alerts={data.stockAlerts} />
-          </CardContent>
-        </Card>
-      )}
+        {data.stockAlerts.length > 0 && (
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">Alertas de Estoque</h2>
+              <p className="text-sm text-muted-foreground">
+                {data.stockAlerts.length} produto
+                {data.stockAlerts.length > 1 ? 's' : ''} com estoque baixo
+              </p>
+            </CardHeader>
+            <CardContent>
+              <StockAlertsWidget alerts={data.stockAlerts} />
+            </CardContent>
+          </Card>
+        )}
+      </div>
     </div>
   )
 }

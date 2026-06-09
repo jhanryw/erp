@@ -20,20 +20,12 @@ import { Pagination } from '@/components/ui/pagination'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { maskCPF } from '@/lib/utils/cpf'
+import { ORIGIN_LABELS } from '@/lib/constants/origins'
 import type { RfmSegment } from '@/types/database.types'
 
 export const dynamic = 'force-dynamic'
 
 const PAGE_SIZE = 50
-
-const ORIGIN_LABELS: Record<string, string> = {
-  instagram:    'Instagram',
-  referral:     'Indicação',
-  paid_traffic: 'Tráfego Pago',
-  website:      'Site',
-  store:        'Loja',
-  other:        'Outro',
-}
 
 type CustomerMetricRow = {
   total_spent:        number | null

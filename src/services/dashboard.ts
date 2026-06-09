@@ -2,6 +2,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import type { AppRole } from '@/types/roles'
 import { hasMinRole } from '@/types/roles'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
+import { ORIGIN_LABELS } from '@/lib/constants/origins'
+export { ORIGIN_LABELS, ORIGIN_COLORS, ALL_ORIGINS } from '@/lib/constants/origins'
 
 export interface DashboardKpi {
   revenue: number
@@ -31,34 +33,56 @@ export interface StockAlert {
   stock_value_at_price: number
 }
 
+export interface OriginStat {
+  origin: string
+  label: string
+  revenue: number
+  orders: number
+  pct: number
+}
+
+export interface DailyOriginPoint {
+  sale_date: string
+  [key: string]: number | string
+}
+
 export interface DashboardData {
   today: Pick<DashboardKpi, 'revenue' | 'orders'>
-  month: DashboardKpi
+  period: DashboardKpi
   dailySeries: DailySalesPoint[]
+  originBreakdown: OriginStat[]
+  dailyOriginSeries: DailyOriginPoint[]
   topProducts: TopProduct[]
   stockAlerts: StockAlert[]
   showFinancials: boolean
+  dateRange: { from: string; to: string }
 }
 
 // Consulta tabelas base diretamente — sem depender de materialized views
 // para garantir dados sempre atualizados.
-export async function getDashboardData(role: AppRole): Promise<DashboardData> {
+export async function getDashboardData(
+  role: AppRole,
+  dateFrom?: string,
+  dateTo?: string,
+): Promise<DashboardData> {
   const supabase = createAdminClient()
   const showFinancials = hasMinRole(role, 'gerente')
 
-  const today         = brazilDate()
-  const thirtyDaysAgo = brazilSubDays(30)
+  const today = brazilDate()
+  const from  = dateFrom ?? brazilSubDays(29)
+  const to    = dateTo   ?? today
 
   // ── Consultas em paralelo ─────────────────────────────────────────────────
   const [
     todaySalesRes,
-    monthlySalesRes,
+    periodSalesRes,
     dailySeriesRes,
+    originSeriesRes,
     topProductsRes,
     stockAlertsRes,
   ] = await Promise.all([
 
-    // Vendas de hoje (base: tabela sales)
+    // Vendas de hoje (sempre hoje, independente do range)
     supabase
       .from('sales')
       .select('id, total')
@@ -66,7 +90,7 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
       .not('status', 'in', '("cancelled","returned")')
     ,
 
-    // Vendas dos últimos 30 dias com lucro (via sale_items)
+    // Vendas do período selecionado com lucro (via sale_items)
     supabase
       .from('sales')
       .select(`
@@ -75,15 +99,27 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
         total,
         sale_items (gross_profit)
       `)
-      .gte('sale_date', thirtyDaysAgo)
+      .gte('sale_date', from)
+      .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
     ,
 
-    // Série diária — agrupamento feito no JS abaixo
+    // Série diária total — agrupamento feito no JS abaixo
     supabase
       .from('sales')
       .select('sale_date, total')
-      .gte('sale_date', thirtyDaysAgo)
+      .gte('sale_date', from)
+      .lte('sale_date', to)
+      .not('status', 'in', '("cancelled","returned")')
+      .order('sale_date', { ascending: true })
+    ,
+
+    // Origem de venda por dia — para gráfico empilhado e breakdown
+    supabase
+      .from('sales')
+      .select('sale_date, sale_origin, total')
+      .gte('sale_date', from)
+      .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
       .order('sale_date', { ascending: true })
     ,
@@ -110,31 +146,31 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
   ])
 
   // ── Hoje ─────────────────────────────────────────────────────────────────
-  const todayRows   = (todaySalesRes.data ?? []) as { id: number; total: number }[]
+  const todayRows    = (todaySalesRes.data ?? []) as { id: number; total: number }[]
   const todayRevenue = todayRows.reduce((s, r) => s + Number(r.total ?? 0), 0)
   const todayOrders  = todayRows.length
 
-  // ── Mês (30 dias) ─────────────────────────────────────────────────────────
+  // ── Período ───────────────────────────────────────────────────────────────
   type SaleRow = {
     id: number
     sale_date: string
     total: number
     sale_items: { gross_profit: number | null }[] | { gross_profit: number | null } | null
   }
-  const monthRows   = (monthlySalesRes.data ?? []) as SaleRow[]
-  const monthRevenue = monthRows.reduce((s, r) => s + Number(r.total ?? 0), 0)
-  const monthOrders  = monthRows.length
-  const avgTicket    = monthOrders > 0 ? monthRevenue / monthOrders : 0
+  const periodRows    = (periodSalesRes.data ?? []) as SaleRow[]
+  const periodRevenue = periodRows.reduce((s, r) => s + Number(r.total ?? 0), 0)
+  const periodOrders  = periodRows.length
+  const avgTicket     = periodOrders > 0 ? periodRevenue / periodOrders : 0
 
-  const grossProfit  = monthRows.reduce((s, r) => {
+  const grossProfit    = periodRows.reduce((s, r) => {
     const items = Array.isArray(r.sale_items) ? r.sale_items : r.sale_items ? [r.sale_items] : []
     return s + items.reduce((si, i) => si + Number(i.gross_profit ?? 0), 0)
   }, 0)
-  const grossMarginPct = showFinancials && monthRevenue > 0
-    ? (grossProfit / monthRevenue) * 100
+  const grossMarginPct = showFinancials && periodRevenue > 0
+    ? (grossProfit / periodRevenue) * 100
     : null
 
-  // ── Série diária — agrupa no JS ──────────────────────────────────────────
+  // ── Série diária total — agrupa no JS ────────────────────────────────────
   type DailyRow = { sale_date: string; total: number }
   const dailyRows = (dailySeriesRes.data ?? []) as DailyRow[]
   const dailyMap  = dailyRows.reduce<Record<string, { revenue: number; orders: number }>>((acc, r) => {
@@ -147,6 +183,41 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
   const dailySeries: DailySalesPoint[] = Object.entries(dailyMap)
     .map(([sale_date, v]) => ({ sale_date, gross_revenue: v.revenue, total_orders: v.orders }))
     .sort((a, b) => a.sale_date.localeCompare(b.sale_date))
+
+  // ── Origem de venda ───────────────────────────────────────────────────────
+  type OriginRow = { sale_date: string; sale_origin: string | null; total: number }
+  const originRows = (originSeriesRes.data ?? []) as OriginRow[]
+
+  // Breakdown total por origem
+  const originTotals: Record<string, { revenue: number; orders: number }> = {}
+  for (const r of originRows) {
+    const key = r.sale_origin ?? 'unknown'
+    if (!originTotals[key]) originTotals[key] = { revenue: 0, orders: 0 }
+    originTotals[key].revenue += Number(r.total ?? 0)
+    originTotals[key].orders  += 1
+  }
+
+  const originBreakdown: OriginStat[] = Object.entries(originTotals)
+    .map(([origin, v]) => ({
+      origin,
+      label:   ORIGIN_LABELS[origin] ?? origin,
+      revenue: v.revenue,
+      orders:  v.orders,
+      pct:     periodRevenue > 0 ? (v.revenue / periodRevenue) * 100 : 0,
+    }))
+    .sort((a, b) => b.revenue - a.revenue)
+
+  // Série diária por origem — wide format para gráfico empilhado
+  const originDailyMap: Record<string, Record<string, number>> = {}
+  for (const r of originRows) {
+    const d   = r.sale_date
+    const key = r.sale_origin ?? 'unknown'
+    if (!originDailyMap[d]) originDailyMap[d] = {}
+    originDailyMap[d][key] = (originDailyMap[d][key] ?? 0) + Number(r.total ?? 0)
+  }
+  const dailyOriginSeries: DailyOriginPoint[] = Object.entries(originDailyMap)
+    .map(([sale_date, origins]) => ({ sale_date, ...origins }))
+    .sort((a, b) => (a.sale_date as string).localeCompare(b.sale_date as string))
 
   // ── Top produtos — tenta mv primeiro, cai para tabelas base se vazia ─────
   type MvProduct = {
@@ -175,7 +246,7 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
         sales!inner (sale_date, status)
       `)
       .not('sales.status', 'in', '("cancelled","returned")')
-      .gte('sales.sale_date', thirtyDaysAgo)
+      .gte('sales.sale_date', from)
       .limit(200) as unknown as { data: any[] | null }
 
     if (baseTop && baseTop.length > 0) {
@@ -215,13 +286,15 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
       revenue: todayRevenue,
       orders:  todayOrders,
     },
-    month: {
-      revenue: monthRevenue,
-      orders:  monthOrders,
+    period: {
+      revenue: periodRevenue,
+      orders:  periodOrders,
       avgTicket,
       grossMarginPct,
     },
     dailySeries,
+    originBreakdown,
+    dailyOriginSeries,
     topProducts: topProductRows.map(row => ({
       product_id:        row.product_id,
       product_name:      row.product_name,
@@ -238,5 +311,6 @@ export async function getDashboardData(role: AppRole): Promise<DashboardData> {
       stock_value_at_price: Number(row.stock_value_at_price ?? 0),
     })),
     showFinancials,
+    dateRange: { from, to },
   }
 }
