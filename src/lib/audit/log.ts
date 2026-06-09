@@ -17,7 +17,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 export type AuditAction =
   | 'create' | 'update' | 'delete'
-  | 'cancel' | 'return' | 'adjust'
+  | 'cancel' | 'return' | 'exchange' | 'adjust'
   | 'sku_manual_override'
   | 'inventory_count'
   | 'open_cash' | 'close_cash' | 'reopen_cash'

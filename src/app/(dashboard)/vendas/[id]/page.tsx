@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
 import type { SaleStatus } from '@/types/database.types'
+import { ArrowRightLeft } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -108,15 +109,28 @@ async function getSale(id: string) {
       }[] | null
     }
 
-  return { ...sale, shipment: shipment ?? null, salePayments: salePayments ?? [] }
+  // Buscar trocas feitas nesta venda
+  const { data: exchanges } = await (admin as any)
+    .from('exchanges')
+    .select('id, status, returned_amount, credit_issued, created_at, exchange_items(id, quantity_returned, unit_price, product_variation_id)')
+    .eq('original_sale_id', Number(id))
+    .eq('status', 'completed')
+    .order('created_at', { ascending: false }) as unknown as {
+      data: { id: number; status: string; returned_amount: number; credit_issued: number; created_at: string; exchange_items: any[] }[] | null
+    }
+
+  const hasExchanges = (exchanges ?? []).length > 0
+
+  return { ...sale, shipment: shipment ?? null, salePayments: salePayments ?? [], exchanges: exchanges ?? [], hasExchanges }
 }
 
 export default async function VendaDetalhePage({ params }: { params: { id: string } }) {
   const sale = await getSale(params.id)
   if (!sale) notFound()
 
-  const isTerminal = sale.status === 'cancelled' || sale.status === 'returned'
-  const canReturn = sale.status === 'delivered' || sale.status === 'paid'
+  const isTerminal  = sale.status === 'cancelled' || sale.status === 'returned'
+  const canReturn   = sale.status === 'delivered' || sale.status === 'paid'
+  const canExchange = canReturn && !isTerminal
   const currentStepIndex = STATUS_STEPS.indexOf(sale.status as SaleStatus)
 
   const isPickup = sale.shipment?.delivery_mode === 'pickup'
@@ -168,7 +182,16 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
               </Button>
             </Link>
           )}
-          {canReturn && <ReturnButton saleId={sale.id} />}
+          {canExchange && (
+            <Link href={`/vendas/${sale.id}/troca`}>
+              <Button variant="secondary" size="sm">
+                <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                Registrar Troca
+              </Button>
+            </Link>
+          )}
+          {/* Só mostra Devolução se não tiver trocas parciais — evita dupla devolução */}
+          {canReturn && !sale.hasExchanges && <ReturnButton saleId={sale.id} />}
           {!isTerminal && <CancelSaleButton saleId={sale.id} />}
         </div>
       </div>
@@ -371,6 +394,41 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           <p className="text-sm text-text-secondary">
             {PAYMENT_LABELS[sale.payment_method] ?? sale.payment_method}
           </p>
+        </Card>
+      )}
+
+      {/* Trocas realizadas nesta venda */}
+      {sale.exchanges && sale.exchanges.length > 0 && (
+        <Card padding="md">
+          <h3 className="text-sm font-semibold text-text-primary mb-3">
+            Trocas Registradas ({sale.exchanges.length})
+          </h3>
+          <div className="space-y-3">
+            {sale.exchanges.map((ex: any, idx: number) => (
+              <div
+                key={ex.id}
+                className="flex items-center justify-between gap-2 text-sm py-2 border-t border-border first:border-t-0 first:pt-0"
+              >
+                <div>
+                  <span className="font-medium text-text-primary">
+                    Troca #{idx + 1}
+                  </span>
+                  <span className="ml-2 text-text-muted">
+                    {formatDate(ex.created_at)}
+                  </span>
+                  <span className="ml-2 text-text-muted">
+                    · {ex.exchange_items?.length ?? 0} item
+                    {(ex.exchange_items?.length ?? 0) !== 1 ? 's' : ''} devolvidos
+                  </span>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <span className="text-success font-semibold">
+                    + {formatCurrency(ex.credit_issued)} crédito
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
         </Card>
       )}
 
