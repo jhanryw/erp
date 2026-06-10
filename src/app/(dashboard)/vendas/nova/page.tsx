@@ -285,6 +285,7 @@ export default function NovaVendaPage() {
   const shippingCharged = watch('shipping_charged') ?? 0
   const deliveryMode    = watch('delivery_mode')
   const cashbackAction  = watch('cashback_action')  ?? 'accumulate'
+  const saleOrigin      = watch('sale_origin')
 
   const subtotal = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
   const gross    = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
@@ -619,6 +620,7 @@ export default function NovaVendaPage() {
                   onClick={() => setStep(1)}
                   disabled={
                     fields.length === 0 ||
+                    !saleOrigin ||
                     (deliveryMode === 'pickup' && cashSession === null)
                   }
                   className="w-full h-11"
@@ -692,21 +694,28 @@ export default function NovaVendaPage() {
                 </div>
 
                 {/* ── Origem e Observações ─────────────────────────── */}
-                <Controller
-                  control={control}
-                  name="sale_origin"
-                  render={({ field }) => (
-                    <Select label="Origem da Venda" {...field} value={field.value ?? ''}>
-                      <option value="">Não informado</option>
-                      <option value="instagram">Instagram</option>
-                      <option value="referral">Indicação</option>
-                      <option value="paid_traffic">Tráfego Pago</option>
-                      <option value="website">Site</option>
-                      <option value="store">Loja Física</option>
-                      <option value="other">Outro</option>
-                    </Select>
-                  )}
-                />
+                <div className="space-y-1">
+                  <Controller
+                    control={control}
+                    name="sale_origin"
+                    render={({ field, fieldState }) => (
+                      <Select
+                        label="Origem da Venda *"
+                        {...field}
+                        value={field.value ?? ''}
+                        error={fieldState.error?.message}
+                      >
+                        <option value="">Selecione a origem…</option>
+                        <option value="instagram">Instagram</option>
+                        <option value="referral">Indicação</option>
+                        <option value="paid_traffic">Tráfego Pago</option>
+                        <option value="website">Site</option>
+                        <option value="store">Loja Física</option>
+                        <option value="other">Outro</option>
+                      </Select>
+                    )}
+                  />
+                </div>
                 <Input label="Observações" placeholder="Opcional" {...register('notes')} />
 
                 {/* ── Totalizador ──────────────────────────────────── */}
@@ -1212,6 +1221,7 @@ export default function NovaVendaPage() {
                   <div className="rounded-lg bg-error/10 border border-error/30 p-3 text-xs text-error space-y-1">
                     <p className="font-semibold">Corrija os erros antes de continuar:</p>
                     {errors.customer_id     && <p>• Cliente: {errors.customer_id.message}</p>}
+                    {errors.sale_origin     && <p>• Origem da venda: obrigatória — volte ao passo Itens e selecione.</p>}
                     {errors.items           && <p>• Itens: {typeof errors.items.message === 'string' ? errors.items.message : 'Verifique os itens'}</p>}
                     {errors.discount_amount && <p>• Desconto: {errors.discount_amount.message}</p>}
                     {!canFinalize           && <p>• Pagamentos: informe ao menos um pagamento que totalize o valor da venda.</p>}

@@ -97,7 +97,7 @@ const schema = z.object({
   // Novo fluxo multi-pagamento ([] = total zerado por cashback, sem pagamento em dinheiro)
   payments:         z.array(paymentEntrySchema).optional(),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
-  sale_origin:      z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  sale_origin:      z.preprocess((v) => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other'], { required_error: 'Origem obrigatória' })),
   // 'use' → aplica saldo existente, não gera novo cashback
   // 'accumulate' → não usa saldo, gera cashback normalmente
   cashback_action:  z.enum(['use', 'accumulate']).default('accumulate'),
