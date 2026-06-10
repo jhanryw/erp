@@ -615,6 +615,28 @@ export default function NovaVendaPage() {
                   </div>
                 )}
 
+                {/* ── Origem da venda ──────────────────────────────── */}
+                <Controller
+                  control={control}
+                  name="sale_origin"
+                  render={({ field, fieldState }) => (
+                    <Select
+                      label="Origem da Venda *"
+                      {...field}
+                      value={field.value ?? ''}
+                      error={fieldState.error?.message}
+                    >
+                      <option value="">Selecione a origem…</option>
+                      <option value="instagram">Instagram</option>
+                      <option value="referral">Indicação</option>
+                      <option value="paid_traffic">Tráfego Pago</option>
+                      <option value="website">Site</option>
+                      <option value="store">Loja Física</option>
+                      <option value="other">Outro</option>
+                    </Select>
+                  )}
+                />
+
                 <Button
                   type="button"
                   onClick={() => setStep(1)}
@@ -693,29 +715,6 @@ export default function NovaVendaPage() {
                   />
                 </div>
 
-                {/* ── Origem e Observações ─────────────────────────── */}
-                <div className="space-y-1">
-                  <Controller
-                    control={control}
-                    name="sale_origin"
-                    render={({ field, fieldState }) => (
-                      <Select
-                        label="Origem da Venda *"
-                        {...field}
-                        value={field.value ?? ''}
-                        error={fieldState.error?.message}
-                      >
-                        <option value="">Selecione a origem…</option>
-                        <option value="instagram">Instagram</option>
-                        <option value="referral">Indicação</option>
-                        <option value="paid_traffic">Tráfego Pago</option>
-                        <option value="website">Site</option>
-                        <option value="store">Loja Física</option>
-                        <option value="other">Outro</option>
-                      </Select>
-                    )}
-                  />
-                </div>
                 <Input label="Observações" placeholder="Opcional" {...register('notes')} />
 
                 {/* ── Totalizador ──────────────────────────────────── */}
