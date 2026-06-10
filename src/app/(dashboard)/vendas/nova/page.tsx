@@ -50,6 +50,7 @@ export default function NovaVendaPage() {
   const [newName, setNewName]             = useState('')
   const [newPhone, setNewPhone]           = useState('')
   const [newCpf, setNewCpf]               = useState('')
+  const [newBirthDate, setNewBirthDate]   = useState('')
   const [creatingCustomer, setCreatingCustomer] = useState(false)
 
   // ── Desconto vinculado R$ ↔ % ────────────────────────────────────────────────
@@ -203,13 +204,14 @@ export default function NovaVendaPage() {
     if (newName.trim().length < 2)  { toast.error('Nome deve ter ao menos 2 caracteres'); return }
     if (!newPhone.trim())            { toast.error('Telefone obrigatório'); return }
     if (cpfClean.length !== 11)     { toast.error('CPF inválido — informe 11 dígitos'); return }
+    if (!newBirthDate)               { toast.error('Data de nascimento obrigatória'); return }
 
     setCreatingCustomer(true)
     try {
       const res = await fetch('/api/clientes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), cpf: cpfClean }),
+        body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), cpf: cpfClean, birth_date: newBirthDate }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -1018,6 +1020,12 @@ export default function NovaVendaPage() {
                       onChange={(e) => setNewCpf(e.target.value)}
                       placeholder="000.000.000-00"
                       inputMode="numeric"
+                    />
+                    <Input
+                      label="Data de Nascimento *"
+                      type="date"
+                      value={newBirthDate}
+                      onChange={(e) => setNewBirthDate(e.target.value)}
                     />
                     <Button
                       type="button"
