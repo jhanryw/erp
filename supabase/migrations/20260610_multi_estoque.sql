@@ -1335,7 +1335,10 @@ $$;
 -- PARTE 15 — Atualizar vw_stock_live para ler de stock_balances (Estoque Loja)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-CREATE OR REPLACE VIEW public.vw_stock_live AS
+-- DROP necessário porque CREATE OR REPLACE não permite renomear/reordenar colunas.
+DROP VIEW IF EXISTS public.vw_stock_live CASCADE;
+
+CREATE VIEW public.vw_stock_live AS
 SELECT
   sb.product_variation_id,
   p.id                                                                       AS product_id,
@@ -1374,7 +1377,9 @@ GRANT SELECT ON public.vw_stock_live TO authenticated, service_role;
 --   balances_by_location — JSONB array ordenado por priority
 -- ═══════════════════════════════════════════════════════════════════════════════
 
-CREATE OR REPLACE VIEW public.vw_stock_live_multi AS
+DROP VIEW IF EXISTS public.vw_stock_live_multi CASCADE;
+
+CREATE VIEW public.vw_stock_live_multi AS
 SELECT
   pv.id                              AS product_variation_id,
   p.id                               AS product_id,
