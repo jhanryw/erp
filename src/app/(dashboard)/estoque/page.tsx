@@ -4,7 +4,6 @@ import {
   Plus,
   Warehouse,
   AlertTriangle,
-  Package,
   DollarSign,
   Boxes,
 } from 'lucide-react'
@@ -12,16 +11,15 @@ import {
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
-import { Card, CardHeader } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
-import { formatDate } from '@/lib/utils/date'
 import { EstoqueSearch } from './estoque-search'
 import { EstoqueMultiTable } from './estoque-multi-table'
 
 export const dynamic = 'force-dynamic'
 
-type MultiStockRow = {
+// Colunas disponíveis na vw_stock_live (view original, lê da tabela stock)
+type LiveRow = {
   product_variation_id: number
   product_id: number
   product_name: string
@@ -29,45 +27,18 @@ type MultiStockRow = {
   sku_parent: string | null
   tamanho: string | null
   cor: string | null
-  total_qty: number
-  main_store_qty: number
-  needs_transfer: boolean
+  quantity: number
+  avg_cost: number | null
   total_stock_value_at_cost: number | null
   last_entry_date: string | null
-  balances_by_location: Array<{
-    location_id: number
-    location_name: string
-    slug: string
-    is_main_store: boolean
-    priority: number
-    quantity: number
-  }>
 }
 
-type StockLocation = {
-  id: number
-  name: string
-  slug: string
-  is_main_store: boolean
-  priority: number
-}
-
-async function getStockData(companyId: number, search?: string) {
+async function getStockData(search?: string) {
   const supabase = createAdminClient()
 
-  // Locais de estoque desta empresa
-  const { data: locations } = await (supabase as any)
-    .from('stock_locations')
-    .select('id, name, slug, is_main_store, priority')
-    .eq('company_id', companyId)
-    .eq('active', true)
-    .order('priority', { ascending: true }) as { data: StockLocation[] | null }
-
-  // Variações com saldo (via vw_stock_live_multi)
-  let query = (supabase as any)
-    .from('vw_stock_live_multi')
+  let query = supabase
+    .from('vw_stock_live')
     .select('*')
-    .eq('company_id', companyId)
     .order('product_name', { ascending: true })
 
   if (search) {
@@ -78,24 +49,49 @@ async function getStockData(companyId: number, search?: string) {
 
   const [{ data: items }, { data: allItems }] = await Promise.all([
     query,
-    (supabase as any)
-      .from('vw_stock_live_multi')
-      .select('product_id, total_qty, total_stock_value_at_cost, main_store_qty, needs_transfer')
-      .eq('company_id', companyId),
+    supabase
+      .from('vw_stock_live')
+      .select('product_id, quantity, total_stock_value_at_cost'),
   ])
 
-  const rows = (items ?? []) as MultiStockRow[]
-  const all  = (allItems ?? []) as MultiStockRow[]
-  const withStock = all.filter((r) => r.total_qty > 0)
+  const rows  = (items ?? []) as LiveRow[]
+  const all   = (allItems ?? []) as Pick<LiveRow, 'product_id' | 'quantity' | 'total_stock_value_at_cost'>[]
+  const withStock = all.filter((r) => r.quantity > 0)
+
+  // Adaptar para o formato esperado pelo EstoqueMultiTable
+  // Uma única localização sintética "Estoque Loja" para compatibilidade
+  const mainStoreLoc = { id: 0, name: 'Estoque Loja', slug: 'loja', is_main_store: true, priority: 1 }
+
+  const tableRows = rows.map((r) => ({
+    product_variation_id:     r.product_variation_id,
+    product_id:               r.product_id,
+    product_name:             r.product_name,
+    sku_variation:            r.sku_variation,
+    sku_parent:               r.sku_parent,
+    tamanho:                  r.tamanho,
+    cor:                      r.cor,
+    total_qty:                r.quantity,
+    main_store_qty:           r.quantity,
+    needs_transfer:           false,
+    total_stock_value_at_cost: r.total_stock_value_at_cost,
+    last_entry_date:          r.last_entry_date,
+    balances_by_location: [{
+      location_id:   mainStoreLoc.id,
+      location_name: mainStoreLoc.name,
+      slug:          mainStoreLoc.slug,
+      is_main_store: true,
+      priority:      1,
+      quantity:      r.quantity,
+    }],
+  }))
 
   return {
-    items: rows,
-    locations: (locations ?? []) as StockLocation[],
-    productCount:      new Set(withStock.map((r) => r.product_id)).size,
-    totalQty:          withStock.reduce((s, r) => s + r.total_qty, 0),
-    totalCostValue:    withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost ?? 0), 0),
-    alertCount:        withStock.filter((r) => r.total_qty <= 3).length,
-    needsTransferCount: all.filter((r) => r.needs_transfer).length,
+    items:          tableRows,
+    locations:      [mainStoreLoc],
+    productCount:   new Set(withStock.map((r) => r.product_id)).size,
+    totalQty:       withStock.reduce((s, r) => s + r.quantity, 0),
+    totalCostValue: withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost ?? 0), 0),
+    alertCount:     withStock.filter((r) => r.quantity <= 3).length,
   }
 }
 
@@ -106,27 +102,14 @@ export default async function EstoquePage({
 }) {
   const { q } = await searchParams
   const search = q?.trim() || undefined
-
-  // Buscar company_id via admin client (usuário da sessão não disponível em server component sem cookies)
-  const supabase = createAdminClient()
-  const { data: firstCompany } = await (supabase as any)
-    .from('companies')
-    .select('id')
-    .eq('active', true)
-    .limit(1)
-    .single() as { data: { id: number } | null }
-
-  const companyId = firstCompany?.id ?? 1
-  const data = await getStockData(companyId, search)
+  const data = await getStockData(search)
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Estoque</h1>
-          <p className="text-sm text-muted-foreground">
-            Posição atual por local
-          </p>
+          <p className="text-sm text-muted-foreground">Posição atual</p>
         </div>
 
         <div className="flex gap-2 flex-wrap justify-end">
@@ -151,7 +134,7 @@ export default async function EstoquePage({
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Produtos"
           value={formatNumber(data.productCount)}
@@ -168,23 +151,14 @@ export default async function EstoquePage({
           icon={<DollarSign className="h-4 w-4" />}
         />
         <StatCard
-          title="Alertas"
+          title="Alertas (≤ 3 un)"
           value={formatNumber(data.alertCount)}
           icon={<AlertTriangle className="h-4 w-4" />}
           valueClassName={data.alertCount > 0 ? 'text-warning' : undefined}
         />
-        <StatCard
-          title="Precisam Transferir"
-          value={formatNumber(data.needsTransferCount)}
-          icon={<Package className="h-4 w-4" />}
-          valueClassName={data.needsTransferCount > 0 ? 'text-warning' : undefined}
-        />
       </div>
 
       <div className="flex flex-wrap gap-3">
-        <Link href="/estoque/localizacoes">
-          <Button variant="outline">Gerenciar Localizações</Button>
-        </Link>
         <Link href="/estoque/movimentacoes">
           <Button variant="outline">Ver Movimentações</Button>
         </Link>
