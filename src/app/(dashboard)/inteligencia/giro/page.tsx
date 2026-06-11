@@ -12,37 +12,67 @@ export const dynamic = 'force-dynamic'
 
 async function getTurnoverData() {
   const supabase = createAdminClient()
-  const [stockRes, perfRes] = await Promise.all([
-    (supabase
-      .from('mv_stock_status' as any)
-      .select('product_variation_id, product_id, product_name, sku_parent, sku_variation, cor, tamanho, current_qty, avg_cost, stock_value_at_cost, last_entry_date, last_sale_date')
+
+  const [stockRes, salesRes] = await Promise.all([
+    (supabase as any)
+      .from('vw_stock_live')
+      .select('product_variation_id, product_id, product_name, sku_parent, sku_variation, cor, tamanho, current_qty, avg_cost, stock_value_at_cost, last_entry_date')
       .order('current_qty', { ascending: false })
-      .limit(200)) as unknown as Promise<{ data: any[] | null; error: any }>,
-    (supabase
-      .from('mv_product_performance' as any)
-      .select('product_id, total_units_sold, last_sale_date')
-    ) as unknown as Promise<{ data: any[] | null; error: any }>,
+      .limit(200) as unknown as Promise<{ data: any[] | null; error: any }>,
+
+    supabase
+      .from('sale_items')
+      .select('quantity, product_variation_id, product_variations!inner(product_id), sales!inner(sale_date, status)')
+      .not('sales.status' as any, 'eq', 'cancelled')
+      .not('sales.status' as any, 'eq', 'returned') as unknown as Promise<{
+        data: Array<{
+          quantity: number
+          product_variation_id: number
+          product_variations: { product_id: number } | null
+          sales: { sale_date: string; status: string } | null
+        }> | null
+        error: any
+      }>,
   ])
 
-  if (stockRes.error) console.error('mv_stock_status error:', stockRes.error.message)
-  if (perfRes.error) console.error('mv_product_performance error:', perfRes.error.message)
+  if (stockRes.error) console.error('vw_stock_live error:', stockRes.error.message)
 
-  const perfMap = Object.fromEntries((perfRes.data ?? []).map(p => [p.product_id, p]))
+  // Aggregate sold units + last sale date per product_id (all time)
+  const perfByProduct = new Map<number, { totalSold: number; lastSaleDate: string | null }>()
+  for (const item of salesRes.data ?? []) {
+    const productId = item.product_variations?.product_id
+    if (!productId) continue
+    if (!perfByProduct.has(productId)) {
+      perfByProduct.set(productId, { totalSold: 0, lastSaleDate: null })
+    }
+    const p = perfByProduct.get(productId)!
+    p.totalSold += Number(item.quantity)
+    const saleDate = item.sales?.sale_date ?? null
+    if (saleDate && (!p.lastSaleDate || saleDate > p.lastSaleDate)) {
+      p.lastSaleDate = saleDate
+    }
+  }
 
-  const items = (stockRes.data ?? []).map(s => {
-    const perf = perfMap[s.product_id] ?? {}
+  const items = (stockRes.data ?? []).map((s: any) => {
+    const perf = perfByProduct.get(s.product_id) ?? { totalSold: 0, lastSaleDate: null }
     const daysSinceEntry = s.last_entry_date
       ? Math.floor((Date.now() - new Date(s.last_entry_date).getTime()) / 86400000)
       : null
-    const totalSold = perf.total_units_sold ?? 0
-    const diasParaVender = totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
-      ? Math.round(s.current_qty / (totalSold / daysSinceEntry))
+    const diasParaVender = perf.totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
+      ? Math.round((s.current_qty ?? 0) / (perf.totalSold / daysSinceEntry))
       : null
-    const last_sale_date = s.last_sale_date ?? perf.last_sale_date ?? null
     const sku = s.sku_variation ?? s.sku_parent ?? '—'
     const variacao = [s.cor, s.tamanho].filter(Boolean).join(' / ') || null
 
-    return { ...s, totalSold, diasParaVender, daysSinceEntry, last_sale_date, sku, variacao }
+    return {
+      ...s,
+      totalSold: perf.totalSold,
+      last_sale_date: perf.lastSaleDate,
+      diasParaVender,
+      daysSinceEntry,
+      sku,
+      variacao,
+    }
   })
 
   return items
@@ -51,9 +81,9 @@ async function getTurnoverData() {
 export default async function GiroEstoquePage() {
   const items = await getTurnoverData()
 
-  const parados = items.filter(i => !i.last_sale_date && (i.current_qty ?? 0) > 0)
-  const totalValue = items.reduce((s, i) => s + (i.stock_value_at_cost ?? 0), 0)
-  const paradosValue = parados.reduce((s, i) => s + (i.stock_value_at_cost ?? 0), 0)
+  const parados = items.filter((i: any) => !i.last_sale_date && (i.current_qty ?? 0) > 0)
+  const totalValue = items.reduce((s: number, i: any) => s + (i.stock_value_at_cost ?? 0), 0)
+  const paradosValue = parados.reduce((s: number, i: any) => s + (i.stock_value_at_cost ?? 0), 0)
 
   return (
     <div className="space-y-5">
@@ -102,7 +132,7 @@ export default async function GiroEstoquePage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((item) => {
+              {items.map((item: any) => {
                 const parado = !item.last_sale_date && (item.current_qty ?? 0) > 0
                 const zerado = (item.current_qty ?? 0) === 0
                 return (

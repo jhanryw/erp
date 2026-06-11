@@ -13,6 +13,7 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
+import { DashboardCharts } from './charts-section'
 
 export const dynamic = 'force-dynamic'
 
@@ -70,9 +71,12 @@ type RawStockRow = {
   current_qty: number | null
 }
 
+type PieData = { name: string; value: number; pct: number }
+type CoverageItem = { name: string; dias: number; qty: number }
+
 async function getCicloOperacional(admin: ReturnType<typeof createAdminClient>) {
   const JANELA_DIAS = 60
-  const BUFFER_DIAS = 30 // dias de segurança antes de fazer pedido
+  const BUFFER_DIAS = 30
 
   const desde = new Date()
   desde.setDate(desde.getDate() - JANELA_DIAS)
@@ -115,11 +119,134 @@ async function getCicloOperacional(admin: ReturnType<typeof createAdminClient>) 
   }
 }
 
+async function getVendasPorAtributo(admin: ReturnType<typeof createAdminClient>): Promise<{ byColor: PieData[]; bySize: PieData[] }> {
+  const DIAS = 90
+  const desde = new Date()
+  desde.setDate(desde.getDate() - DIAS)
+  const desdeStr = desde.toISOString().slice(0, 10)
+
+  const { data: varTypes } = await admin
+    .from('variation_types' as any)
+    .select('id, slug')
+    .in('slug', ['cor', 'tamanho']) as unknown as { data: Array<{ id: number; slug: string }> | null }
+
+  const corTypeId = (varTypes ?? []).find(t => t.slug === 'cor')?.id
+  const tamanhoTypeId = (varTypes ?? []).find(t => t.slug === 'tamanho')?.id
+
+  const { data: saleItemsRaw } = await (admin
+    .from('sale_items')
+    .select('product_variation_id, quantity, sales!inner(sale_date, status)')
+    .gte('sales.sale_date' as any, desdeStr)
+    .not('sales.status' as any, 'eq', 'cancelled')
+    .not('sales.status' as any, 'eq', 'returned')) as unknown as {
+      data: Array<{ product_variation_id: number; quantity: number }> | null
+    }
+
+  const saleItems = saleItemsRaw ?? []
+  const soldIds = [...new Set(saleItems.map(s => s.product_variation_id))]
+
+  if (soldIds.length === 0) return { byColor: [], bySize: [] }
+
+  const typeIds = [corTypeId, tamanhoTypeId].filter(Boolean) as number[]
+  const { data: attrsRaw } = await (admin
+    .from('product_variation_attributes' as any)
+    .select('product_variation_id, variation_type_id, variation_values!inner(value)')
+    .in('product_variation_id', soldIds)
+    .in('variation_type_id', typeIds)) as unknown as {
+      data: Array<{
+        product_variation_id: number
+        variation_type_id: number
+        variation_values: { value: string } | null
+      }> | null
+    }
+
+  const attrMap = new Map<number, { cor?: string; tamanho?: string }>()
+  for (const a of attrsRaw ?? []) {
+    if (!attrMap.has(a.product_variation_id)) attrMap.set(a.product_variation_id, {})
+    const entry = attrMap.get(a.product_variation_id)!
+    if (a.variation_type_id === corTypeId) entry.cor = a.variation_values?.value
+    if (a.variation_type_id === tamanhoTypeId) entry.tamanho = a.variation_values?.value
+  }
+
+  const byColorMap = new Map<string, number>()
+  const bySizeMap = new Map<string, number>()
+
+  for (const item of saleItems) {
+    const attrs = attrMap.get(item.product_variation_id) ?? {}
+    const qty = Number(item.quantity)
+    if (attrs.cor) byColorMap.set(attrs.cor, (byColorMap.get(attrs.cor) ?? 0) + qty)
+    if (attrs.tamanho) bySizeMap.set(attrs.tamanho, (bySizeMap.get(attrs.tamanho) ?? 0) + qty)
+  }
+
+  function toPieData(map: Map<string, number>): PieData[] {
+    const total = Array.from(map.values()).reduce((a, b) => a + b, 0)
+    return Array.from(map.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 12)
+      .map(([name, value]) => ({ name, value, pct: total > 0 ? (value / total) * 100 : 0 }))
+  }
+
+  return { byColor: toPieData(byColorMap), bySize: toPieData(bySizeMap) }
+}
+
+async function getCoverageByProduct(admin: ReturnType<typeof createAdminClient>): Promise<CoverageItem[]> {
+  const JANELA_DIAS = 60
+  const desde = new Date()
+  desde.setDate(desde.getDate() - JANELA_DIAS)
+  const desdeStr = desde.toISOString().slice(0, 10)
+
+  const [stockRes, vendidosRes] = await Promise.all([
+    (admin as any)
+      .from('vw_stock_live')
+      .select('product_id, product_name, current_qty') as unknown as Promise<{
+        data: Array<{ product_id: number; product_name: string; current_qty: number | null }> | null
+      }>,
+    (admin
+      .from('sale_items')
+      .select('quantity, product_variation_id, product_variations(product_id), sales!inner(sale_date, status)')
+      .gte('sales.sale_date' as any, desdeStr)
+      .not('sales.status' as any, 'eq', 'cancelled')
+      .not('sales.status' as any, 'eq', 'returned')) as unknown as Promise<{
+        data: Array<{
+          quantity: number
+          product_variation_id: number
+          product_variations: { product_id: number } | null
+        }> | null
+      }>,
+  ])
+
+  const stockByProduct = new Map<number, { name: string; qty: number }>()
+  for (const row of stockRes.data ?? []) {
+    if (!stockByProduct.has(row.product_id)) {
+      stockByProduct.set(row.product_id, { name: row.product_name, qty: 0 })
+    }
+    stockByProduct.get(row.product_id)!.qty += Number(row.current_qty ?? 0)
+  }
+
+  const soldByProduct = new Map<number, number>()
+  for (const item of vendidosRes.data ?? []) {
+    const productId = item.product_variations?.product_id
+    if (!productId) continue
+    soldByProduct.set(productId, (soldByProduct.get(productId) ?? 0) + Number(item.quantity))
+  }
+
+  return Array.from(stockByProduct.entries())
+    .filter(([, s]) => s.qty > 0)
+    .map(([productId, s]) => {
+      const totalSold = soldByProduct.get(productId) ?? 0
+      const pecasPorDia = totalSold / JANELA_DIAS
+      const dias = pecasPorDia > 0 ? Math.round(s.qty / pecasPorDia) : 999
+      return { name: s.name, dias, qty: s.qty }
+    })
+    .sort((a, b) => a.dias - b.dias)
+    .slice(0, 8)
+}
+
 async function getDashboardData() {
   const admin = createAdminClient()
   const { start, end } = currentYearMonth()
 
-  const [salesRes, cashRes, rankingRes, clientRes, alerts, ciclo] = await Promise.all([
+  const [salesRes, cashRes, rankingRes, clientRes, alerts, ciclo, vendasAtributos, coverage] = await Promise.all([
     // Faturamento + lucro do mês
     admin
       .from('sales')
@@ -179,6 +306,10 @@ async function getDashboardData() {
     getAlerts(),
     // Ciclo operacional
     getCicloOperacional(admin),
+    // Gráficos de vendas por cor e tamanho
+    getVendasPorAtributo(admin),
+    // Cobertura de estoque por produto
+    getCoverageByProduct(admin),
   ])
 
   // — Financial KPIs
@@ -240,7 +371,13 @@ async function getDashboardData() {
     .sort((a, b) => b.totalProfit - a.totalProfit)
     .slice(0, 5)
 
-  return { faturamento, custo, lucro, margem, entradas, saidas, saldo, topProducts, topClients, alerts, ciclo }
+  return {
+    faturamento, custo, lucro, margem, entradas, saidas, saldo,
+    topProducts, topClients, alerts, ciclo,
+    byColor: vendasAtributos.byColor,
+    bySize: vendasAtributos.bySize,
+    coverage,
+  }
 }
 
 export default async function DashboardPage() {
@@ -255,6 +392,9 @@ export default async function DashboardPage() {
     topClients,
     alerts,
     ciclo,
+    byColor,
+    bySize,
+    coverage,
   } = await getDashboardData()
 
   alerts.sort((a, b) => {
@@ -390,6 +530,9 @@ export default async function DashboardPage() {
           </div>
         )
       })()}
+
+      {/* Gráficos: Vendas por Cor, Tamanho e Cobertura por Produto */}
+      <DashboardCharts byColor={byColor} bySize={bySize} coverageItems={coverage} />
 
       {/* Alertas */}
       {alerts.length > 0 && (
