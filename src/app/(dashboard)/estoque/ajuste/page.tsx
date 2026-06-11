@@ -29,12 +29,14 @@ const schema = z.object({
   delta:  z.coerce.number().int('Deve ser número inteiro').refine((n) => n !== 0, 'Não pode ser zero'),
   reason: z.string().min(1, 'Selecione o motivo'),
   notes:  z.string().optional(),
+  stock_location_id: z.coerce.number().int().positive().nullable().optional(),
 })
 
 type FormData = z.infer<typeof schema>
 
 type Product   = { id: number; name: string; sku: string }
 type Variation = { id: number; sku_variation: string; attrs: string }
+type Location  = { id: number; name: string; is_main_store: boolean }
 
 const SELECT_CLASS =
   'w-full bg-bg-input border border-border text-text-primary text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand'
@@ -46,6 +48,7 @@ export default function EstoqueAjustePage() {
   const [allProducts, setAllProducts]         = useState<ProductOption[]>([])
   const [selectedProduct, setSelectedProduct] = useState<ProductOption | null>(null)
   const [variations, setVariations]   = useState<Variation[]>([])
+  const [locations, setLocations]     = useState<Location[]>([])
   const [loadingVars, setLoadingVars] = useState(false)
 
   const {
@@ -56,11 +59,21 @@ export default function EstoqueAjustePage() {
   } = useForm<FormData>({ resolver: zodResolver(schema) })
 
   useEffect(() => {
-    supabase
-      .from('products')
-      .select('id, name, sku')
-      .order('name')
-      .then(({ data }) => setAllProducts(data ?? []))
+    Promise.all([
+      supabase
+        .from('products')
+        .select('id, name, sku')
+        .order('name'),
+      (supabase as any)
+        .from('stock_locations')
+        .select('id, name, is_main_store')
+        .eq('active', true)
+        .order('is_main_store', { ascending: false })
+        .order('id', { ascending: true }),
+    ]).then(([products, locs]) => {
+      setAllProducts(products.data ?? [])
+      setLocations(locs.data ?? [])
+    })
   }, [])
 
   // Buscar variações ao selecionar produto
@@ -126,6 +139,7 @@ export default function EstoqueAjustePage() {
         delta:  data.delta,
         reason: data.reason,
         notes:  data.notes?.trim() || null,
+        stock_location_id: data.stock_location_id || null,
       }),
     })
 
@@ -200,6 +214,21 @@ export default function EstoqueAjustePage() {
               {errors.reason && (
                 <p className="text-xs text-error">{errors.reason.message}</p>
               )}
+            </div>
+
+            {/* ── Local de Estoque ────────────────────────── */}
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-text-primary">
+                Local de Estoque <span className="font-normal text-text-muted">(padrão: Estoque Loja)</span>
+              </label>
+              <select className={SELECT_CLASS} {...register('stock_location_id')}>
+                <option value="">Estoque Loja (padrão)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* ── Quantidade ──────────────────────────────── */}

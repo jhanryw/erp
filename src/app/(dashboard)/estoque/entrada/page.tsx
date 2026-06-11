@@ -23,6 +23,7 @@ export default function EstoqueEntradaPage() {
   const [selectedProduct, setSelectedProduct] = useState<ProductOption | null>(null)
   const [variations, setVariations]       = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
   const [suppliers, setSuppliers]         = useState<{ id: number; name: string }[]>([])
+  const [locations, setLocations]         = useState<{ id: number; name: string; is_main_store: boolean }[]>([])
 
   const {
     register,
@@ -51,9 +52,16 @@ export default function EstoqueEntradaPage() {
     Promise.all([
       supabase.from('products').select('id, name, sku').order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
-    ]).then(([prods, supps]) => {
+      (supabase as any)
+        .from('stock_locations')
+        .select('id, name, is_main_store')
+        .eq('active', true)
+        .order('is_main_store', { ascending: false })
+        .order('id', { ascending: true }),
+    ]).then(([prods, supps, locs]) => {
       setProducts(prods.data ?? [])
       setSuppliers(supps.data ?? [])
+      setLocations(locs.data ?? [])
     })
   }, [])
 
@@ -170,6 +178,23 @@ export default function EstoqueEntradaPage() {
                   ))}
                 </select>
               </div>
+            </div>
+
+            <div>
+              <label className="label-base">
+                Local de Entrada <span className="font-normal text-text-muted">(padrão: Estoque Loja)</span>
+              </label>
+              <select
+                className="input-base"
+                {...register('stock_location_id', { setValueAs: (v) => (v ? Number(v) : null) })}
+              >
+                <option value="">Estoque Loja (padrão)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
           </CardContent>
         </Card>

@@ -182,6 +182,9 @@ export default async function EstoquePage({
       </div>
 
       <div className="flex flex-wrap gap-3">
+        <Link href="/estoque/localizacoes">
+          <Button variant="outline">Gerenciar Localizações</Button>
+        </Link>
         <Link href="/estoque/movimentacoes">
           <Button variant="outline">Ver Movimentações</Button>
         </Link>

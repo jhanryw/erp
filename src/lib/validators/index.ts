@@ -121,6 +121,7 @@ export const stockLotSchema = z.object({
   tax_cost: z.coerce.number().min(0).default(0),
   entry_date: z.string(),
   notes: z.string().nullable().optional(),
+  stock_location_id: z.coerce.number().int().positive().nullable().optional(),
 })
 
 // ─── Custo de Marketing ───────────────────────────────────────────────────────
