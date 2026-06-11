@@ -42,7 +42,7 @@ export async function POST(request: Request) {
       action: 'transfer', resource: 'stock_transfer',
       resourceId: parsed.data.product_variation_id,
       detail: `from:${parsed.data.from_location_id} to:${parsed.data.to_location_id} qty:${parsed.data.quantity}`,
-      after: result.data,
+      after: result.data as unknown as Record<string, unknown>,
     })
 
     // Sincronizar total para Nuvemshop (non-fatal)
