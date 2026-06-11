@@ -4,6 +4,7 @@ import {
   Plus,
   Warehouse,
   AlertTriangle,
+  Package,
   DollarSign,
   Boxes,
 } from 'lucide-react'
@@ -11,87 +12,71 @@ import {
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
+import { Card, CardHeader } from '@/components/ui/card'
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+} from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
+import { formatDate } from '@/lib/utils/date'
 import { EstoqueSearch } from './estoque-search'
-import { EstoqueMultiTable } from './estoque-multi-table'
 
 export const dynamic = 'force-dynamic'
 
-// Colunas disponíveis na vw_stock_live (view original, lê da tabela stock)
-type LiveRow = {
-  product_variation_id: number
+type StockStatusRow = {
   product_id: number
   product_name: string
   sku_variation: string
   sku_parent: string | null
   tamanho: string | null
   cor: string | null
-  quantity: number
+  current_qty: number | null
   avg_cost: number | null
-  total_stock_value_at_cost: number | null
+  stock_value_at_cost: number | null
+  stock_value_at_price: number | null
   last_entry_date: string | null
+  out_of_stock: boolean
+  low_stock: boolean
 }
 
 async function getStockData(search?: string) {
   const supabase = createAdminClient()
 
-  let query = supabase
+  let itemsQuery = (supabase as any)
     .from('vw_stock_live')
     .select('*')
     .order('product_name', { ascending: true })
+    .order('current_qty', { ascending: true })
 
   if (search) {
-    query = query.or(
-      `product_name.ilike.%${search}%,sku_variation.ilike.%${search}%,sku_parent.ilike.%${search}%`
+    itemsQuery = itemsQuery.or(
+      `product_name.ilike.%${search}%,sku_variation.ilike.%${search}%,sku_parent.ilike.%${search}%`,
     )
   }
 
-  const [{ data: items }, { data: allItems }] = await Promise.all([
-    query,
-    supabase
+  const [stockItems, summary] = await Promise.all([
+    itemsQuery,
+    (supabase as any)
       .from('vw_stock_live')
-      .select('product_id, quantity, total_stock_value_at_cost'),
+      .select('product_id, current_qty, stock_value_at_cost, stock_value_at_price'),
   ])
 
-  const rows  = (items ?? []) as LiveRow[]
-  const all   = (allItems ?? []) as Pick<LiveRow, 'product_id' | 'quantity' | 'total_stock_value_at_cost'>[]
-  const withStock = all.filter((r) => r.quantity > 0)
-
-  // Adaptar para o formato esperado pelo EstoqueMultiTable
-  // Uma única localização sintética "Estoque Loja" para compatibilidade
-  const mainStoreLoc = { id: 0, name: 'Estoque Loja', slug: 'loja', is_main_store: true, priority: 1 }
-
-  const tableRows = rows.map((r) => ({
-    product_variation_id:     r.product_variation_id,
-    product_id:               r.product_id,
-    product_name:             r.product_name,
-    sku_variation:            r.sku_variation,
-    sku_parent:               r.sku_parent,
-    tamanho:                  r.tamanho,
-    cor:                      r.cor,
-    total_qty:                r.quantity,
-    main_store_qty:           r.quantity,
-    needs_transfer:           false,
-    total_stock_value_at_cost: r.total_stock_value_at_cost,
-    last_entry_date:          r.last_entry_date,
-    balances_by_location: [{
-      location_id:   mainStoreLoc.id,
-      location_name: mainStoreLoc.name,
-      slug:          mainStoreLoc.slug,
-      is_main_store: true,
-      priority:      1,
-      quantity:      r.quantity,
-    }],
-  }))
+  const items = (stockItems.data ?? []) as StockStatusRow[]
+  const all   = (summary.data ?? []) as StockStatusRow[]
+  const withStock = all.filter((r) => Number(r.current_qty ?? 0) > 0)
 
   return {
-    items:          tableRows,
-    locations:      [mainStoreLoc],
+    items,
     productCount:   new Set(withStock.map((r) => r.product_id)).size,
-    totalQty:       withStock.reduce((s, r) => s + r.quantity, 0),
-    totalCostValue: withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost ?? 0), 0),
-    alertCount:     withStock.filter((r) => r.quantity <= 3).length,
+    totalQty:       withStock.reduce((s, r) => s + Number(r.current_qty), 0),
+    totalCostValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_cost  ?? 0), 0),
+    totalSaleValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_price ?? 0), 0),
+    alertCount:     withStock.filter((r) => Number(r.current_qty) <= 3).length,
   }
 }
 
@@ -112,7 +97,7 @@ export default async function EstoquePage({
           <p className="text-sm text-muted-foreground">Posição atual</p>
         </div>
 
-        <div className="flex gap-2 flex-wrap justify-end">
+        <div className="flex gap-2">
           <Link href="/estoque/entrada/lote">
             <Button variant="outline">
               <Plus className="mr-2 h-4 w-4" />
@@ -134,7 +119,7 @@ export default async function EstoquePage({
         </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           title="Produtos"
           value={formatNumber(data.productCount)}
@@ -151,7 +136,12 @@ export default async function EstoquePage({
           icon={<DollarSign className="h-4 w-4" />}
         />
         <StatCard
-          title="Alertas (≤ 3 un)"
+          title="Valor em Venda"
+          value={formatCurrency(data.totalSaleValue)}
+          icon={<Package className="h-4 w-4" />}
+        />
+        <StatCard
+          title="Alertas de Estoque"
           value={formatNumber(data.alertCount)}
           icon={<AlertTriangle className="h-4 w-4" />}
           valueClassName={data.alertCount > 0 ? 'text-warning' : undefined}
@@ -189,10 +179,86 @@ export default async function EstoquePage({
           action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
         />
       ) : (
-        <EstoqueMultiTable
-          items={data.items}
-          locations={data.locations}
-        />
+        <Card>
+          <CardHeader className="text-sm text-muted-foreground">
+            {search
+              ? `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} encontrada${data.items.length !== 1 ? 's' : ''} para "${search}"`
+              : `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} em estoque`}
+          </CardHeader>
+
+          {/* ── Mobile: cards ──────────────────────────────── */}
+          <div className="md:hidden divide-y divide-border">
+            {data.items.map((item, idx) => {
+              const qty = item.current_qty ?? 0
+              return (
+                <div key={`${item.sku_variation}-${idx}`} className="px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-text-primary truncate">{item.product_name}</p>
+                      <p className="text-xs text-text-muted mt-0.5">
+                        <code className="font-mono">{item.sku_variation}</code>
+                        {(item.cor || item.tamanho) && (
+                          <span className="ml-1.5">
+                            {[item.cor, item.tamanho].filter(Boolean).join(' · ')}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <p className={`text-lg font-bold tabular-nums ${
+                        qty === 0 ? 'text-error' : qty <= 3 ? 'text-warning' : 'text-text-primary'
+                      }`}>
+                        {formatNumber(qty)}
+                      </p>
+                      <p className="text-[10px] text-text-muted leading-none">unidades</p>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 mt-2 text-xs text-text-muted">
+                    <span>Custo médio: <span className="text-text-secondary font-medium">{formatCurrency(item.avg_cost ?? 0)}</span></span>
+                    <span>Venda: <span className="text-text-secondary font-medium">{formatCurrency(item.stock_value_at_price ?? 0)}</span></span>
+                  </div>
+                  {item.last_entry_date && (
+                    <p className="text-[11px] text-text-muted mt-1">Entrada: {formatDate(item.last_entry_date)}</p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* ── Desktop: tabela ─────────────────────────────── */}
+          <div className="hidden md:block overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Produto</TableHead>
+                  <TableHead>Cor</TableHead>
+                  <TableHead>Tamanho</TableHead>
+                  <TableHead>SKU Variação</TableHead>
+                  <TableHead>Qtd</TableHead>
+                  <TableHead>Custo Médio</TableHead>
+                  <TableHead>Valor Custo</TableHead>
+                  <TableHead>Valor Venda</TableHead>
+                  <TableHead>Última Entrada</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((item, idx) => (
+                  <TableRow key={`${item.sku_variation}-${idx}`}>
+                    <TableCell className="font-medium">{item.product_name}</TableCell>
+                    <TableCell>{item.cor ?? '—'}</TableCell>
+                    <TableCell>{item.tamanho ?? '—'}</TableCell>
+                    <TableCell><code>{item.sku_variation}</code></TableCell>
+                    <TableCell>{formatNumber(item.current_qty ?? 0)}</TableCell>
+                    <TableCell>{formatCurrency(item.avg_cost ?? 0)}</TableCell>
+                    <TableCell>{formatCurrency(item.stock_value_at_cost ?? 0)}</TableCell>
+                    <TableCell>{formatCurrency(item.stock_value_at_price ?? 0)}</TableCell>
+                    <TableCell>{item.last_entry_date ? formatDate(item.last_entry_date) : '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </div>
   )
