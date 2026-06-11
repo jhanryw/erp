@@ -13,15 +13,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils/currency'
+import { ProductSearchCombobox, type ProductOption } from '@/components/ui/product-search-combobox'
 
 export default function EstoqueEntradaPage() {
   const router = useRouter()
   const supabase = createClient()
   const [loading, setLoading] = useState(false)
-  const [products, setProducts] = useState<{ id: number; name: string; sku: string }[]>([])
-  const [variations, setVariations] = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
-  const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([])
-  const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
+  const [products, setProducts]           = useState<ProductOption[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<ProductOption | null>(null)
+  const [variations, setVariations]       = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
+  const [suppliers, setSuppliers]         = useState<{ id: number; name: string }[]>([])
 
   const {
     register,
@@ -48,7 +49,7 @@ export default function EstoqueEntradaPage() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('products').select('id, name, sku').eq('active', true).order('name'),
+      supabase.from('products').select('id, name, sku').order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
     ]).then(([prods, supps]) => {
       setProducts(prods.data ?? [])
@@ -57,17 +58,16 @@ export default function EstoqueEntradaPage() {
   }, [])
 
   useEffect(() => {
-    if (!selectedProductId) {
+    if (!selectedProduct) {
       setVariations([])
       return
     }
     supabase
       .from('product_variations')
       .select('id, sku_variation, product_variation_attributes(variation_values:variation_value_id(value))')
-      .eq('product_id', selectedProductId)
-      .eq('active', true)
+      .eq('product_id', selectedProduct.id)
       .then(({ data }) => setVariations((data as any) ?? []))
-  }, [selectedProductId])
+  }, [selectedProduct])
 
   const onSubmit = async (values: StockLotFormData) => {
     setLoading(true)
@@ -116,19 +116,11 @@ export default function EstoqueEntradaPage() {
           <CardContent className="space-y-4">
             <div>
               <label className="label-base">Produto *</label>
-              <select
-                className="input-base"
-                onChange={(e) =>
-                  setSelectedProductId(e.target.value ? Number(e.target.value) : null)
-                }
-              >
-                <option value="">Selecione um produto...</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} — {p.sku}
-                  </option>
-                ))}
-              </select>
+              <ProductSearchCombobox
+                products={products}
+                value={selectedProduct}
+                onChange={setSelectedProduct}
+              />
             </div>
 
             <div>
@@ -136,7 +128,7 @@ export default function EstoqueEntradaPage() {
               <select
                 className="input-base"
                 {...register('product_variation_id', { valueAsNumber: true })}
-                disabled={!selectedProductId}
+                disabled={!selectedProduct}
               >
                 <option value="">Selecione a variação...</option>
                 {variations.map((v) => {

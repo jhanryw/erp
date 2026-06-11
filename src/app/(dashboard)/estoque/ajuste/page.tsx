@@ -14,39 +14,39 @@ import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { ProductSearchCombobox, type ProductOption } from '@/components/ui/product-search-combobox'
 
 const REASONS = [
-  { value: 'loss', label: 'Perda / Avaria' },
-  { value: 'inventory', label: 'Ajuste de Inventário' },
+  { value: 'loss',               label: 'Perda / Avaria' },
+  { value: 'inventory',          label: 'Ajuste de Inventário' },
   { value: 'return_to_supplier', label: 'Devolução ao Fornecedor' },
-  { value: 'sample', label: 'Amostra / Brinde' },
-  { value: 'other', label: 'Outro' },
+  { value: 'sample',             label: 'Amostra / Brinde' },
+  { value: 'other',              label: 'Outro' },
 ]
 
 const schema = z.object({
-  product_variation_id: z.coerce
-    .number()
-    .min(1, 'Selecione uma variação'),
-  delta: z.coerce
-    .number()
-    .int('Deve ser número inteiro')
-    .refine((n) => n !== 0, 'Não pode ser zero'),
+  product_variation_id: z.coerce.number().min(1, 'Selecione uma variação'),
+  delta:  z.coerce.number().int('Deve ser número inteiro').refine((n) => n !== 0, 'Não pode ser zero'),
   reason: z.string().min(1, 'Selecione o motivo'),
-  notes: z.string().optional(),
+  notes:  z.string().optional(),
 })
 
 type FormData = z.infer<typeof schema>
+
+type Product   = { id: number; name: string; sku: string }
+type Variation = { id: number; sku_variation: string; attrs: string }
 
 const SELECT_CLASS =
   'w-full bg-bg-input border border-border text-text-primary text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand'
 
 export default function EstoqueAjustePage() {
-  const router = useRouter()
+  const router  = useRouter()
   const supabase = createClient()
 
-  const [products, setProducts] = useState<{ id: number; name: string; sku: string }[]>([])
-  const [variations, setVariations] = useState<{ id: number; sku_variation: string; product_variation_attributes: { variation_values: { value: string } | null }[] }[]>([])
-  const [selectedProduct, setSelectedProduct] = useState<number | null>(null)
+  const [allProducts, setAllProducts]         = useState<ProductOption[]>([])
+  const [selectedProduct, setSelectedProduct] = useState<ProductOption | null>(null)
+  const [variations, setVariations]   = useState<Variation[]>([])
+  const [loadingVars, setLoadingVars] = useState(false)
 
   const {
     register,
@@ -59,22 +59,35 @@ export default function EstoqueAjustePage() {
     supabase
       .from('products')
       .select('id, name, sku')
-      .eq('active', true)
       .order('name')
-      .then(({ data }) => setProducts(data ?? []))
+      .then(({ data }) => setAllProducts(data ?? []))
   }, [])
 
+  // Buscar variações ao selecionar produto
   useEffect(() => {
     if (!selectedProduct) {
       setVariations([])
+      setValue('product_variation_id', 0)
       return
     }
+    setLoadingVars(true)
+    setValue('product_variation_id', 0)
     supabase
       .from('product_variations')
       .select('id, sku_variation, product_variation_attributes(variation_values:variation_value_id(value))')
-      .eq('product_id', selectedProduct)
-      .eq('active', true)
-      .then(({ data }) => setVariations((data as any) ?? []))
+      .eq('product_id', selectedProduct.id)
+      .then(({ data }) => {
+        const rows = (data as any[]) ?? []
+        setVariations(rows.map((v) => ({
+          id:            v.id,
+          sku_variation: v.sku_variation,
+          attrs: (v.product_variation_attributes ?? [])
+            .map((a: any) => a.variation_values?.value)
+            .filter(Boolean)
+            .join(' / '),
+        })))
+        setLoadingVars(false)
+      })
   }, [selectedProduct])
 
   const KNOWN_ERRORS: Record<string, string> = {
@@ -105,17 +118,15 @@ export default function EstoqueAjustePage() {
   }
 
   async function onSubmit(data: FormData) {
-    const payload = {
-      product_variation_id: data.product_variation_id,
-      delta:  data.delta,
-      reason: data.reason,
-      notes:  data.notes?.trim() || null,
-    }
-
     const res = await fetch('/api/estoque/ajuste', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        product_variation_id: data.product_variation_id,
+        delta:  data.delta,
+        reason: data.reason,
+        notes:  data.notes?.trim() || null,
+      }),
     })
 
     if (!res.ok) {
@@ -140,52 +151,44 @@ export default function EstoqueAjustePage() {
       <Card>
         <CardContent className="pt-5">
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            {/* Product */}
+
+            {/* ── Busca de produto ─────────────────────────── */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-text-primary">Produto</label>
-              <select
-                className={SELECT_CLASS}
-                onChange={(e) => {
-                  setSelectedProduct(Number(e.target.value) || null)
-                  setValue('product_variation_id', 0)
-                }}
-              >
-                <option value="">Selecione um produto</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.sku})
-                  </option>
-                ))}
-              </select>
+              <ProductSearchCombobox
+                products={allProducts}
+                value={selectedProduct}
+                onChange={setSelectedProduct}
+              />
             </div>
 
-            {/* Variation */}
+            {/* ── Variação ────────────────────────────────── */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-text-primary">Variação</label>
               <select
                 className={SELECT_CLASS}
-                disabled={!selectedProduct}
+                disabled={!selectedProduct || loadingVars}
                 {...register('product_variation_id')}
               >
-                <option value="0">Selecione uma variação</option>
-                {variations.map((v) => {
-                  const attrs = (v.product_variation_attributes ?? [])
-                    .map((a) => a.variation_values?.value)
-                    .filter(Boolean)
-                    .join(' / ')
-                  return (
-                    <option key={v.id} value={v.id}>
-                      {v.sku_variation}{attrs ? ` — ${attrs}` : ''}
-                    </option>
-                  )
-                })}
+                <option value="0">
+                  {!selectedProduct
+                    ? 'Selecione um produto primeiro'
+                    : loadingVars
+                      ? 'Carregando...'
+                      : 'Selecione a variação'}
+                </option>
+                {variations.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.sku_variation}{v.attrs ? ` — ${v.attrs}` : ''}
+                  </option>
+                ))}
               </select>
               {errors.product_variation_id && (
                 <p className="text-xs text-error">{errors.product_variation_id.message}</p>
               )}
             </div>
 
-            {/* Reason */}
+            {/* ── Motivo ──────────────────────────────────── */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-text-primary">Motivo</label>
               <select className={SELECT_CLASS} {...register('reason')}>
@@ -199,7 +202,7 @@ export default function EstoqueAjustePage() {
               )}
             </div>
 
-            {/* Delta */}
+            {/* ── Quantidade ──────────────────────────────── */}
             <Input
               label="Quantidade"
               type="number"
@@ -211,7 +214,7 @@ export default function EstoqueAjustePage() {
               Use valor negativo para redução (perda/saída) e positivo para adição.
             </p>
 
-            {/* Notes */}
+            {/* ── Observações ─────────────────────────────── */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-text-primary">
                 Observações <span className="text-text-muted font-normal">(opcional)</span>
