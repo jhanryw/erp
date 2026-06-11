@@ -5,6 +5,11 @@ import { createStockEntry } from '@/services/estoque.service'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { stockLotSchema } from '@/lib/validators'
+import { z } from 'zod'
+
+const entradaSchema = stockLotSchema.extend({
+  stock_location_id: z.coerce.number().int().positive().nullable().optional(),
+})
 
 export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -13,11 +18,14 @@ export async function POST(request: Request) {
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
-  const parsed = stockLotSchema.safeParse(body)
+  const parsed = entradaSchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
 
   try {
-    const result = await createStockEntry(parsed.data, user.id)
+    const result = await createStockEntry(
+      { ...parsed.data, stock_location_id: parsed.data.stock_location_id ?? null },
+      user.id
+    )
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
     auditLog({

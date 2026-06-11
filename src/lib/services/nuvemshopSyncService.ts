@@ -1,55 +1,51 @@
 /**
  * Serviço de sincronização de estoque ERP ↔ Nuvemshop.
  *
- * Função principal: pushVariantStockToNuvemshop
- *   - Busca estoque atual no ERP (fonte de verdade)
- *   - Envia quantidade FINAL para a Nuvemshop (não delta)
- *   - Registra log em nuvemshop_sync_logs
- *   - Atualiza last_stock_synced_at em produto_map
- *
- * Estratégia anti-loop:
- *   - ERP sale → push final qty → NS (PUT quantity, não cria pedido → sem webhook loop)
- *   - NS webhook → deduct ERP → confirm final qty → NS (mesma direção, sem loop)
- *   - Nuvemshop só dispara webhooks para pedidos, nunca para atualizações de stock
- *
- * Uso:
- *   import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
- *   await pushVariantStockToNuvemshop(variation_id)
+ * Para o site/Nuvemshop, envia o SALDO TOTAL somando todos os locais ativos
+ * (stock_balances + stock_locations.active = true).
+ * Para vendas presenciais, o estoque consumido é apenas o Estoque Loja.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { updateVariantStock } from '@/lib/integrations/nuvemshop'
-
-// ─── Tipos ────────────────────────────────────────────────────────────────────
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface NSSyncOptions {
-  /**
-   * Tipo do evento para fins de log.
-   *   'stock_push_erp'   = Venda feita no ERP → sincroniza para NS
-   *   'stock_confirm_ns' = Webhook NS processado → confirma qtd final de volta para NS
-   */
   eventType?: 'stock_push_erp' | 'stock_confirm_ns'
-  /** ID do pedido externo (opcional, para rastreabilidade em eventos NS) */
   externalOrderId?: string
 }
 
 export interface NSSyncResult {
   success:  boolean
-  /** true quando variação não tem mapeamento NS — não é erro, apenas sem ação */
   skipped:  boolean
   newQty?:  number
   error?:   string
 }
 
-// ─── Função principal ─────────────────────────────────────────────────────────
+// ─── Helper: saldo total para o site (soma todos os locais ativos) ────────────
 
 /**
- * Envia o estoque atual de uma variação do ERP para a variante correspondente
- * na Nuvemshop.
- *
- * Silencioso quando não há mapeamento (skipped=true, success=true).
- * Nunca lança exceção — erros são retornados em result.error e logados.
+ * Retorna a soma de stock_balances.quantity de todos os locais ativos
+ * da empresa à qual a variação pertence.
+ * Este é o saldo a exibir no site/Nuvemshop.
  */
+export async function getTotalStockForOnlineSales(
+  admin: SupabaseClient,
+  productVariationId: number
+): Promise<number> {
+  const { data } = await (admin as any)
+    .from('stock_balances')
+    .select('quantity, stock_locations!inner(active)')
+    .eq('product_variation_id', productVariationId)
+    .eq('stock_locations.active', true) as unknown as {
+      data: { quantity: number }[] | null
+    }
+
+  return (data ?? []).reduce((sum, row) => sum + (row.quantity ?? 0), 0)
+}
+
+// ─── Função principal ─────────────────────────────────────────────────────────
+
 export async function pushVariantStockToNuvemshop(
   productVariationId: number,
   options: NSSyncOptions = {}
@@ -67,21 +63,14 @@ export async function pushVariantStockToNuvemshop(
       data: { external_id: string; external_variant_id: string | null } | null
     }
 
-  // Variação ainda não enviada para a Nuvemshop — sem ação necessária
   if (!mapping?.external_variant_id) {
     return { success: true, skipped: true }
   }
 
-  // 2. Buscar saldo atual no ERP (fonte de verdade)
-  const { data: stockRow } = await admin
-    .from('stock')
-    .select('quantity')
-    .eq('product_variation_id', productVariationId)
-    .maybeSingle() as unknown as { data: { quantity: number } | null }
+  // 2. Saldo total para o site = soma de todos os locais ativos
+  const newQty = await getTotalStockForOnlineSales(admin as unknown as SupabaseClient, productVariationId)
 
-  const newQty = stockRow?.quantity ?? 0
-
-  // 3. Enviar estoque FINAL para Nuvemshop (não delta — reduz drift entre sistemas)
+  // 3. Enviar estoque FINAL para Nuvemshop
   let success = false
   let errorMessage: string | undefined
 
@@ -98,7 +87,7 @@ export async function pushVariantStockToNuvemshop(
     })
   }
 
-  // 4. Registrar log da sincronização (não-fatal se falhar)
+  // 4. Log
   try {
     await (admin as any)
       .from('nuvemshop_sync_logs')
@@ -117,7 +106,7 @@ export async function pushVariantStockToNuvemshop(
     console.error('[nuvemshopSyncService] Erro ao gravar nuvemshop_sync_logs', logErr)
   }
 
-  // 5. Atualizar timestamp de última sincronização (apenas se sucesso)
+  // 5. Atualizar timestamp
   if (success) {
     try {
       await (admin as any)
@@ -133,11 +122,6 @@ export async function pushVariantStockToNuvemshop(
   return { success, skipped: false, newQty, error: errorMessage }
 }
 
-/**
- * Sincroniza o estoque de múltiplas variações em paralelo.
- * Usado após vendas ERP com múltiplos itens.
- * Falhas individuais são logadas mas não interrompem as outras.
- */
 export async function pushMultipleVariantStocksToNuvemshop(
   productVariationIds: number[],
   options: NSSyncOptions = {}

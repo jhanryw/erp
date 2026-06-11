@@ -19,6 +19,8 @@ export interface StockAdjustInput {
   delta: number
   reason: string
   notes?: string | null
+  /** null = Estoque Loja da empresa */
+  stock_location_id?: number | null
 }
 
 export interface StockAdjustResult {
@@ -37,6 +39,25 @@ export interface StockEntryInput {
   tax_cost?: number
   entry_date: string
   notes?: string | null
+  /** null = Estoque Loja da empresa */
+  stock_location_id?: number | null
+}
+
+export interface StockTransferInput {
+  product_variation_id: number
+  from_location_id: number
+  to_location_id: number
+  quantity: number
+  notes?: string | null
+}
+
+export interface StockTransferResult {
+  transfer_id: string
+  from_location_id: number
+  to_location_id: number
+  quantity: number
+  from_qty_after: number
+  to_qty_after: number
 }
 
 export interface StockEntryResult {
@@ -120,10 +141,11 @@ export async function adjustStock(
 
   const { data, error } = await (admin as any).rpc('rpc_stock_adjust', {
     p_product_variation_id: input.product_variation_id,
-    p_delta: input.delta,
-    p_reason: input.reason,
-    p_notes: input.notes ?? null,
-    p_system_user_id: systemUserId,
+    p_delta:                input.delta,
+    p_reason:               input.reason,
+    p_notes:                input.notes ?? null,
+    p_system_user_id:       systemUserId,
+    p_stock_location_id:    input.stock_location_id ?? null,
   }) as unknown as {
     data: StockAdjustResult | null
     error: { code: string; message: string } | null
@@ -155,17 +177,46 @@ export async function createStockEntry(
 
   const { data, error } = await (admin as any).rpc('rpc_stock_entry', {
     p_product_variation_id: input.product_variation_id,
-    p_supplier_id: input.supplier_id ?? null,
-    p_entry_type: input.entry_type,
-    p_quantity_original: input.quantity_original,
-    p_unit_cost: input.unit_cost,
-    p_freight_cost: input.freight_cost ?? 0,
-    p_tax_cost: input.tax_cost ?? 0,
-    p_entry_date: input.entry_date,
-    p_notes: input.notes ?? null,
-    p_system_user_id: systemUserId,
+    p_supplier_id:          input.supplier_id ?? null,
+    p_entry_type:           input.entry_type,
+    p_quantity_original:    input.quantity_original,
+    p_unit_cost:            input.unit_cost,
+    p_freight_cost:         input.freight_cost ?? 0,
+    p_tax_cost:             input.tax_cost ?? 0,
+    p_entry_date:           input.entry_date,
+    p_notes:                input.notes ?? null,
+    p_system_user_id:       systemUserId,
+    p_stock_location_id:    input.stock_location_id ?? null,
   }) as unknown as {
     data: StockEntryResult | null
+    error: { code: string; message: string } | null
+  }
+
+  if (error) {
+    const status = error.code === 'P0001' ? 400 : 500
+    return failure(error.message, status)
+  }
+
+  return success(data!)
+}
+
+// ─── Transferência entre locais ───────────────────────────────────────────────
+
+export async function transferStock(
+  input: StockTransferInput,
+  systemUserId: string
+): Promise<ServiceOutcome<StockTransferResult>> {
+  const admin = createAdminClient()
+
+  const { data, error } = await (admin as any).rpc('rpc_transfer_stock', {
+    p_product_variation_id: input.product_variation_id,
+    p_from_location_id:     input.from_location_id,
+    p_to_location_id:       input.to_location_id,
+    p_quantity:             input.quantity,
+    p_notes:                input.notes ?? null,
+    p_user_id:              systemUserId,
+  }) as unknown as {
+    data: StockTransferResult | null
     error: { code: string; message: string } | null
   }
 
