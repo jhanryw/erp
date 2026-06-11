@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { TrendingUp, TrendingDown, DollarSign, Wallet } from 'lucide-react'
+import { TrendingUp, TrendingDown, DollarSign, Wallet, PackageSearch } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getAlerts } from '@/lib/alerts/getAlerts'
@@ -61,11 +61,65 @@ type RawClientSale = {
   sale_items: SaleItem[]
 }
 
+type RawSaleItem = {
+  quantity: number
+  sales: { sale_date: string; status: string } | null
+}
+
+type RawStockRow = {
+  current_qty: number | null
+}
+
+async function getCicloOperacional(admin: ReturnType<typeof createAdminClient>) {
+  const JANELA_DIAS = 60
+  const BUFFER_DIAS = 30 // dias de segurança antes de fazer pedido
+
+  const desde = new Date()
+  desde.setDate(desde.getDate() - JANELA_DIAS)
+  const desdeStr = desde.toISOString().slice(0, 10)
+
+  const [vendidosRes, estoqueRes] = await Promise.all([
+    admin
+      .from('sale_items')
+      .select('quantity, sales!inner(sale_date, status)')
+      .gte('sales.sale_date' as any, desdeStr)
+      .not('sales.status' as any, 'eq', 'cancelled')
+      .not('sales.status' as any, 'eq', 'returned') as unknown as {
+        data: RawSaleItem[] | null
+      },
+    (admin as any)
+      .from('vw_stock_live')
+      .select('current_qty') as unknown as {
+        data: RawStockRow[] | null
+      },
+  ])
+
+  const totalVendido = (vendidosRes.data ?? []).reduce(
+    (s, r) => s + Number(r.quantity ?? 0), 0
+  )
+  const estoqueTotal = (estoqueRes.data ?? []).reduce(
+    (s, r) => s + Number(r.current_qty ?? 0), 0
+  )
+
+  const pecasPorDia    = totalVendido / JANELA_DIAS
+  const coberturaDias  = pecasPorDia > 0 ? Math.round(estoqueTotal / pecasPorDia) : null
+  const pedirEmDias    = coberturaDias != null ? Math.max(0, coberturaDias - BUFFER_DIAS) : null
+
+  return {
+    pecasPorDia:    Math.round(pecasPorDia * 10) / 10,
+    totalVendido60: totalVendido,
+    estoqueTotal,
+    coberturaDias,
+    pedirEmDias,
+    janelaDias:     JANELA_DIAS,
+  }
+}
+
 async function getDashboardData() {
   const admin = createAdminClient()
   const { start, end } = currentYearMonth()
 
-  const [salesRes, cashRes, rankingRes, clientRes, alerts] = await Promise.all([
+  const [salesRes, cashRes, rankingRes, clientRes, alerts, ciclo] = await Promise.all([
     // Faturamento + lucro do mês
     admin
       .from('sales')
@@ -123,6 +177,8 @@ async function getDashboardData() {
 
     // Alertas inteligentes
     getAlerts(),
+    // Ciclo operacional
+    getCicloOperacional(admin),
   ])
 
   // — Financial KPIs
@@ -184,7 +240,7 @@ async function getDashboardData() {
     .sort((a, b) => b.totalProfit - a.totalProfit)
     .slice(0, 5)
 
-  return { faturamento, custo, lucro, margem, entradas, saidas, saldo, topProducts, topClients, alerts }
+  return { faturamento, custo, lucro, margem, entradas, saidas, saldo, topProducts, topClients, alerts, ciclo }
 }
 
 export default async function DashboardPage() {
@@ -198,6 +254,7 @@ export default async function DashboardPage() {
     topProducts,
     topClients,
     alerts,
+    ciclo,
   } = await getDashboardData()
 
   alerts.sort((a, b) => {
@@ -259,6 +316,80 @@ export default async function DashboardPage() {
           </p>
         </div>
       </div>
+
+      {/* Ciclo Operacional */}
+      {(() => {
+        const { coberturaDias, pecasPorDia, estoqueTotal, totalVendido60, pedirEmDias, janelaDias } = ciclo
+        const semDados = pecasPorDia === 0
+        const urgente  = coberturaDias != null && coberturaDias < 15
+        const atencao  = coberturaDias != null && coberturaDias < 30
+        const cor = urgente ? 'text-error' : atencao ? 'text-warning' : 'text-success'
+        const bgCor = urgente ? 'bg-error/8 border-error/30' : atencao ? 'bg-warning/8 border-warning/30' : 'bg-success/8 border-success/30'
+        const label = urgente ? 'Reposição urgente' : atencao ? 'Planejar compra em breve' : 'Estoque confortável'
+
+        return (
+          <div className={`rounded-xl border p-4 ${bgCor}`}>
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <PackageSearch className="w-5 h-5 text-text-muted shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-text-primary">Ciclo Operacional</p>
+                  <p className="text-xs text-text-muted">Baseado nas vendas dos últimos {janelaDias} dias</p>
+                </div>
+              </div>
+              {!semDados && (
+                <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${cor} bg-current/10`}>
+                  {label}
+                </span>
+              )}
+            </div>
+
+            {semDados ? (
+              <p className="mt-3 text-sm text-text-muted">
+                Sem vendas nos últimos {janelaDias} dias — registre vendas para calcular o ciclo.
+              </p>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-xs text-text-muted mb-1">Cobertura de estoque</p>
+                  <p className={`text-2xl font-bold tabular-nums ${cor}`}>
+                    {coberturaDias != null ? `${coberturaDias}d` : '—'}
+                  </p>
+                  <p className="text-[11px] text-text-muted">dias no ritmo atual</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-text-muted mb-1">Velocidade de venda</p>
+                  <p className="text-2xl font-bold tabular-nums text-text-primary">
+                    {pecasPorDia.toFixed(1)}
+                  </p>
+                  <p className="text-[11px] text-text-muted">peças por dia</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-text-muted mb-1">Estoque atual</p>
+                  <p className="text-2xl font-bold tabular-nums text-text-primary">
+                    {estoqueTotal}
+                  </p>
+                  <p className="text-[11px] text-text-muted">peças em estoque</p>
+                </div>
+
+                <div>
+                  <p className="text-xs text-text-muted mb-1">Próximo pedido</p>
+                  <p className={`text-2xl font-bold tabular-nums ${pedirEmDias === 0 ? 'text-error' : 'text-text-primary'}`}>
+                    {pedirEmDias === 0 ? 'Agora' : pedirEmDias != null ? `em ${pedirEmDias}d` : '—'}
+                  </p>
+                  <p className="text-[11px] text-text-muted">
+                    {pedirEmDias === 0
+                      ? `${totalVendido60} vendidas em ${janelaDias}d`
+                      : `para manter 30d de reserva`}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+      })()}
 
       {/* Alertas */}
       {alerts.length > 0 && (
