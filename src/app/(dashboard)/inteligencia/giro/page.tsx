@@ -32,29 +32,32 @@ async function getTurnoverData() {
   //    Filtra status em SQL via .in() e .neq() no campo direto da tabela sales
   //    usando uma subquery via RPC seria ideal, mas aqui usamos join com select
   //    seguro: busca sale_items primeiro, depois filtramos sales pelo id
-  const { data: saleRows, error: salesErr } = await supabase
+  type SaleItemRow = { quantity: number; product_variation_id: number; sale_id: number }
+  type SaleRow = { id: number; sale_date: string; status: string }
+
+  const { data: saleRows, error: salesErr } = await (supabase as any)
     .from('sale_items')
     .select('quantity, product_variation_id, sale_id')
-    .in('product_variation_id', variationIds)
+    .in('product_variation_id', variationIds) as { data: SaleItemRow[] | null; error: any }
 
   if (salesErr) console.error('[giro] sale_items error:', salesErr.message)
 
   // IDs de vendas referenciadas
-  const saleIds = [...new Set((saleRows ?? []).map((r: any) => r.sale_id as number))]
+  const saleIds = [...new Set((saleRows ?? []).map(r => r.sale_id))]
 
   // 3. Busca as vendas para saber data e status
-  let salesById = new Map<number, { sale_date: string; status: string }>()
+  const salesById = new Map<number, SaleRow>()
   if (saleIds.length > 0) {
-    const { data: salesData, error: err } = await supabase
+    const { data: salesData, error: err } = await (supabase as any)
       .from('sales')
       .select('id, sale_date, status')
       .in('id', saleIds)
       .neq('status', 'cancelled')
-      .neq('status', 'returned')
+      .neq('status', 'returned') as { data: SaleRow[] | null; error: any }
 
     if (err) console.error('[giro] sales error:', err.message)
     for (const s of salesData ?? []) {
-      salesById.set(s.id, { sale_date: s.sale_date, status: s.status })
+      salesById.set(s.id, s)
     }
   }
 
@@ -63,11 +66,10 @@ async function getTurnoverData() {
 
   for (const item of saleRows ?? []) {
     const sale = salesById.get(item.sale_id)
-    if (!sale) continue // cancelled / returned — ignora
+    if (!sale) continue
 
-    // pega product_id via estoque (sem join extra)
     const stockRow = stock.find((s: any) => s.product_variation_id === item.product_variation_id)
-    const productId = stockRow?.product_id
+    const productId: number | undefined = stockRow?.product_id
     if (!productId) continue
 
     if (!perfByProduct.has(productId)) {

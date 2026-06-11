@@ -437,7 +437,7 @@ export default function CaixaPage() {
                 }`}>
                   {ok
                     ? '✓ Valores conferem — caixa pode ser fechado'
-                    : `Diferença de ${diff > 0 ? '+' : ''}${formatCurrency(diff)} — ajuste o valor antes de fechar`}
+                    : 'Atenção: valor contado não confere com o esperado pelo sistema'}
                 </div>
               )
             })()
@@ -455,11 +455,7 @@ export default function CaixaPage() {
             variant="danger"
             loading={loading}
             onClick={handleClose}
-            disabled={
-              closeCounted === '' ||
-              (expectedCash !== null &&
-                Math.abs((parseFloat(closeCounted) || 0) - expectedCash) > 0.01)
-            }
+            disabled={closeCounted === ''}
             className="w-full h-11"
           >
             Confirmar fechamento
