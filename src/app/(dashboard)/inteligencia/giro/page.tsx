@@ -13,54 +13,83 @@ export const dynamic = 'force-dynamic'
 async function getTurnoverData() {
   const supabase = createAdminClient()
 
-  const [stockRes, salesRes] = await Promise.all([
-    (supabase as any)
-      .from('vw_stock_live')
-      .select('product_variation_id, product_id, product_name, sku_parent, sku_variation, cor, tamanho, current_qty, avg_cost, stock_value_at_cost, last_entry_date')
-      .order('current_qty', { ascending: false })
-      .limit(200) as unknown as Promise<{ data: any[] | null; error: any }>,
+  // 1. Estoque atual via vw_stock_live
+  const { data: stockRows, error: stockErr } = await (supabase as any)
+    .from('vw_stock_live')
+    .select('product_variation_id, product_id, product_name, sku_parent, sku_variation, cor, tamanho, current_qty, avg_cost, stock_value_at_cost, last_entry_date')
+    .order('current_qty', { ascending: false })
+    .limit(300)
 
-    supabase
-      .from('sale_items')
-      .select('quantity, product_variation_id, product_variations!inner(product_id), sales!inner(sale_date, status)')
-      .not('sales.status' as any, 'eq', 'cancelled')
-      .not('sales.status' as any, 'eq', 'returned') as unknown as Promise<{
-        data: Array<{
-          quantity: number
-          product_variation_id: number
-          product_variations: { product_id: number } | null
-          sales: { sale_date: string; status: string } | null
-        }> | null
-        error: any
-      }>,
-  ])
+  if (stockErr) console.error('[giro] vw_stock_live error:', stockErr.message)
 
-  if (stockRes.error) console.error('vw_stock_live error:', stockRes.error.message)
+  const stock: any[] = stockRows ?? []
+  if (stock.length === 0) return []
 
-  // Aggregate sold units + last sale date per product_id (all time)
+  // IDs de variações em estoque — limita o join de vendas
+  const variationIds: number[] = stock.map((r: any) => r.product_variation_id)
+
+  // 2. Vendas (todos os status válidos) das variações em estoque
+  //    Filtra status em SQL via .in() e .neq() no campo direto da tabela sales
+  //    usando uma subquery via RPC seria ideal, mas aqui usamos join com select
+  //    seguro: busca sale_items primeiro, depois filtramos sales pelo id
+  const { data: saleRows, error: salesErr } = await supabase
+    .from('sale_items')
+    .select('quantity, product_variation_id, sale_id')
+    .in('product_variation_id', variationIds)
+
+  if (salesErr) console.error('[giro] sale_items error:', salesErr.message)
+
+  // IDs de vendas referenciadas
+  const saleIds = [...new Set((saleRows ?? []).map((r: any) => r.sale_id as number))]
+
+  // 3. Busca as vendas para saber data e status
+  let salesById = new Map<number, { sale_date: string; status: string }>()
+  if (saleIds.length > 0) {
+    const { data: salesData, error: err } = await supabase
+      .from('sales')
+      .select('id, sale_date, status')
+      .in('id', saleIds)
+      .neq('status', 'cancelled')
+      .neq('status', 'returned')
+
+    if (err) console.error('[giro] sales error:', err.message)
+    for (const s of salesData ?? []) {
+      salesById.set(s.id, { sale_date: s.sale_date, status: s.status })
+    }
+  }
+
+  // 4. Agrega por produto
   const perfByProduct = new Map<number, { totalSold: number; lastSaleDate: string | null }>()
-  for (const item of salesRes.data ?? []) {
-    const productId = item.product_variations?.product_id
+
+  for (const item of saleRows ?? []) {
+    const sale = salesById.get(item.sale_id)
+    if (!sale) continue // cancelled / returned — ignora
+
+    // pega product_id via estoque (sem join extra)
+    const stockRow = stock.find((s: any) => s.product_variation_id === item.product_variation_id)
+    const productId = stockRow?.product_id
     if (!productId) continue
+
     if (!perfByProduct.has(productId)) {
       perfByProduct.set(productId, { totalSold: 0, lastSaleDate: null })
     }
     const p = perfByProduct.get(productId)!
     p.totalSold += Number(item.quantity)
-    const saleDate = item.sales?.sale_date ?? null
-    if (saleDate && (!p.lastSaleDate || saleDate > p.lastSaleDate)) {
-      p.lastSaleDate = saleDate
+    if (sale.sale_date && (!p.lastSaleDate || sale.sale_date > p.lastSaleDate)) {
+      p.lastSaleDate = sale.sale_date
     }
   }
 
-  const items = (stockRes.data ?? []).map((s: any) => {
+  // 5. Monta resultado
+  return stock.map((s: any) => {
     const perf = perfByProduct.get(s.product_id) ?? { totalSold: 0, lastSaleDate: null }
     const daysSinceEntry = s.last_entry_date
       ? Math.floor((Date.now() - new Date(s.last_entry_date).getTime()) / 86400000)
       : null
-    const diasParaVender = perf.totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
-      ? Math.round((s.current_qty ?? 0) / (perf.totalSold / daysSinceEntry))
-      : null
+    const diasParaVender =
+      perf.totalSold > 0 && daysSinceEntry && daysSinceEntry > 0
+        ? Math.round((s.current_qty ?? 0) / (perf.totalSold / daysSinceEntry))
+        : null
     const sku = s.sku_variation ?? s.sku_parent ?? '—'
     const variacao = [s.cor, s.tamanho].filter(Boolean).join(' / ') || null
 
@@ -74,8 +103,6 @@ async function getTurnoverData() {
       variacao,
     }
   })
-
-  return items
 }
 
 export default async function GiroEstoquePage() {

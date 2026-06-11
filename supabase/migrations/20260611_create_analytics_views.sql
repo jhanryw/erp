@@ -2,8 +2,9 @@
 -- 20260611_create_analytics_views.sql
 --
 -- Cria todas as materialized views analíticas que as páginas /inteligencia
--- dependem, caso não existam. Idempotente (IF NOT EXISTS em tudo).
--- Faz o primeiro REFRESH sem CONCURRENTLY para funcionar mesmo em views vazias.
+-- dependem. Idempotente: dropa views normais que existam com o mesmo nome
+-- antes de criar como materialized (erro comum em banco recém-inicializado).
+-- Faz o primeiro REFRESH sem CONCURRENTLY para funcionar em views vazias.
 -- =============================================================================
 
 -- -----------------------------------------------------------------------------
@@ -23,9 +24,42 @@ EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
 -- -----------------------------------------------------------------------------
+-- Drop seguro: verifica o tipo antes de dropar (view normal vs materialized)
+-- -----------------------------------------------------------------------------
+DO $$
+DECLARE
+  v TEXT;
+  views_to_drop TEXT[] := ARRAY[
+    'mv_product_performance',
+    'mv_abc_by_revenue',
+    'mv_abc_by_profit',
+    'mv_abc_by_volume',
+    'mv_stock_status',
+    'mv_customer_rfm',
+    'mv_daily_sales_summary',
+    'mv_monthly_financial',
+    'mv_color_performance',
+    'mv_supplier_performance'
+  ];
+BEGIN
+  FOREACH v IN ARRAY views_to_drop LOOP
+    IF EXISTS (
+      SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = v
+    ) THEN
+      EXECUTE format('DROP MATERIALIZED VIEW public.%I CASCADE', v);
+    ELSIF EXISTS (
+      SELECT 1 FROM pg_views WHERE schemaname = 'public' AND viewname = v
+    ) THEN
+      EXECUTE format('DROP VIEW public.%I CASCADE', v);
+    END IF;
+  END LOOP;
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- mv_product_performance  (base para ABC — criar primeiro)
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_product_performance AS
+
+CREATE MATERIALIZED VIEW mv_product_performance AS
 SELECT
   p.id                        AS product_id,
   p.name                      AS product_name,
@@ -53,12 +87,12 @@ LEFT JOIN sale_items si ON si.product_variation_id = pv.id
 LEFT JOIN sales s ON s.id = si.sale_id AND s.status NOT IN ('cancelled', 'returned')
 GROUP BY p.id, p.name, p.sku, p.category_id, p.supplier_id, p.base_cost, p.base_price, p.margin_pct;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_product_performance_pkey ON mv_product_performance(product_id);
+CREATE UNIQUE INDEX mv_product_performance_pkey ON mv_product_performance(product_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_abc_by_revenue
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_abc_by_revenue AS
+CREATE MATERIALIZED VIEW mv_abc_by_revenue AS
 WITH ranked AS (
   SELECT
     product_id,
@@ -88,17 +122,17 @@ SELECT
   END::abc_curve AS abc_class
 FROM pct;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_abc_by_revenue_pkey ON mv_abc_by_revenue(product_id);
+CREATE UNIQUE INDEX mv_abc_by_revenue_pkey ON mv_abc_by_revenue(product_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_abc_by_profit
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_abc_by_profit AS
+CREATE MATERIALIZED VIEW mv_abc_by_profit AS
 WITH ranked AS (
   SELECT
     product_id,
     total_gross_profit,
-    SUM(total_gross_profit) OVER ()                                                         AS grand_total,
+    SUM(total_gross_profit) OVER ()                                                          AS grand_total,
     SUM(total_gross_profit) OVER (ORDER BY total_gross_profit DESC ROWS UNBOUNDED PRECEDING) AS cumulative_profit
   FROM mv_product_performance
   WHERE total_gross_profit > 0
@@ -123,18 +157,18 @@ SELECT
   END::abc_curve AS abc_class
 FROM pct;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_abc_by_profit_pkey ON mv_abc_by_profit(product_id);
+CREATE UNIQUE INDEX mv_abc_by_profit_pkey ON mv_abc_by_profit(product_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_abc_by_volume
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_abc_by_volume AS
+CREATE MATERIALIZED VIEW mv_abc_by_volume AS
 WITH ranked AS (
   SELECT
     product_id,
     total_units_sold,
-    SUM(total_units_sold) OVER ()                                                         AS grand_total,
-    SUM(total_units_sold) OVER (ORDER BY total_units_sold DESC ROWS UNBOUNDED PRECEDING)  AS cumulative_units
+    SUM(total_units_sold) OVER ()                                                        AS grand_total,
+    SUM(total_units_sold) OVER (ORDER BY total_units_sold DESC ROWS UNBOUNDED PRECEDING) AS cumulative_units
   FROM mv_product_performance
   WHERE total_units_sold > 0
 ),
@@ -158,12 +192,12 @@ SELECT
   END::abc_curve AS abc_class
 FROM pct;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_abc_by_volume_pkey ON mv_abc_by_volume(product_id);
+CREATE UNIQUE INDEX mv_abc_by_volume_pkey ON mv_abc_by_volume(product_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_stock_status
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_stock_status AS
+CREATE MATERIALIZED VIEW mv_stock_status AS
 SELECT
   s.product_variation_id,
   p.id                              AS product_id,
@@ -185,12 +219,12 @@ FROM stock s
 JOIN product_variations pv ON pv.id = s.product_variation_id
 JOIN products p ON p.id = pv.product_id;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_stock_status_pkey ON mv_stock_status(product_variation_id);
+CREATE UNIQUE INDEX mv_stock_status_pkey ON mv_stock_status(product_variation_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_customer_rfm
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_customer_rfm AS
+CREATE MATERIALIZED VIEW mv_customer_rfm AS
 WITH base AS (
   SELECT
     c.id AS customer_id,
@@ -236,12 +270,12 @@ SELECT
   END::rfm_segment AS segment
 FROM scored;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_customer_rfm_pkey ON mv_customer_rfm(customer_id);
+CREATE UNIQUE INDEX mv_customer_rfm_pkey ON mv_customer_rfm(customer_id);
 
 -- -----------------------------------------------------------------------------
 -- mv_daily_sales_summary
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_daily_sales_summary AS
+CREATE MATERIALIZED VIEW mv_daily_sales_summary AS
 SELECT
   s.sale_date,
   COUNT(DISTINCT s.id)                                                   AS total_orders,
@@ -258,12 +292,12 @@ JOIN sale_items si ON si.sale_id = s.id
 WHERE s.status NOT IN ('cancelled', 'returned')
 GROUP BY s.sale_date;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_daily_sales_summary_pkey ON mv_daily_sales_summary(sale_date);
+CREATE UNIQUE INDEX mv_daily_sales_summary_pkey ON mv_daily_sales_summary(sale_date);
 
 -- -----------------------------------------------------------------------------
 -- mv_monthly_financial
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_monthly_financial AS
+CREATE MATERIALIZED VIEW mv_monthly_financial AS
 SELECT
   DATE_TRUNC('month', reference_date)::DATE   AS month,
   SUM(CASE WHEN type = 'income'  THEN amount ELSE 0 END) AS total_income,
@@ -283,12 +317,12 @@ SELECT
 FROM finance_entries
 GROUP BY DATE_TRUNC('month', reference_date);
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_monthly_financial_pkey ON mv_monthly_financial(month);
+CREATE UNIQUE INDEX mv_monthly_financial_pkey ON mv_monthly_financial(month);
 
 -- -----------------------------------------------------------------------------
 -- mv_color_performance
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_color_performance AS
+CREATE MATERIALIZED VIEW mv_color_performance AS
 SELECT
   vv.value                          AS color_name,
   COUNT(DISTINCT si.id)             AS total_items_sold,
@@ -306,16 +340,16 @@ JOIN variation_types vt ON vt.id = pva.variation_type_id AND vt.slug = 'cor'
 JOIN variation_values vv ON vv.id = pva.variation_value_id
 GROUP BY vv.value;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_color_performance_pkey ON mv_color_performance(color_name);
+CREATE UNIQUE INDEX mv_color_performance_pkey ON mv_color_performance(color_name);
 
 -- -----------------------------------------------------------------------------
 -- mv_supplier_performance
 -- -----------------------------------------------------------------------------
-CREATE MATERIALIZED VIEW IF NOT EXISTS mv_supplier_performance AS
+CREATE MATERIALIZED VIEW mv_supplier_performance AS
 SELECT
-  sup.id                            AS supplier_id,
-  sup.name                          AS supplier_name,
-  COUNT(DISTINCT sl.id)             AS total_lots,
+  sup.id                               AS supplier_id,
+  sup.name                             AS supplier_name,
+  COUNT(DISTINCT sl.id)                AS total_lots,
   COALESCE(SUM(sl.total_lot_cost), 0)  AS total_purchased_value,
   COALESCE(SUM(si.quantity), 0)        AS total_units_sold,
   COALESCE(SUM(si.total_price), 0)     AS total_revenue,
@@ -324,8 +358,8 @@ SELECT
     CASE WHEN COALESCE(SUM(si.total_price), 0) > 0
     THEN SUM(si.gross_profit) / SUM(si.total_price) * 100
     ELSE 0 END, 2
-  )                                 AS avg_margin_pct,
-  COUNT(DISTINCT p.id)              AS product_count
+  )                                    AS avg_margin_pct,
+  COUNT(DISTINCT p.id)                 AS product_count
 FROM suppliers sup
 JOIN stock_lots sl ON sl.supplier_id = sup.id
 JOIN product_variations pv ON pv.id = sl.product_variation_id
@@ -334,7 +368,7 @@ LEFT JOIN sale_items si ON si.product_variation_id = pv.id
 LEFT JOIN sales s ON s.id = si.sale_id AND s.status NOT IN ('cancelled', 'returned')
 GROUP BY sup.id, sup.name;
 
-CREATE UNIQUE INDEX IF NOT EXISTS mv_supplier_performance_pkey ON mv_supplier_performance(supplier_id);
+CREATE UNIQUE INDEX mv_supplier_performance_pkey ON mv_supplier_performance(supplier_id);
 
 -- -----------------------------------------------------------------------------
 -- Primeiro refresh (sem CONCURRENTLY — seguro para views recém-criadas)
@@ -352,9 +386,11 @@ REFRESH MATERIALIZED VIEW mv_color_performance;
 REFRESH MATERIALIZED VIEW mv_supplier_performance;
 
 -- -----------------------------------------------------------------------------
--- Garante que a função refresh_analytics_views() existe e usa CONCURRENTLY
--- (para refreshes periódicos futuros — todos os unique indexes já existem)
+-- Garante que refresh_analytics_views() existe e usa CONCURRENTLY
+-- (todos os unique indexes já existem após este script)
 -- -----------------------------------------------------------------------------
+DROP FUNCTION IF EXISTS refresh_analytics_views();
+
 CREATE OR REPLACE FUNCTION refresh_analytics_views()
 RETURNS JSON
 LANGUAGE plpgsql
