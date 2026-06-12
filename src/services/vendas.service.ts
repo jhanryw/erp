@@ -91,34 +91,20 @@ export async function validateStockForSale(items: SaleItem[], companyId: number 
     }
   }
 
-  // Buscar o Estoque Loja da empresa (fonte de verdade para vendas presenciais)
-  const { data: mainStore } = await admin
-    .from('stock_locations')
-    .select('id')
-    .eq('company_id', companyId ?? 0)
-    .eq('is_main_store', true)
-    .maybeSingle() as unknown as { data: { id: number } | null }
-
-  const mainStoreId = mainStore?.id ?? null
-
   for (const item of items) {
-    let available = 0
+    const { data: balances } = await admin
+      .from('stock_balances')
+      .select('quantity')
+      .eq('product_variation_id', item.product_variation_id) as unknown as {
+        data: { quantity: number }[] | null
+      }
 
-    if (mainStoreId != null) {
-      const { data: balance } = await admin
-        .from('stock_balances')
-        .select('quantity')
-        .eq('product_variation_id', item.product_variation_id)
-        .eq('stock_location_id', mainStoreId)
-        .maybeSingle() as unknown as { data: { quantity: number } | null }
-
-      available = balance?.quantity ?? 0
-    }
+    const available = (balances ?? []).reduce((sum, b) => sum + (b.quantity ?? 0), 0)
 
     if (available < item.quantity) {
       return failure(
-        `Produto sem saldo suficiente no Estoque Loja (variação #${item.product_variation_id}). ` +
-        `Disponível: ${available}, solicitado: ${item.quantity}. Transfira antes de vender.`,
+        `Estoque insuficiente para variação #${item.product_variation_id}. ` +
+        `Disponível: ${available}, solicitado: ${item.quantity}.`,
         400
       )
     }
