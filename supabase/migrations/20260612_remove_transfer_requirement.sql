@@ -70,9 +70,7 @@ BEGIN
   PERFORM set_config('app.stock_rpc', '1', true);
 
   -- ─── Empresa e data ──────────────────────────────────────────────────────────
-  SELECT p.company_id INTO v_company_id
-  FROM users u JOIN companies p ON p.id = u.company_id
-  WHERE u.id = p_system_user_id;
+  SELECT company_id INTO v_company_id FROM users WHERE id = p_system_user_id;
 
   IF v_company_id IS NULL THEN
     RAISE EXCEPTION 'Usuário não associado a empresa.' USING ERRCODE = 'P0001';
