@@ -72,7 +72,11 @@ export default function EstoqueAjustePage() {
         .order('id', { ascending: true }),
     ]).then(([products, locs]) => {
       setAllProducts(products.data ?? [])
-      setLocations(locs.data ?? [])
+      const locList: Location[] = locs.data ?? []
+      setLocations(locList)
+      // Pré-seleciona o local principal
+      const main = locList.find((l) => l.is_main_store) ?? locList[0]
+      if (main) setValue('stock_location_id', main.id)
     })
   }, [])
 
@@ -219,13 +223,12 @@ export default function EstoqueAjustePage() {
             {/* ── Local de Estoque ────────────────────────── */}
             <div className="space-y-1">
               <label className="text-sm font-medium text-text-primary">
-                Local de Estoque <span className="font-normal text-text-muted">(padrão: Estoque Loja)</span>
+                Local de Estoque
               </label>
               <select className={SELECT_CLASS} {...register('stock_location_id')}>
-                <option value="">Estoque Loja (padrão)</option>
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                    {loc.name}
                   </option>
                 ))}
               </select>
