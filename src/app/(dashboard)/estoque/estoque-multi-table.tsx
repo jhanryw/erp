@@ -168,9 +168,6 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                       </span>
                     ))}
                   </div>
-                  {item.needs_transfer && (
-                    <p className="text-xs text-warning mt-1">⚠ Tem estoque fora da Loja — transfira para vender</p>
-                  )}
                 </div>
                 <div className="flex flex-col items-end gap-2">
                   <div className="text-right">
@@ -179,16 +176,6 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                     </p>
                     <p className="text-[10px] text-text-muted leading-none">total</p>
                   </div>
-                  {locationCols.length > 1 && (
-                    <Button
-                      variant="outline"
-                      onClick={() => openTransfer(item)}
-                      className="h-7 px-2 text-xs"
-                    >
-                      <ArrowLeftRight className="w-3 h-3 mr-1" />
-                      Transferir
-                    </Button>
-                  )}
                 </div>
               </div>
             </div>
@@ -222,12 +209,9 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                 const balanceMap = new Map(item.balances_by_location.map((b) => [b.location_id, b.quantity]))
 
                 return (
-                  <TableRow key={item.product_variation_id} className={item.needs_transfer ? 'bg-warning/5' : ''}>
+                  <TableRow key={item.product_variation_id}>
                     <TableCell className="font-medium">
                       {item.product_name}
-                      {item.needs_transfer && (
-                        <span className="ml-2 text-[10px] font-normal text-warning">⚠ transfira</span>
-                      )}
                     </TableCell>
                     <TableCell>{item.cor ?? '—'}</TableCell>
                     <TableCell>{item.tamanho ?? '—'}</TableCell>
@@ -256,18 +240,6 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                       {item.last_entry_date ? formatDate(item.last_entry_date) : '—'}
                     </TableCell>
 
-                    {locationCols.length > 1 && (
-                      <TableCell>
-                        <Button
-                          variant="outline"
-                          onClick={() => openTransfer(item)}
-                          className="h-7 px-2 text-xs"
-                        >
-                          <ArrowLeftRight className="w-3 h-3 mr-1" />
-                          Transferir
-                        </Button>
-                      </TableCell>
-                    )}
                   </TableRow>
                 )
               })}
