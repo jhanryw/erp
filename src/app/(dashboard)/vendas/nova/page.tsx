@@ -384,7 +384,7 @@ export default function NovaVendaPage() {
           ...data,
           payment_method:  dominant.method,
           payments:        paymentsToSend,
-          cash_session_id: deliveryMode === 'pickup' && cashSession ? cashSession.id : null,
+          cash_session_id: cashSession ? cashSession.id : null,
         }),
       })
       const json = await res.json()
