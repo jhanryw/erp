@@ -152,7 +152,7 @@ export default function NovaVendaPage() {
         .select(`
           id, sku_variation, price_override, cost_override,
           products:product_id (id, name, sku, base_price, base_cost),
-          stock(quantity)
+          stock_balances(quantity)
         `)
         .limit(20)
 
@@ -164,9 +164,9 @@ export default function NovaVendaPage() {
 
       const { data } = await query
       return (data ?? []).filter((v: any) => {
-        const qty = Array.isArray(v.stock)
-          ? (v.stock[0]?.quantity ?? 0)
-          : (v.stock?.quantity ?? 0)
+        const qty = Array.isArray(v.stock_balances)
+          ? v.stock_balances.reduce((s: number, b: any) => s + (b.quantity ?? 0), 0)
+          : (v.stock_balances?.quantity ?? 0)
         return qty > 0
       }).slice(0, 8)
     },
@@ -538,9 +538,9 @@ export default function NovaVendaPage() {
                     <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-10 overflow-hidden">
                       {products.map((v: any) => {
                         const p = v.products
-                        const qty = Array.isArray(v.stock)
-                          ? (v.stock[0]?.quantity ?? 0)
-                          : (v.stock?.quantity ?? 0)
+                        const qty = Array.isArray(v.stock_balances)
+                          ? v.stock_balances.reduce((s: number, b: any) => s + (b.quantity ?? 0), 0)
+                          : (v.stock_balances?.quantity ?? 0)
                         return (
                           <button
                             key={v.id}
