@@ -255,11 +255,13 @@ BEGIN
       v_pmt_fee        := COALESCE((v_pmt->>'fee_amount')::numeric, ROUND(v_pmt_net * v_card_fee / 100, 2));
 
       INSERT INTO sale_payments (
-        sale_id, method, amount_tendered, change_amount, change_method,
+        sale_id, company_id, method,
+        amount_tendered, change_amount, change_method,
         net_amount, installments, card_brand, acquirer, fee_amount
       )
       VALUES (
-        v_sale_id, v_pmt_method, v_pmt_tendered, v_pmt_change,
+        v_sale_id, v_company_id, v_pmt_method,
+        v_pmt_tendered, v_pmt_change,
         v_pmt_change_mth::payment_method,
         v_pmt_net, v_pmt_install, v_pmt_brand, v_pmt_acquirer, v_pmt_fee
       );
