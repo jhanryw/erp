@@ -7,6 +7,7 @@ import {
   Package,
   DollarSign,
   Boxes,
+  ClipboardList,
 } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -154,6 +155,12 @@ export default async function EstoquePage({
         </Link>
         <Link href="/estoque/ajuste">
           <Button variant="outline">Ajuste de Estoque</Button>
+        </Link>
+        <Link href="/estoque/inventario">
+          <Button variant="outline">
+            <ClipboardList className="mr-2 h-4 w-4" />
+            Conferir Estoque
+          </Button>
         </Link>
         <Link href="/estoque/alertas">
           <Button variant="outline">

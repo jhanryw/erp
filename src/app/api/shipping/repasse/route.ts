@@ -13,7 +13,8 @@ export async function GET() {
 
   const admin = createAdminClient()
 
-  const { data, error } = await (admin as any)
+  // Busca shipments sem join a sales (order_id não segue convenção <table>_id)
+  const { data: shipments, error } = await (admin as any)
     .from('shipments')
     .select(`
       id,
@@ -30,10 +31,6 @@ export async function GET() {
       repasse_batch_id,
       repasse_finance_entry_id,
       created_at,
-      sales:order_id (
-        sale_number,
-        shipping_charged
-      ),
       customers:customer_id (
         name
       ),
@@ -53,11 +50,37 @@ export async function GET() {
     .eq('company_id', user.company_id)
     .eq('delivery_mode', 'delivery')
     .order('created_at', { ascending: false }) as unknown as {
-      data: unknown[] | null
+      data: Array<Record<string, unknown>> | null
       error: { message: string } | null
     }
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ shipments: data ?? [] })
+  const rows = shipments ?? []
+
+  // Busca separada para sale_number + shipping_charged usando os order_ids
+  const orderIds = [...new Set(rows.map(s => s.order_id).filter(Boolean))]
+
+  let salesMap: Record<number, { sale_number: string; shipping_charged: number }> = {}
+
+  if (orderIds.length > 0) {
+    const { data: salesData } = await (admin as any)
+      .from('sales')
+      .select('id, sale_number, shipping_charged')
+      .in('id', orderIds) as unknown as {
+        data: Array<{ id: number; sale_number: string; shipping_charged: number }> | null
+      }
+
+    for (const s of salesData ?? []) {
+      salesMap[s.id] = { sale_number: s.sale_number, shipping_charged: s.shipping_charged }
+    }
+  }
+
+  // Mescla dados de sales em cada shipment
+  const result = rows.map(s => ({
+    ...s,
+    sales: salesMap[s.order_id as number] ?? null,
+  }))
+
+  return NextResponse.json({ shipments: result })
 }
