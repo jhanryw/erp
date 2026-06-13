@@ -34,7 +34,8 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
     items: [
       { label: 'Vendas', href: '/vendas', icon: ShoppingCart },
       { label: 'Caixa',  href: '/caixa',  icon: Wallet },
-      { label: 'Envios', href: '/envios', icon: SendHorizonal },
+      { label: 'Envios',   href: '/envios',          icon: SendHorizonal },
+      { label: 'Repasses', href: '/envios/repasses', icon: Wallet },
       { label: 'Clientes', href: '/clientes', icon: Users },
       { label: 'Produtos', href: '/produtos', icon: Package },
       { label: 'Estoque', href: '/estoque', icon: Warehouse },
