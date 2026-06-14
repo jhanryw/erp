@@ -37,6 +37,7 @@ export default function NovaVendaPage() {
   // ── Produto ──────────────────────────────────────────────────────────────────
   const [productSearch, setProductSearch] = useState('')
   const [productNames, setProductNames] = useState<Record<number, string>>({})
+  const [productMeta, setProductMeta]   = useState<Record<number, { sku: string; cor?: string; tamanho?: string }>>({})
 
   // ── Cliente ──────────────────────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState('')
@@ -152,7 +153,11 @@ export default function NovaVendaPage() {
         .select(`
           id, sku_variation, price_override, cost_override,
           products:product_id (id, name, sku, base_price, base_cost),
-          stock_balances(quantity)
+          stock_balances(quantity),
+          product_variation_attributes (
+            variation_types:variation_type_id (slug),
+            variation_values:variation_value_id (value)
+          )
         `)
         .limit(20)
 
@@ -244,9 +249,20 @@ export default function NovaVendaPage() {
     const product = variation.products
     const price = variation.price_override ?? product.base_price
     const cost  = variation.cost_override  ?? product.base_cost
+
+    // Extrai cor e tamanho dos atributos
+    const attrs: Array<{ variation_types: { slug: string }; variation_values: { value: string } }> =
+      variation.product_variation_attributes ?? []
+    const cor     = attrs.find(a => a.variation_types?.slug === 'cor')?.variation_values?.value
+    const tamanho = attrs.find(a => a.variation_types?.slug === 'tamanho')?.variation_values?.value
+
     setProductNames((prev) => ({
       ...prev,
       [variation.id]: product?.name ?? `Variação #${variation.id}`,
+    }))
+    setProductMeta((prev) => ({
+      ...prev,
+      [variation.id]: { sku: variation.sku_variation, cor, tamanho },
     }))
     append({
       product_variation_id: variation.id,
@@ -578,6 +594,7 @@ export default function NovaVendaPage() {
                     {fields.map((field, i) => {
                       const varId = items[i]?.product_variation_id
                       const name  = productNames[varId] ?? `Variação #${varId}`
+                      const meta  = productMeta[varId]
                       const qty   = items[i]?.quantity ?? 1
                       const price = items[i]?.unit_price ?? 0
                       return (
@@ -585,6 +602,13 @@ export default function NovaVendaPage() {
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-semibold text-text-primary leading-snug truncate">{name}</p>
+                              {meta && (
+                                <p className="text-xs text-text-muted mt-0.5 flex flex-wrap gap-x-2">
+                                  {meta.tamanho && <span>Tam: <span className="font-medium text-text-secondary">{meta.tamanho}</span></span>}
+                                  {meta.cor     && <span>Cor: <span className="font-medium text-text-secondary">{meta.cor}</span></span>}
+                                  {meta.sku     && <span className="font-mono">{meta.sku}</span>}
+                                </p>
+                              )}
                               <p className="text-xs text-text-muted mt-0.5">{formatCurrency(price)} / unidade</p>
                             </div>
                             <button
