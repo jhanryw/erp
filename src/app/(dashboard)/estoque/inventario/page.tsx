@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic'
 
-import { useState, useMemo, useCallback, useTransition } from 'react'
+import { useState, useMemo, useCallback, useTransition, useRef, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
@@ -11,6 +11,7 @@ import {
   ArrowLeft, Search, Package, CheckCircle2,
   AlertTriangle, TrendingUp, TrendingDown, Minus,
   ClipboardList, RotateCcw, Save, ChevronDown, ChevronUp,
+  Scan, ScanLine, X,
 } from 'lucide-react'
 import { Button }   from '@/components/ui/button'
 import { Input }    from '@/components/ui/input'
@@ -31,8 +32,18 @@ interface StockItem {
 }
 
 interface CountState {
-  [pvid: number]: string  // valor digitado (string para suportar campo vazio)
+  [pvid: number]: string
 }
+
+type LastScan = {
+  pvid:    number
+  name:    string
+  tamanho: string | null
+  cor:     string | null
+  sku:     string
+  counted: number
+  at:      number
+} | { error: string; sku: string; at: number }
 
 type SummaryView = {
   positive: Array<StockItem & { delta: number; counted: number }>
@@ -47,14 +58,30 @@ type SummaryView = {
 export default function InventarioFisicoPage() {
   const supabase = createClient()
 
-  const [search,        setSearch]        = useState('')
-  const [counts,        setCounts]        = useState<CountState>({})
-  const [expanded,      setExpanded]      = useState<Set<number>>(new Set())
-  const [showSummary,   setShowSummary]   = useState(false)
-  const [saving,        startSaving]      = useTransition()
-  const [savedResults,  setSavedResults]  = useState<{
-    applied: number; errors: number
-  } | null>(null)
+  const [search,       setSearch]       = useState('')
+  const [counts,       setCounts]       = useState<CountState>({})
+  const [expanded,     setExpanded]     = useState<Set<number>>(new Set())
+  const [showSummary,  setShowSummary]  = useState(false)
+  const [saving,       startSaving]     = useTransition()
+  const [savedResults, setSavedResults] = useState<{ applied: number; errors: number } | null>(null)
+
+  // ── Modo leitor ────────────────────────────────────────────────────────────
+  const [scanMode,   setScanMode]   = useState(false)
+  const [scanInput,  setScanInput]  = useState('')
+  const [lastScan,   setLastScan]   = useState<LastScan | null>(null)
+  const scanRef = useRef<HTMLInputElement>(null)
+
+  // Foca o campo invisível sempre que o modo leitor está ativo
+  useEffect(() => {
+    if (scanMode) {
+      scanRef.current?.focus()
+    }
+  }, [scanMode])
+
+  // Quando o modo leitor está ativo, cliques na tela devolvem o foco ao campo
+  const refocusScan = useCallback(() => {
+    if (scanMode) scanRef.current?.focus()
+  }, [scanMode])
 
   // ── Carregar itens do estoque ──────────────────────────────────────────────
   const { data: items = [], isLoading } = useQuery<StockItem[]>({
@@ -62,9 +89,7 @@ export default function InventarioFisicoPage() {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from('vw_stock_live')
-        .select(
-          'product_variation_id, product_name, sku_variation, sku_parent, tamanho, cor, current_qty'
-        )
+        .select('product_variation_id, product_name, sku_variation, sku_parent, tamanho, cor, current_qty')
         .order('product_name')
         .order('tamanho')
         .order('cor')
@@ -74,6 +99,44 @@ export default function InventarioFisicoPage() {
     },
     staleTime: 30_000,
   })
+
+  // Índice rápido SKU → item
+  const skuIndex = useMemo(() => {
+    const map = new Map<string, StockItem>()
+    for (const item of items) {
+      if (item.sku_variation) map.set(item.sku_variation, item)
+    }
+    return map
+  }, [items])
+
+  // ── Processar bipagem ──────────────────────────────────────────────────────
+  const handleScan = useCallback((rawSku: string) => {
+    const sku = rawSku.trim()
+    if (!sku) return
+
+    const item = skuIndex.get(sku)
+    if (!item) {
+      setLastScan({ error: 'SKU não encontrado', sku, at: Date.now() })
+      toast.error(`SKU não encontrado: ${sku}`, { duration: 2500 })
+      return
+    }
+
+    const pvid = item.product_variation_id
+    setCounts((prev) => {
+      const current = parseInt(prev[pvid] ?? String(item.current_qty), 10)
+      const next    = (isNaN(current) ? 0 : current) + 1
+      setLastScan({
+        pvid,
+        name:    item.product_name,
+        tamanho: item.tamanho,
+        cor:     item.cor,
+        sku,
+        counted: next,
+        at:      Date.now(),
+      })
+      return { ...prev, [pvid]: String(next) }
+    })
+  }, [skuIndex])
 
   // ── Filtro de busca ────────────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -109,6 +172,7 @@ export default function InventarioFisicoPage() {
       next.has(pvid) ? next.delete(pvid) : next.add(pvid)
       return next
     })
+    if (scanMode) setTimeout(() => scanRef.current?.focus(), 50)
   }
 
   const resetItem = (pvid: number) => {
@@ -116,7 +180,7 @@ export default function InventarioFisicoPage() {
     setExpanded((prev) => { const n = new Set(prev); n.delete(pvid); return n })
   }
 
-  // ── Resumo antes de salvar ─────────────────────────────────────────────────
+  // ── Resumo ─────────────────────────────────────────────────────────────────
   const summary = useMemo<SummaryView>(() => {
     const positive: SummaryView['positive'] = []
     const negative: SummaryView['negative'] = []
@@ -129,15 +193,9 @@ export default function InventarioFisicoPage() {
       if (counted === null) continue
       total_counted++
       const delta = counted - item.current_qty
-      if (delta > 0) {
-        positive.push({ ...item, delta, counted })
-        total_adjusted++
-      } else if (delta < 0) {
-        negative.push({ ...item, delta, counted })
-        total_adjusted++
-      } else {
-        unchanged++
-      }
+      if (delta > 0)      { positive.push({ ...item, delta, counted }); total_adjusted++ }
+      else if (delta < 0) { negative.push({ ...item, delta, counted }); total_adjusted++ }
+      else                 { unchanged++ }
     }
 
     positive.sort((a, b) => b.delta - a.delta)
@@ -191,14 +249,10 @@ export default function InventarioFisicoPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [items, counts])
 
-  // ── Contagem de itens tocados ──────────────────────────────────────────────
-  const touchedCount = Object.keys(counts).filter(
-    (k) => counts[Number(k)] !== ''
-  ).length
-
+  const touchedCount = Object.keys(counts).filter((k) => counts[Number(k)] !== '').length
   const deltaCount   = summary.positive.length + summary.negative.length
 
-  // ─── Render ───────────────────────────────────────────────────────────────
+  // ─── Tela de sucesso ───────────────────────────────────────────────────────
 
   if (savedResults) {
     return (
@@ -223,8 +277,39 @@ export default function InventarioFisicoPage() {
     )
   }
 
+  // ─── Render principal ──────────────────────────────────────────────────────
+
   return (
-    <div className="min-h-screen bg-bg-base pb-32">
+    <div className="min-h-screen bg-bg-base pb-32" onClick={refocusScan}>
+
+      {/* Campo invisível para captura do leitor USB */}
+      <input
+        ref={scanRef}
+        value={scanInput}
+        onChange={(e) => setScanInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            handleScan(scanInput)
+            setScanInput('')
+            e.preventDefault()
+          }
+        }}
+        onBlur={() => {
+          // Mantém o foco se o modo leitor estiver ativo e o foco não foi para outro input
+          if (scanMode) {
+            setTimeout(() => {
+              const active = document.activeElement
+              const isOtherInput = active && active !== scanRef.current &&
+                (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')
+              if (!isOtherInput) scanRef.current?.focus()
+            }, 100)
+          }
+        }}
+        aria-hidden="true"
+        tabIndex={scanMode ? 0 : -1}
+        className="sr-only"
+      />
+
       {/* ── Header ── */}
       <div className="sticky top-0 z-10 bg-bg-base border-b border-border">
         <div className="flex items-center gap-3 px-4 py-3">
@@ -236,15 +321,42 @@ export default function InventarioFisicoPage() {
               Inventário Físico
             </h1>
             <p className="text-xs text-text-secondary">
-              {touchedCount > 0
+              {scanMode
+                ? 'Modo leitor ativo — bipe os produtos'
+                : touchedCount > 0
                 ? `${touchedCount} item${touchedCount !== 1 ? 'ns' : ''} contado${touchedCount !== 1 ? 's' : ''} · ${deltaCount} ajuste${deltaCount !== 1 ? 's' : ''}`
                 : 'Toque em um produto para registrar a contagem'}
             </p>
           </div>
+
+          {/* Botão Modo Leitor */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setScanMode((v) => !v)
+              setScanInput('')
+              setLastScan(null)
+            }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+              scanMode
+                ? 'bg-brand text-white'
+                : 'bg-bg-elevated text-text-secondary hover:text-text-primary'
+            }`}
+            title={scanMode ? 'Desativar modo leitor' : 'Ativar modo leitor (scanner USB)'}
+          >
+            <Scan className="w-4 h-4" />
+            {scanMode ? 'Leitor ON' : 'Leitor'}
+          </button>
+
           {touchedCount > 0 && (
             <button
               type="button"
-              onClick={() => { setCounts({}); setExpanded(new Set()) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                setCounts({})
+                setExpanded(new Set())
+              }}
               className="p-2 text-text-secondary hover:text-text-primary"
               title="Limpar todas as contagens"
             >
@@ -253,7 +365,30 @@ export default function InventarioFisicoPage() {
           )}
         </div>
 
-        {/* Busca */}
+        {/* Banner modo leitor + último bip */}
+        {scanMode && (
+          <div className="mx-4 mb-3 rounded-xl border border-brand/30 bg-brand/5 px-4 py-3">
+            <div className="flex items-center gap-2 mb-1">
+              <ScanLine className="w-4 h-4 text-brand animate-pulse" />
+              <span className="text-sm font-medium text-brand">Aguardando leitura…</span>
+            </div>
+            {lastScan && (
+              <div className={`text-xs mt-1 ${
+                'error' in lastScan ? 'text-error' : 'text-text-secondary'
+              }`}>
+                {'error' in lastScan
+                  ? `SKU "${lastScan.sku}" não encontrado`
+                  : `✓ ${lastScan.name}${lastScan.tamanho ? ` · ${lastScan.tamanho}` : ''}${lastScan.cor ? ` · ${lastScan.cor}` : ''} — contagem: ${lastScan.counted}`
+                }
+              </div>
+            )}
+            <p className="text-[11px] text-text-tertiary mt-1">
+              Toque em "Leitor ON" para pausar · edição manual continua disponível
+            </p>
+          </div>
+        )}
+
+        {/* Campo de busca */}
         <div className="px-4 pb-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
@@ -261,6 +396,7 @@ export default function InventarioFisicoPage() {
               placeholder="Buscar por nome, SKU, cor ou tamanho…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onFocus={() => { /* campo de busca pode ficar em foco; o scanner ainda funciona via onBlur do scanRef */ }}
               className="pl-9"
             />
           </div>
@@ -282,11 +418,13 @@ export default function InventarioFisicoPage() {
         )}
 
         {filtered.map((item) => {
-          const pvid    = item.product_variation_id
-          const counted = getCountedQty(pvid)
-          const delta   = getDelta(item)
-          const isOpen  = expanded.has(pvid)
+          const pvid      = item.product_variation_id
+          const counted   = getCountedQty(pvid)
+          const delta     = getDelta(item)
+          const isOpen    = expanded.has(pvid)
           const isTouched = counts[pvid] !== undefined
+
+          const isLastScanned = lastScan && !('error' in lastScan) && lastScan.pvid === pvid
 
           const deltaColor =
             delta === null ? '' :
@@ -297,7 +435,9 @@ export default function InventarioFisicoPage() {
             <Card
               key={pvid}
               className={`border transition-colors ${
-                isTouched && delta !== 0
+                isLastScanned
+                  ? 'border-brand bg-brand/10'
+                  : isTouched && delta !== 0
                   ? 'border-brand/40 bg-brand/5'
                   : isTouched
                   ? 'border-success/30 bg-success/5'
@@ -308,7 +448,7 @@ export default function InventarioFisicoPage() {
               <button
                 type="button"
                 className="w-full text-left"
-                onClick={() => toggleExpanded(pvid)}
+                onClick={(e) => { e.stopPropagation(); toggleExpanded(pvid) }}
               >
                 <CardContent className="p-4">
                   <div className="flex items-start gap-3">
@@ -335,6 +475,11 @@ export default function InventarioFisicoPage() {
                            delta! > 0 ? `+${delta} ↑` : `${delta} ↓`}
                         </div>
                       )}
+                      {counted !== null && (
+                        <div className="text-xs text-brand font-semibold">
+                          {counted} contado
+                        </div>
+                      )}
                     </div>
 
                     <div className="shrink-0 text-text-tertiary">
@@ -344,7 +489,7 @@ export default function InventarioFisicoPage() {
                 </CardContent>
               </button>
 
-              {/* Painel de contagem */}
+              {/* Painel de contagem manual */}
               {isOpen && (
                 <div className="px-4 pb-4 border-t border-border/50 pt-3">
                   <div className="grid grid-cols-2 gap-3 mb-3">
@@ -365,10 +510,41 @@ export default function InventarioFisicoPage() {
                         onChange={(e) =>
                           setCounts((prev) => ({ ...prev, [pvid]: e.target.value }))
                         }
+                        onClick={(e) => e.stopPropagation()}
                         placeholder="0"
                         className="w-full text-2xl font-bold text-center bg-transparent outline-none text-text-primary mt-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                       />
                     </div>
+                  </div>
+
+                  {/* Botões +1 / -1 para ajuste rápido */}
+                  <div className="flex gap-2 mb-3">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setCounts((prev) => {
+                          const cur = parseInt(prev[pvid] ?? String(item.current_qty), 10)
+                          return { ...prev, [pvid]: String(Math.max(0, (isNaN(cur) ? 0 : cur) - 1)) }
+                        })
+                      }}
+                      className="flex-1 py-2 rounded-lg bg-bg-hover text-text-secondary font-bold text-lg hover:bg-error/10 hover:text-error transition-colors"
+                    >
+                      −
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setCounts((prev) => {
+                          const cur = parseInt(prev[pvid] ?? String(item.current_qty), 10)
+                          return { ...prev, [pvid]: String((isNaN(cur) ? 0 : cur) + 1) }
+                        })
+                      }}
+                      className="flex-1 py-2 rounded-lg bg-bg-hover text-text-secondary font-bold text-lg hover:bg-success/10 hover:text-success transition-colors"
+                    >
+                      +
+                    </button>
                   </div>
 
                   {/* Delta calculado */}
@@ -394,14 +570,14 @@ export default function InventarioFisicoPage() {
                       size="sm"
                       variant="ghost"
                       className="flex-1 text-text-secondary"
-                      onClick={() => resetItem(pvid)}
+                      onClick={(e) => { e.stopPropagation(); resetItem(pvid) }}
                     >
                       Limpar
                     </Button>
                     <Button
                       size="sm"
                       className="flex-1"
-                      onClick={() => toggleExpanded(pvid)}
+                      onClick={(e) => { e.stopPropagation(); toggleExpanded(pvid) }}
                     >
                       Confirmar
                     </Button>
@@ -417,7 +593,6 @@ export default function InventarioFisicoPage() {
       {touchedCount > 0 && (
         <div className="fixed bottom-0 left-0 right-0 z-20 bg-bg-base border-t border-border p-4 safe-area-bottom">
           <div className="max-w-2xl mx-auto space-y-2">
-            {/* Mini-resumo */}
             <div className="grid grid-cols-3 gap-2 text-center text-xs">
               <div>
                 <span className="text-text-secondary">Contados</span>
@@ -437,7 +612,7 @@ export default function InventarioFisicoPage() {
               <Button
                 variant="outline"
                 className="flex-1"
-                onClick={() => setShowSummary(true)}
+                onClick={(e) => { e.stopPropagation(); setShowSummary(true) }}
               >
                 <ClipboardList className="w-4 h-4 mr-2" />
                 Ver resumo
@@ -445,7 +620,7 @@ export default function InventarioFisicoPage() {
               <Button
                 className="flex-1"
                 disabled={deltaCount === 0 || saving}
-                onClick={handleSave}
+                onClick={(e) => { e.stopPropagation(); handleSave() }}
               >
                 <Save className="w-4 h-4 mr-2" />
                 {saving ? 'Salvando…' : `Salvar ${deltaCount} ajuste${deltaCount !== 1 ? 's' : ''}`}
@@ -477,11 +652,10 @@ export default function InventarioFisicoPage() {
             </div>
 
             <div className="p-5 space-y-5">
-              {/* Totais */}
               <div className="grid grid-cols-2 gap-3">
                 {[
-                  { label: 'Itens contados',  value: summary.total_counted,  color: 'text-text-primary' },
-                  { label: 'Com ajuste',       value: summary.total_adjusted, color: 'text-brand' },
+                  { label: 'Itens contados',  value: summary.total_counted,   color: 'text-text-primary' },
+                  { label: 'Com ajuste',       value: summary.total_adjusted,  color: 'text-brand' },
                   { label: 'Ajustes +',        value: summary.positive.length, color: 'text-success' },
                   { label: 'Ajustes −',        value: summary.negative.length, color: 'text-error' },
                   { label: 'Sem diferença',    value: summary.unchanged,       color: 'text-text-secondary' },
@@ -493,7 +667,6 @@ export default function InventarioFisicoPage() {
                 ))}
               </div>
 
-              {/* Maiores diferenças positivas */}
               {summary.positive.length > 0 && (
                 <div>
                   <h3 className="text-sm font-medium text-success mb-2 flex items-center gap-1.5">
@@ -519,7 +692,6 @@ export default function InventarioFisicoPage() {
                 </div>
               )}
 
-              {/* Maiores diferenças negativas */}
               {summary.negative.length > 0 && (
                 <div>
                   <h3 className="text-sm font-medium text-error mb-2 flex items-center gap-1.5">
@@ -545,7 +717,6 @@ export default function InventarioFisicoPage() {
                 </div>
               )}
 
-              {/* Botão de salvar dentro do modal */}
               <Button
                 className="w-full"
                 size="lg"
