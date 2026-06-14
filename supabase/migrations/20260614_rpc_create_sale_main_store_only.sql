@@ -2,33 +2,97 @@
 -- 20260614_rpc_create_sale_main_store_only.sql
 --
 -- PARTE 1 — Corrige vw_stock_live_multi
---   PROBLEMA: migration 20260610 usou pv.size/pv.color que não existem no schema.
---   CORREÇÃO:  lê tamanho/cor via product_variation_attributes (igual ao fix de
---              vw_stock_live em 20260612_fix_vw_stock_live_balances.sql).
---   ADIÇÃO:    coluna total_stock_value_at_price (usada nos stat cards do /estoque).
+--   PROBLEMA: versão anterior mesclava JOIN de stock_balances com
+--             product_variation_attributes na mesma agregação, multiplicando
+--             SUM(quantity) pelo número de atributos por variação.
+--   CORREÇÃO: dois CTEs separados — stock_summary (saldos) e attr_summary
+--             (cor/tamanho) — unidos apenas no SELECT final. Nenhum cross-join.
+--   ADIÇÃO:   coluna total_stock_value_at_price (stat cards do /estoque).
 --
 -- PARTE 2 — Reverte rpc_create_sale para Estoque Loja exclusivo
---   CONTEXTO: migration 20260612_remove_transfer_requirement.sql adicionou
---             fallback: se não havia saldo no Estoque Loja, debitava de qualquer
---             local ativo com saldo suficiente.
---   REVERSÃO: venda presencial volta a exigir saldo no Estoque Loja.
---             Se não tiver saldo lá, bloqueia com mensagem clara.
---   NÃO ALTERA: rpc_decrease_online_sale_stock (venda online continua
---               consumindo por prioridade de todos os locais ativos).
+--   CONTEXTO: 20260612_remove_transfer_requirement.sql adicionou fallback para
+--             qualquer local ativo com saldo ao vender presencialmente.
+--   REVERSÃO: venda presencial exige saldo no Estoque Loja. Se não tiver,
+--             bloqueia com "Produto sem saldo no Estoque Loja. Transfira antes
+--             de vender."
+--   NÃO ALTERA: rpc_decrease_online_sale_stock, rpc_transfer_stock,
+--               rpc_stock_adjust, rpc_stock_entry, fn_main_store_id,
+--               stock_balances (nenhuma linha inserida/alterada), Nuvemshop.
 --
--- ROLLBACK:
---   Para reverter PARTE 2: reaplicar 20260612_remove_transfer_requirement.sql
---   Para reverter PARTE 1: DROP VIEW + recriar sem a correção (não recomendado)
+-- VALIDAÇÃO DA VIEW (rodar no SQL Editor após aplicar):
+--   SELECT 'stock_balances direto' AS fonte, SUM(quantity) AS total_unidades
+--   FROM stock_balances
+--   UNION ALL
+--   SELECT 'vw_stock_live_multi' AS fonte, SUM(total_qty) AS total_unidades
+--   FROM vw_stock_live_multi;
+--   -- Esperado: os dois totais idênticos.
+--
+-- ROLLBACK PARTE 1: DROP VIEW + recriar com definição de 20260610 (pv.size/pv.color)
+-- ROLLBACK PARTE 2: reaplicar 20260612_remove_transfer_requirement.sql
 -- =============================================================================
 
 
 -- ═══════════════════════════════════════════════════════════════════════════════
--- PARTE 1 — vw_stock_live_multi corrigida
+-- PARTE 1 — vw_stock_live_multi corrigida (CTEs separados, sem multiplicação)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 DROP VIEW IF EXISTS public.vw_stock_live_multi CASCADE;
 
 CREATE VIEW public.vw_stock_live_multi AS
+WITH
+
+-- CTE 1: saldos por variação — sem qualquer join a tabelas de atributos
+stock_summary AS (
+  SELECT
+    sb.product_variation_id,
+
+    -- Soma de todos os locais ativos
+    COALESCE(SUM(sb.quantity), 0)::int                                        AS total_qty,
+
+    -- Saldo só no Estoque Loja (para bloqueio de venda presencial)
+    COALESCE(
+      MAX(sb.quantity) FILTER (WHERE loc.is_main_store = true),
+      0
+    )::int                                                                    AS main_store_qty,
+
+    -- Valor em custo: soma de (qty × avg_cost) em todos os locais ativos
+    ROUND(COALESCE(SUM(sb.quantity * sb.avg_cost), 0), 2)                    AS total_stock_value_at_cost,
+
+    -- Saldos por local (JSON ordenado por priority) — sem atributos aqui
+    jsonb_agg(
+      jsonb_build_object(
+        'location_id',   loc.id,
+        'location_name', loc.name,
+        'slug',          loc.slug,
+        'is_main_store', loc.is_main_store,
+        'priority',      loc.priority,
+        'quantity',      COALESCE(sb.quantity, 0)
+      )
+      ORDER BY loc.priority ASC, loc.id ASC
+    )                                                                         AS balances_by_location
+
+  FROM stock_balances sb
+  JOIN stock_locations loc
+    ON loc.id     = sb.stock_location_id
+   AND loc.active = true
+
+  GROUP BY sb.product_variation_id
+),
+
+-- CTE 2: atributos por variação — sem qualquer join a stock_balances
+attr_summary AS (
+  SELECT
+    pva.product_variation_id,
+    MAX(vv.value) FILTER (WHERE vt.slug = 'cor')     AS cor,
+    MAX(vv.value) FILTER (WHERE vt.slug = 'tamanho') AS tamanho
+  FROM product_variation_attributes pva
+  JOIN variation_types  vt ON vt.id = pva.variation_type_id
+  JOIN variation_values vv ON vv.id = pva.variation_value_id
+  GROUP BY pva.product_variation_id
+)
+
+-- SELECT final: une os dois CTEs via product_variations + products
+-- Nenhum cross-join possível: stock_summary e attr_summary têm chave pv.id
 SELECT
   pv.id                                                                       AS product_variation_id,
   p.id                                                                        AS product_id,
@@ -37,90 +101,66 @@ SELECT
   p.sku                                                                       AS sku_parent,
   p.company_id,
 
-  -- Cor e tamanho via product_variation_attributes (pv.color/pv.size não existem)
-  MAX(vv.value) FILTER (WHERE vt.slug = 'cor')                               AS cor,
-  MAX(vv.value) FILTER (WHERE vt.slug = 'tamanho')                           AS tamanho,
+  -- Atributos (do CTE separado — não influi nas agregações de saldo)
+  attrs.cor,
+  attrs.tamanho,
 
-  -- Saldo total em todos os locais ativos
-  COALESCE(SUM(COALESCE(sb.quantity, 0)), 0)::int                            AS total_qty,
+  -- Saldos (do CTE separado — sem contaminação de atributos)
+  COALESCE(ss.total_qty, 0)::int                                              AS total_qty,
+  COALESCE(ss.main_store_qty, 0)::int                                         AS main_store_qty,
 
-  -- Saldo apenas no Estoque Loja (para bloqueio de venda presencial)
-  COALESCE(
-    MAX(CASE WHEN loc.is_main_store = true THEN COALESCE(sb.quantity, 0) ELSE 0 END),
-    0
-  )::int                                                                      AS main_store_qty,
-
-  -- Alerta: tem estoque mas nenhum no Estoque Loja → precisa transferir antes de vender
+  -- Alerta: tem estoque total mas nada no Estoque Loja → precisa transferir
   (
-    COALESCE(SUM(COALESCE(sb.quantity, 0)), 0) > 0
-    AND COALESCE(
-      MAX(CASE WHEN loc.is_main_store = true THEN COALESCE(sb.quantity, 0) ELSE 0 END),
-      0
-    ) = 0
+    COALESCE(ss.total_qty, 0) > 0
+    AND COALESCE(ss.main_store_qty, 0) = 0
   )                                                                           AS needs_transfer,
 
-  -- Valor em custo: soma de (qty × avg_cost) em todos os locais
-  ROUND(
-    SUM(COALESCE(sb.quantity, 0) * COALESCE(sb.avg_cost, 0)),
-    2
-  )                                                                           AS total_stock_value_at_cost,
+  COALESCE(ss.total_stock_value_at_cost, 0)                                  AS total_stock_value_at_cost,
 
-  -- Valor em venda: soma de (qty × preço de venda) em todos os locais
+  -- Valor em venda: calculado aqui (price não vem do stock_balances)
   ROUND(
-    SUM(COALESCE(sb.quantity, 0) * COALESCE(pv.price_override, p.base_price)),
+    COALESCE(ss.total_qty, 0) * COALESCE(pv.price_override, p.base_price),
     2
   )                                                                           AS total_stock_value_at_price,
 
-  -- Última entrada de lote (para exibir data de reposição)
+  -- Última entrada de lote
   (
     SELECT MAX(sl2.entry_date)
     FROM stock_lots sl2
     WHERE sl2.product_variation_id = pv.id
   )                                                                           AS last_entry_date,
 
-  -- Saldos por local: array JSON ordenado por priority para a tabela multi
-  jsonb_agg(
-    jsonb_build_object(
-      'location_id',   loc.id,
-      'location_name', loc.name,
-      'slug',          loc.slug,
-      'is_main_store', loc.is_main_store,
-      'priority',      loc.priority,
-      'quantity',      COALESCE(sb.quantity, 0)
-    )
-    ORDER BY loc.priority ASC, loc.id ASC
-  )                                                                           AS balances_by_location
+  COALESCE(ss.balances_by_location, '[]'::jsonb)                             AS balances_by_location
 
 FROM product_variations pv
-JOIN products           p    ON p.id          = pv.product_id
-JOIN stock_locations    loc  ON loc.company_id = p.company_id AND loc.active = true
-LEFT JOIN stock_balances     sb  ON sb.product_variation_id = pv.id
-                                AND sb.stock_location_id    = loc.id
-LEFT JOIN product_variation_attributes pva ON pva.product_variation_id = pv.id
-LEFT JOIN variation_types  vt ON vt.id = pva.variation_type_id
-LEFT JOIN variation_values vv ON vv.id = pva.variation_value_id
-
-GROUP BY pv.id, p.id, p.name, pv.sku_variation, p.sku, p.company_id,
-         pv.price_override, p.base_price;
+JOIN products           p     ON p.id  = pv.product_id
+-- stock_summary: LEFT JOIN porque variação pode não ter linha em stock_balances ainda
+LEFT JOIN stock_summary ss    ON ss.product_variation_id = pv.id
+-- attr_summary: LEFT JOIN porque variação pode não ter atributos
+LEFT JOIN attr_summary  attrs ON attrs.product_variation_id = pv.id;
 
 GRANT SELECT ON public.vw_stock_live_multi TO authenticated, service_role;
 
 COMMENT ON VIEW public.vw_stock_live_multi IS
-  'Saldo de estoque por variação agregando todos os locais ativos. '
-  'needs_transfer=true indica produto com estoque fora do Estoque Loja.';
+  'Saldo de estoque por variação, todos os locais ativos. '
+  'CTEs separados para saldos e atributos — sem multiplicação de linhas. '
+  'needs_transfer=true: produto com estoque fora do Estoque Loja.';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- PARTE 2 — rpc_create_sale: Estoque Loja exclusivo para vendas presenciais
 --
--- ÚNICA MUDANÇA vs 20260612_remove_transfer_requirement.sql:
---   1. Pre-lock restrito ao Estoque Loja (evita lock desnecessário em todos locais)
---   2. Verificação de saldo: apenas stock_balances WHERE stock_location_id = v_main_store_id
---   3. Débito: sempre em v_main_store_id (sem fallback para locais secundários)
---   4. Mensagem de erro clara: "Transfira antes de vender."
+-- DIFERENÇAS vs 20260612_remove_transfer_requirement.sql:
+--   1. Pré-lock restrito ao Estoque Loja (stock_location_id = v_main_store_id)
+--   2. Verificação de saldo: apenas stock_balances no Estoque Loja
+--   3. Débito: sempre em v_main_store_id, sem fallback
+--   4. Mensagem de erro: "Transfira antes de vender."
+--   Todo o resto (pagamentos, finance entries, cashback, caixa) é idêntico
+--   à versão de 20260612.
 --
--- NÃO ALTERADO: rpc_decrease_online_sale_stock, fn_main_store_id,
---   rpc_transfer_stock, rpc_stock_adjust, rpc_stock_entry, Nuvemshop sync.
+-- NÃO ALTERADO: rpc_decrease_online_sale_stock (online continua multilocal),
+--   fn_main_store_id, rpc_transfer_stock, rpc_stock_adjust, rpc_stock_entry,
+--   stock_balances (nenhum INSERT/UPDATE nesta migration).
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.rpc_create_sale(
@@ -238,7 +278,6 @@ BEGIN
   END IF;
 
   -- ─── Pré-lock anti-deadlock: apenas Estoque Loja, em ordem de pvid ───────────
-  -- (lock restrito ao local que será debitado — evita travar locais secundários)
   FOR v_pvid IN
     SELECT DISTINCT (value->>'product_variation_id')::int AS pvid
     FROM jsonb_array_elements(p_items) ORDER BY pvid
@@ -281,7 +320,7 @@ BEGIN
     )
     VALUES (v_sale_id, v_pvid, v_qty, v_unit_price, v_unit_cost, v_discount, v_item_total);
 
-    -- Verificar saldo no Estoque Loja — única fonte permitida para venda presencial
+    -- Verificar saldo no Estoque Loja — única fonte para venda presencial
     SELECT COALESCE(quantity, 0) INTO v_current_qty
     FROM stock_balances
     WHERE product_variation_id = v_pvid
@@ -377,4 +416,13 @@ GRANT EXECUTE ON FUNCTION public.rpc_create_sale(
 
 -- =============================================================================
 -- FIM — 20260614_rpc_create_sale_main_store_only.sql
+-- O que esta migration altera:
+--   ✅ vw_stock_live_multi (DROP + CREATE corrigido)
+--   ✅ rpc_create_sale (CREATE OR REPLACE — 14 parâmetros)
+--   ❌ stock_balances — nenhuma linha inserida/alterada
+--   ❌ stock_locations — não tocado
+--   ❌ rpc_decrease_online_sale_stock — não tocado
+--   ❌ rpc_transfer_stock — não tocado
+--   ❌ fn_main_store_id — não tocado
+--   ❌ Nuvemshop sync — não tocado
 -- =============================================================================
