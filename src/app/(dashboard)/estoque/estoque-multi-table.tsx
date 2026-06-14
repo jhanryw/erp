@@ -176,6 +176,16 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                     </p>
                     <p className="text-[10px] text-text-muted leading-none">total</p>
                   </div>
+                  {locationCols.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => openTransfer(item)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-text-muted hover:text-brand hover:bg-brand/8 transition-colors"
+                    >
+                      <ArrowLeftRight className="w-3 h-3" />
+                      Transferir
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -239,6 +249,20 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                     <TableCell>
                       {item.last_entry_date ? formatDate(item.last_entry_date) : '—'}
                     </TableCell>
+
+                    {locationCols.length > 1 && (
+                      <TableCell>
+                        <button
+                          type="button"
+                          onClick={() => openTransfer(item)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-text-secondary hover:text-brand hover:bg-brand/8 transition-colors"
+                          title="Transferir entre locais"
+                        >
+                          <ArrowLeftRight className="w-3.5 h-3.5" />
+                          Transferir
+                        </button>
+                      </TableCell>
+                    )}
 
                   </TableRow>
                 )
