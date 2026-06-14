@@ -25,7 +25,7 @@
 --   UNION ALL
 --   SELECT 'vw_stock_live_multi' AS fonte, SUM(total_qty) AS total_unidades
 --   FROM vw_stock_live_multi;
---   -- Esperado: os dois totais idênticos.
+--   -- Esperado: os dois totais idênticos .
 --
 -- ROLLBACK PARTE 1: DROP VIEW + recriar com definição de 20260610 (pv.size/pv.color)
 -- ROLLBACK PARTE 2: reaplicar 20260612_remove_transfer_requirement.sql
