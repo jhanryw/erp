@@ -13,7 +13,8 @@ import { formatCurrency } from '@/lib/utils/currency'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type AttrValue = { id: number; value: string }
+type AttrValue    = { id: number; value: string }
+type LocationMeta = { id: number; name: string; is_main_store: boolean }
 
 type VariationAttr = {
   variation_type_id: number
@@ -35,13 +36,15 @@ export default function EstoqueEntradaMatrizPage() {
   const supabase = createClient()
 
   // ── Dados base ──────────────────────────────────────────────────────────────
-  const [products, setProducts] = useState<{ id: number; name: string; sku: string }[]>([])
+  const [products, setProducts]   = useState<{ id: number; name: string; sku: string }[]>([])
   const [suppliers, setSuppliers] = useState<{ id: number; name: string }[]>([])
+  const [locations, setLocations] = useState<LocationMeta[]>([])
   const [variations, setVariations] = useState<Variation[]>([])
   const [selectedProductId, setSelectedProductId] = useState<number | null>(null)
   const [loadingVariations, setLoadingVariations] = useState(false)
 
   // ── Campos comuns ───────────────────────────────────────────────────────────
+  const [locationId, setLocationId] = useState<number | null>(null)
   const [entryType, setEntryType] = useState<'purchase' | 'own_production'>('purchase')
   const [supplierId, setSupplierId] = useState<number | null>(null)
   const [unitCost, setUnitCost] = useState<number>(0)
@@ -60,9 +63,16 @@ export default function EstoqueEntradaMatrizPage() {
     Promise.all([
       supabase.from('products').select('id, name, sku').eq('active', true).order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
-    ]).then(([prods, supps]) => {
+      (supabase as any)
+        .from('stock_locations')
+        .select('id, name, is_main_store')
+        .eq('active', true)
+        .order('is_main_store', { ascending: false })
+        .order('priority', { ascending: true }),
+    ]).then(([prods, supps, locs]) => {
       setProducts(prods.data ?? [])
       setSuppliers(supps.data ?? [])
+      setLocations((locs.data ?? []) as LocationMeta[])
     })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -184,6 +194,7 @@ export default function EstoqueEntradaMatrizPage() {
           tax_cost_total: taxTotal,
           entry_date: entryDate,
           notes: notes || null,
+          stock_location_id: locationId,
         }),
       })
 
@@ -252,6 +263,22 @@ export default function EstoqueEntradaMatrizPage() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
+              <label className="label-base">Local de Destino *</label>
+              <select
+                className="input-base"
+                value={locationId ?? ''}
+                onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Estoque Loja (padrão)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
               <label className="label-base">Produto *</label>
               <select
                 className="input-base"
@@ -267,36 +294,36 @@ export default function EstoqueEntradaMatrizPage() {
                 ))}
               </select>
             </div>
+          </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="label-base">Tipo de Entrada *</label>
-                <select
-                  className="input-base"
-                  value={entryType}
-                  onChange={(e) => setEntryType(e.target.value as 'purchase' | 'own_production')}
-                >
-                  <option value="purchase">Compra de Fornecedor</option>
-                  <option value="own_production">Produção Própria</option>
-                </select>
-              </div>
-              <div>
-                <label className="label-base">Fornecedor</label>
-                <select
-                  className="input-base"
-                  value={supplierId ?? ''}
-                  onChange={(e) =>
-                    setSupplierId(e.target.value ? Number(e.target.value) : null)
-                  }
-                >
-                  <option value="">Sem fornecedor</option>
-                  {suppliers.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="label-base">Tipo de Entrada *</label>
+              <select
+                className="input-base"
+                value={entryType}
+                onChange={(e) => setEntryType(e.target.value as 'purchase' | 'own_production')}
+              >
+                <option value="purchase">Compra de Fornecedor</option>
+                <option value="own_production">Produção Própria</option>
+              </select>
+            </div>
+            <div>
+              <label className="label-base">Fornecedor</label>
+              <select
+                className="input-base"
+                value={supplierId ?? ''}
+                onChange={(e) =>
+                  setSupplierId(e.target.value ? Number(e.target.value) : null)
+                }
+              >
+                <option value="">Sem fornecedor</option>
+                {suppliers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </CardContent>

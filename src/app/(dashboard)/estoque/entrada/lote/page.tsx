@@ -24,8 +24,9 @@ import { formatCurrency } from '@/lib/utils/currency'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type ProductMeta = { id: number; name: string; sku: string }
+type ProductMeta  = { id: number; name: string; sku: string }
 type SupplierMeta = { id: number; name: string }
+type LocationMeta = { id: number; name: string; is_main_store: boolean }
 
 type VariationAttr = {
   variation_type_id: number
@@ -455,10 +456,12 @@ export default function EstoqueEntradaLotePage() {
   const uid = useId()
 
   // ── Dados base ──────────────────────────────────────────────────────────────
-  const [products, setProducts] = useState<ProductMeta[]>([])
+  const [products, setProducts]   = useState<ProductMeta[]>([])
   const [suppliers, setSuppliers] = useState<SupplierMeta[]>([])
+  const [locations, setLocations] = useState<LocationMeta[]>([])
 
   // ── Cabeçalho do lote ───────────────────────────────────────────────────────
+  const [locationId, setLocationId] = useState<number | null>(null)
   const [supplierId, setSupplierId] = useState<number | null>(null)
   const [entryType, setEntryType] = useState<'purchase' | 'own_production'>('purchase')
   const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10))
@@ -476,9 +479,16 @@ export default function EstoqueEntradaLotePage() {
     Promise.all([
       supabase.from('products').select('id, name, sku').eq('active', true).order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
-    ]).then(([prods, supps]) => {
+      (supabase as any)
+        .from('stock_locations')
+        .select('id, name, is_main_store')
+        .eq('active', true)
+        .order('is_main_store', { ascending: false })
+        .order('priority', { ascending: true }),
+    ]).then(([prods, supps, locs]) => {
       setProducts(prods.data ?? [])
       setSuppliers(supps.data ?? [])
+      setLocations((locs.data ?? []) as LocationMeta[])
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -627,6 +637,7 @@ export default function EstoqueEntradaLotePage() {
           tax_cost_total: taxTotal,
           entry_date: entryDate,
           notes: notes || null,
+          stock_location_id: locationId,
         }),
       })
 
@@ -708,6 +719,25 @@ export default function EstoqueEntradaLotePage() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
+              <label className="label-base" htmlFor={`${uid}-location`}>
+                Local de Destino *
+              </label>
+              <select
+                id={`${uid}-location`}
+                className="input-base"
+                value={locationId ?? ''}
+                onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : null)}
+              >
+                <option value="">Estoque Loja (padrão)</option>
+                {locations.map((loc) => (
+                  <option key={loc.id} value={loc.id}>
+                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
               <label className="label-base" htmlFor={`${uid}-supplier`}>Fornecedor</label>
               <select
                 id={`${uid}-supplier`}
@@ -723,7 +753,9 @@ export default function EstoqueEntradaLotePage() {
                 ))}
               </select>
             </div>
+          </div>
 
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="label-base" htmlFor={`${uid}-type`}>Tipo de Entrada *</label>
               <select

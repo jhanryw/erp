@@ -29,6 +29,8 @@ const massaSchema = z.object({
   tax_cost_total: z.coerce.number().min(0).default(0),
   entry_date: z.string().min(1, 'Data de entrada obrigatória.'),
   notes: z.string().nullable().optional(),
+  /** null = Estoque Loja da empresa (padrão) */
+  stock_location_id: z.coerce.number().int().positive().nullable().optional(),
 })
 
 // ─── POST /api/estoque/entrada/massa ─────────────────────────────────────────
@@ -57,7 +59,7 @@ export async function POST(request: Request) {
   const parsed = massaSchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const { items, freight_cost_total, tax_cost_total, unit_cost, entry_type, supplier_id, entry_date, notes } =
+  const { items, freight_cost_total, tax_cost_total, unit_cost, entry_type, supplier_id, entry_date, notes, stock_location_id } =
     parsed.data
 
   // Only process items with qty > 0 (client already filters, but double-check here)
@@ -100,6 +102,7 @@ export async function POST(request: Request) {
         tax_cost: taxShare,
         entry_date,
         notes: notes ?? null,
+        stock_location_id: stock_location_id ?? null,
       },
       user.id
     )
