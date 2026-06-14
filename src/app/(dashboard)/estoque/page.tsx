@@ -8,51 +8,67 @@ import {
   DollarSign,
   Boxes,
   ClipboardList,
+  ArrowLeftRight,
 } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
-import { Card, CardHeader } from '@/components/ui/card'
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableRow,
-  TableHead,
-  TableCell,
-} from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
-import { formatDate } from '@/lib/utils/date'
 import { EstoqueSearch } from './estoque-search'
+import { EstoqueMultiTable } from './estoque-multi-table'
 
 export const dynamic = 'force-dynamic'
 
-type StockStatusRow = {
-  product_id: number
-  product_name: string
-  sku_variation: string
-  sku_parent: string | null
-  tamanho: string | null
-  cor: string | null
-  current_qty: number | null
-  avg_cost: number | null
-  stock_value_at_cost: number | null
-  stock_value_at_price: number | null
-  last_entry_date: string | null
-  out_of_stock: boolean
-  low_stock: boolean
+// ─── Tipos (espelham vw_stock_live_multi + stock_locations) ──────────────────
+
+type LocationBalance = {
+  location_id:   number
+  location_name: string
+  slug:          string
+  is_main_store: boolean
+  priority:      number
+  quantity:      number
 }
 
-async function getStockData(search?: string) {
+type MultiStockRow = {
+  product_variation_id:       number
+  product_id:                 number
+  product_name:               string
+  sku_variation:              string
+  sku_parent:                 string | null
+  tamanho:                    string | null
+  cor:                        string | null
+  company_id:                 number
+  total_qty:                  number
+  main_store_qty:             number
+  needs_transfer:             boolean
+  total_stock_value_at_cost:  number | null
+  total_stock_value_at_price: number | null
+  last_entry_date:            string | null
+  balances_by_location:       LocationBalance[]
+}
+
+type StockLocation = {
+  id:            number
+  name:          string
+  slug:          string
+  is_main_store: boolean
+  priority:      number
+}
+
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+
+async function getMultiStockData(search?: string) {
   const supabase = createAdminClient()
 
   let itemsQuery = (supabase as any)
-    .from('vw_stock_live')
+    .from('vw_stock_live_multi')
     .select('*')
     .order('product_name', { ascending: true })
-    .order('current_qty', { ascending: true })
+    .order('tamanho',      { ascending: true })
+    .order('cor',          { ascending: true })
 
   if (search) {
     itemsQuery = itemsQuery.or(
@@ -60,26 +76,38 @@ async function getStockData(search?: string) {
     )
   }
 
-  const [stockItems, summary] = await Promise.all([
+  const [stockResult, summaryResult, locationsResult] = await Promise.all([
     itemsQuery,
+    // Summary sem filtro de busca para stat cards sempre refletirem o total
     (supabase as any)
-      .from('vw_stock_live')
-      .select('product_id, current_qty, stock_value_at_cost, stock_value_at_price'),
+      .from('vw_stock_live_multi')
+      .select('product_id, total_qty, main_store_qty, needs_transfer, total_stock_value_at_cost, total_stock_value_at_price'),
+    (supabase as any)
+      .from('stock_locations')
+      .select('id, name, slug, is_main_store, priority')
+      .eq('active', true)
+      .order('priority', { ascending: true }),
   ])
 
-  const items = (stockItems.data ?? []) as StockStatusRow[]
-  const all   = (summary.data ?? []) as StockStatusRow[]
-  const withStock = all.filter((r) => Number(r.current_qty ?? 0) > 0)
+  const items     = (stockResult.data     ?? []) as MultiStockRow[]
+  const all       = (summaryResult.data   ?? []) as MultiStockRow[]
+  const locations = (locationsResult.data ?? []) as StockLocation[]
+
+  const withStock = all.filter((r) => Number(r.total_qty ?? 0) > 0)
 
   return {
     items,
-    productCount:   new Set(withStock.map((r) => r.product_id)).size,
-    totalQty:       withStock.reduce((s, r) => s + Number(r.current_qty), 0),
-    totalCostValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_cost  ?? 0), 0),
-    totalSaleValue: withStock.reduce((s, r) => s + Number(r.stock_value_at_price ?? 0), 0),
-    alertCount:     withStock.filter((r) => Number(r.current_qty) <= 3).length,
+    locations,
+    productCount:      new Set(withStock.map((r) => r.product_id)).size,
+    totalQty:          withStock.reduce((s, r) => s + Number(r.total_qty),                  0),
+    totalCostValue:    withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost  ?? 0), 0),
+    totalSaleValue:    withStock.reduce((s, r) => s + Number(r.total_stock_value_at_price ?? 0), 0),
+    alertCount:        all.filter((r) => Number(r.total_qty) > 0 && Number(r.total_qty) <= 3).length,
+    needsTransferCount: all.filter((r) => r.needs_transfer).length,
   }
 }
+
+// ─── Página ───────────────────────────────────────────────────────────────────
 
 export default async function EstoquePage({
   searchParams,
@@ -88,14 +116,19 @@ export default async function EstoquePage({
 }) {
   const { q } = await searchParams
   const search = q?.trim() || undefined
-  const data = await getStockData(search)
+  const data = await getMultiStockData(search)
 
   return (
     <div className="space-y-6">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Estoque</h1>
-          <p className="text-sm text-muted-foreground">Posição atual</p>
+          <p className="text-sm text-muted-foreground">
+            {data.locations.length > 1
+              ? `${data.locations.length} locais ativos`
+              : 'Posição atual'}
+          </p>
         </div>
 
         <div className="flex gap-2">
@@ -120,6 +153,24 @@ export default async function EstoquePage({
         </div>
       </div>
 
+      {/* ── Alerta: produtos que precisam de transferência ── */}
+      {data.needsTransferCount > 0 && (
+        <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/8 px-4 py-3">
+          <AlertTriangle className="h-5 w-5 text-warning mt-0.5 shrink-0" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-medium text-warning">
+              {data.needsTransferCount} produto{data.needsTransferCount !== 1 ? 's' : ''} com
+              estoque em local secundário mas sem saldo no Estoque Loja
+            </p>
+            <p className="text-xs text-text-secondary mt-0.5">
+              Esses produtos não podem ser vendidos presencialmente até que o estoque seja
+              transferido para o Estoque Loja. Use o botão "Transferir" na linha do produto.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Stat cards ── */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <StatCard
           title="Produtos"
@@ -149,6 +200,7 @@ export default async function EstoquePage({
         />
       </div>
 
+      {/* ── Botões de ação ── */}
       <div className="flex flex-wrap gap-3">
         <Link href="/estoque/movimentacoes">
           <Button variant="outline">Ver Movimentações</Button>
@@ -162,6 +214,14 @@ export default async function EstoquePage({
             Conferir Estoque
           </Button>
         </Link>
+        {data.locations.length > 1 && (
+          <Link href="/estoque/localizacoes">
+            <Button variant="outline">
+              <ArrowLeftRight className="mr-2 h-4 w-4" />
+              Gerenciar Locais
+            </Button>
+          </Link>
+        )}
         <Link href="/estoque/alertas">
           <Button variant="outline">
             Ver Alertas
@@ -174,10 +234,12 @@ export default async function EstoquePage({
         </Link>
       </div>
 
+      {/* ── Busca ── */}
       <Suspense>
         <EstoqueSearch defaultValue={q} />
       </Suspense>
 
+      {/* ── Tabela / empty state ── */}
       {data.items.length === 0 ? (
         <EmptyState
           icon={<Warehouse className="h-4 w-4" />}
@@ -186,86 +248,7 @@ export default async function EstoquePage({
           action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
         />
       ) : (
-        <Card>
-          <CardHeader className="text-sm text-muted-foreground">
-            {search
-              ? `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} encontrada${data.items.length !== 1 ? 's' : ''} para "${search}"`
-              : `${data.items.length} variação${data.items.length !== 1 ? 'ões' : ''} em estoque`}
-          </CardHeader>
-
-          {/* ── Mobile: cards ──────────────────────────────── */}
-          <div className="md:hidden divide-y divide-border">
-            {data.items.map((item, idx) => {
-              const qty = item.current_qty ?? 0
-              return (
-                <div key={`${item.sku_variation}-${idx}`} className="px-4 py-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-semibold text-text-primary truncate">{item.product_name}</p>
-                      <p className="text-xs text-text-muted mt-0.5">
-                        <code className="font-mono">{item.sku_variation}</code>
-                        {(item.cor || item.tamanho) && (
-                          <span className="ml-1.5">
-                            {[item.cor, item.tamanho].filter(Boolean).join(' · ')}
-                          </span>
-                        )}
-                      </p>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className={`text-lg font-bold tabular-nums ${
-                        qty === 0 ? 'text-error' : qty <= 3 ? 'text-warning' : 'text-text-primary'
-                      }`}>
-                        {formatNumber(qty)}
-                      </p>
-                      <p className="text-[10px] text-text-muted leading-none">unidades</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-4 mt-2 text-xs text-text-muted">
-                    <span>Custo médio: <span className="text-text-secondary font-medium">{formatCurrency(item.avg_cost ?? 0)}</span></span>
-                    <span>Venda: <span className="text-text-secondary font-medium">{formatCurrency(item.stock_value_at_price ?? 0)}</span></span>
-                  </div>
-                  {item.last_entry_date && (
-                    <p className="text-[11px] text-text-muted mt-1">Entrada: {formatDate(item.last_entry_date)}</p>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-
-          {/* ── Desktop: tabela ─────────────────────────────── */}
-          <div className="hidden md:block overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Produto</TableHead>
-                  <TableHead>Cor</TableHead>
-                  <TableHead>Tamanho</TableHead>
-                  <TableHead>SKU Variação</TableHead>
-                  <TableHead>Qtd</TableHead>
-                  <TableHead>Custo Médio</TableHead>
-                  <TableHead>Valor Custo</TableHead>
-                  <TableHead>Valor Venda</TableHead>
-                  <TableHead>Última Entrada</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.items.map((item, idx) => (
-                  <TableRow key={`${item.sku_variation}-${idx}`}>
-                    <TableCell className="font-medium">{item.product_name}</TableCell>
-                    <TableCell>{item.cor ?? '—'}</TableCell>
-                    <TableCell>{item.tamanho ?? '—'}</TableCell>
-                    <TableCell><code>{item.sku_variation}</code></TableCell>
-                    <TableCell>{formatNumber(item.current_qty ?? 0)}</TableCell>
-                    <TableCell>{formatCurrency(item.avg_cost ?? 0)}</TableCell>
-                    <TableCell>{formatCurrency(item.stock_value_at_cost ?? 0)}</TableCell>
-                    <TableCell>{formatCurrency(item.stock_value_at_price ?? 0)}</TableCell>
-                    <TableCell>{item.last_entry_date ? formatDate(item.last_entry_date) : '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        </Card>
+        <EstoqueMultiTable items={data.items} locations={data.locations} />
       )}
     </div>
   )

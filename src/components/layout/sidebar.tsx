@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation'
 import {
   LayoutDashboard, ShoppingCart, Users, Package, Warehouse,
   Truck, TrendingUp, DollarSign, BarChart3, Brain,
-  Settings, Gift, LogOut, ChevronRight, Gem, SendHorizonal, Globe, Wallet,
+  Settings, Gift, LogOut, ChevronRight, Gem, SendHorizonal, Globe, Wallet, MapPin,
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
@@ -38,7 +38,8 @@ const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
       { label: 'Repasses', href: '/envios/repasses', icon: Wallet },
       { label: 'Clientes', href: '/clientes', icon: Users },
       { label: 'Produtos', href: '/produtos', icon: Package },
-      { label: 'Estoque', href: '/estoque', icon: Warehouse },
+      { label: 'Estoque',       href: '/estoque',              icon: Warehouse },
+      { label: 'Localizações',  href: '/estoque/localizacoes', icon: MapPin, minRole: 'gerente' as AppRole },
     ],
   },
   {
