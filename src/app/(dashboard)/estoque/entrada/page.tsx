@@ -188,10 +188,10 @@ export default function EstoqueEntradaPage() {
                 className="input-base"
                 {...register('stock_location_id', { setValueAs: (v) => (v ? Number(v) : null) })}
               >
-                <option value="">Estoque Loja (padrão)</option>
+                <option value="">Padrão (Estoque Loja)</option>
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                    {loc.name}
                   </option>
                 ))}
               </select>

@@ -728,10 +728,10 @@ export default function EstoqueEntradaLotePage() {
                 value={locationId ?? ''}
                 onChange={(e) => setLocationId(e.target.value ? Number(e.target.value) : null)}
               >
-                <option value="">Estoque Loja (padrão)</option>
+                <option value="">Padrão (Estoque Loja)</option>
                 {locations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    {loc.name}{loc.is_main_store ? ' (principal)' : ''}
+                    {loc.name}
                   </option>
                 ))}
               </select>
