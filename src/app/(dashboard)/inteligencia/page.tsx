@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ShieldAlert, Calculator, ArrowRight } from 'lucide-react'
+import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ShieldAlert, Calculator, ShoppingCart, ArrowRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -60,6 +60,13 @@ const MODULES = [
     title: 'Simulador Tributário',
     description: 'Compare Simples Nacional, Lucro Presumido e Lucro Real. Descubra qual regime maximiza seu lucro por produto.',
     color: 'text-brand bg-brand/10',
+  },
+  {
+    href: '/inteligencia/compras',
+    icon: ShoppingCart,
+    title: 'Compras Inteligentes',
+    description: 'Sugestões de reposição por variação. Rupturas, cobertura, fornecedor mais barato e custo estimado.',
+    color: 'text-warning bg-warning/10',
   },
 ]
 
