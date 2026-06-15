@@ -252,7 +252,7 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
                         {(row.real_cost_impact_pct ?? 0).toFixed(1)}%
                       </span>
                     </TableCell>
-                    <TableCell align="right" muted>{row.last_purchase_date ?? '—'}</TableCell>
+                    <TableCell align="right" muted>{row.last_purchase_date ? formatDate(row.last_purchase_date) : '—'}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

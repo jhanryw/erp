@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ArrowRight } from 'lucide-react'
+import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ShieldAlert, Calculator, ArrowRight } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,6 +46,20 @@ const MODULES = [
     title: 'Mapa RFM',
     description: 'Segmentação de clientes por recência, frequência e valor. Identifique campeões e clientes em risco.',
     color: 'text-purple-400 bg-purple-500/10',
+  },
+  {
+    href: '/inteligencia/auditoria',
+    icon: ShieldAlert,
+    title: 'Auditoria de Dados',
+    description: 'Detecte inconsistências em custo, estoque, margem e dados cadastrais. Dados ruins geram decisões ruins.',
+    color: 'text-error bg-error/10',
+  },
+  {
+    href: '/inteligencia/simulador',
+    icon: Calculator,
+    title: 'Simulador Tributário',
+    description: 'Compare Simples Nacional, Lucro Presumido e Lucro Real. Descubra qual regime maximiza seu lucro por produto.',
+    color: 'text-brand bg-brand/10',
   },
 ]
 

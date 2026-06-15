@@ -13,7 +13,7 @@ async function getSupplierRankingData() {
   const supabase = createAdminClient()
   const { data, error } = await supabase
     .from('mv_supplier_performance' as any)
-    .select('supplier_id, supplier_name, total_lots, total_purchased_value, total_units_sold, total_revenue, total_gross_profit, avg_margin_pct, product_count')
+    .select('supplier_id, supplier_name, supplier_state, total_lots, total_purchased_value, total_units_sold, total_revenue, total_gross_profit, avg_margin_pct, product_count, avg_real_cost_per_unit, avg_freight_pct')
     .order('total_revenue', { ascending: false }) as unknown as { data: any[] | null; error: any }
 
   if (error) console.error('mv_supplier_performance error:', error.message)
@@ -29,6 +29,26 @@ export default async function RankingFornecedoresPage() {
   const avgMargin = withMargin.length > 0
     ? withMargin.reduce((s, sup) => s + sup.avg_margin_pct, 0) / withMargin.length
     : 0
+
+  // Resumo por UF
+  const byUF = suppliers.reduce<Record<string, { totalPurchased: number; count: number }>>((acc, sup) => {
+    const uf = sup.supplier_state ?? 'N/A'
+    if (!acc[uf]) acc[uf] = { totalPurchased: 0, count: 0 }
+    acc[uf].totalPurchased += sup.total_purchased_value ?? 0
+    acc[uf].count++
+    return acc
+  }, {})
+  const ufEntries = Object.entries(byUF).sort((a, b) => b[1].totalPurchased - a[1].totalPurchased)
+  const totalPurchasedAll = suppliers.reduce((s, sup) => s + (sup.total_purchased_value ?? 0), 0)
+
+  // Rankings de custo e frete
+  const byRealCost = [...suppliers]
+    .filter(s => (s.avg_real_cost_per_unit ?? 0) > 0)
+    .sort((a, b) => (b.avg_real_cost_per_unit ?? 0) - (a.avg_real_cost_per_unit ?? 0))
+
+  const byFreightImpact = [...suppliers]
+    .filter(s => (s.avg_freight_pct ?? 0) > 0)
+    .sort((a, b) => (b.avg_freight_pct ?? 0) - (a.avg_freight_pct ?? 0))
 
   return (
     <div className="space-y-5">
@@ -138,6 +158,121 @@ export default async function RankingFornecedoresPage() {
           </Table>
         )}
       </Card>
+
+      {/* Resumo por UF */}
+      {ufEntries.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">Compras por Estado (UF)</h3>
+          </CardHeader>
+          <div className="p-5 space-y-3">
+            {ufEntries.map(([uf, { totalPurchased, count }]) => {
+              const pct = totalPurchasedAll > 0 ? (totalPurchased / totalPurchasedAll) * 100 : 0
+              return (
+                <div key={uf}>
+                  <div className="flex justify-between text-sm mb-1">
+                    <span className="text-text-secondary font-medium">
+                      {uf} <span className="text-text-muted font-normal">({count} fornecedor{count !== 1 ? 'es' : ''})</span>
+                    </span>
+                    <span className="text-text-primary">{formatCurrency(totalPurchased)} ({pct.toFixed(1)}%)</span>
+                  </div>
+                  <div className="h-1.5 bg-bg-overlay rounded-full">
+                    <div className="h-full bg-brand rounded-full" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* Ranking por custo real por unidade */}
+      {byRealCost.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">Ranking por Custo Real / Unidade</h3>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#</TableHead>
+                  <TableHead>Fornecedor</TableHead>
+                  <TableHead>UF</TableHead>
+                  <TableHead align="right">Custo Real/Un</TableHead>
+                  <TableHead align="right">Frete %</TableHead>
+                  <TableHead align="right">Produtos</TableHead>
+                  <TableHead align="right">Total Comprado</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {byRealCost.map((sup, idx) => (
+                  <TableRow key={sup.supplier_id}>
+                    <TableCell muted>{idx + 1}</TableCell>
+                    <TableCell>
+                      <Link href={`/fornecedores/${sup.supplier_id}`} className="font-medium hover:text-accent">
+                        {sup.supplier_name}
+                      </Link>
+                    </TableCell>
+                    <TableCell muted>{sup.supplier_state ?? '—'}</TableCell>
+                    <TableCell align="right" className="font-semibold">{formatCurrency(sup.avg_real_cost_per_unit ?? 0)}</TableCell>
+                    <TableCell align="right">
+                      <span className={(sup.avg_freight_pct ?? 0) > 10 ? 'text-warning font-medium' : 'text-text-secondary'}>
+                        {(sup.avg_freight_pct ?? 0).toFixed(1)}%
+                      </span>
+                    </TableCell>
+                    <TableCell align="right">{sup.product_count ?? 0}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.total_purchased_value ?? 0)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
+      )}
+
+      {/* Ranking por impacto de frete */}
+      {byFreightImpact.length > 0 && (
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">Ranking por Impacto de Frete</h3>
+          </CardHeader>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#</TableHead>
+                  <TableHead>Fornecedor</TableHead>
+                  <TableHead>UF</TableHead>
+                  <TableHead align="right">Frete %</TableHead>
+                  <TableHead align="right">Custo Real/Un</TableHead>
+                  <TableHead align="right">Total Comprado</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {byFreightImpact.map((sup, idx) => (
+                  <TableRow key={sup.supplier_id}>
+                    <TableCell muted>{idx + 1}</TableCell>
+                    <TableCell>
+                      <Link href={`/fornecedores/${sup.supplier_id}`} className="font-medium hover:text-accent">
+                        {sup.supplier_name}
+                      </Link>
+                    </TableCell>
+                    <TableCell muted>{sup.supplier_state ?? '—'}</TableCell>
+                    <TableCell align="right">
+                      <span className={(sup.avg_freight_pct ?? 0) > 10 ? 'text-warning font-medium' : (sup.avg_freight_pct ?? 0) > 5 ? 'text-text-primary' : 'text-text-secondary'}>
+                        {(sup.avg_freight_pct ?? 0).toFixed(1)}%
+                      </span>
+                    </TableCell>
+                    <TableCell align="right">{formatCurrency(sup.avg_real_cost_per_unit ?? 0)}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.total_purchased_value ?? 0)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
+      )}
     </div>
   )
 }
