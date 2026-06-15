@@ -159,7 +159,7 @@ export async function checkPriceChange(
  */
 export async function getProductSnapshot(productId: number, companyId?: number | null): Promise<Record<string, unknown> | null> {
   const admin = createAdminClient()
-  let query = admin.from('products').select('id, name, sku, base_cost, base_price, active, category_id, supplier_id').eq('id', productId)
+  let query = admin.from('products').select('id, name, sku, base_cost, base_price, active, category_id, supplier_id, origin, ncm, cest, origem, unidade_med').eq('id', productId)
   if (companyId != null) query = (query as any).eq('company_id', companyId)
   const { data } = await (query as any).single() as unknown as { data: Record<string, unknown> | null }
   return data

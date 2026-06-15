@@ -143,6 +143,10 @@ export interface Database {
           markup_pct: number | null
           photo_url: string | null
           active: boolean
+          ncm: string | null
+          cest: string | null
+          origem: number | null
+          unidade_med: string
           created_at: string
           updated_at: string
         }
@@ -158,6 +162,10 @@ export interface Database {
           base_price: number
           photo_url?: string | null
           active?: boolean
+          ncm?: string | null
+          cest?: string | null
+          origem?: number | null
+          unidade_med?: string
         }
         Update: {
           name?: string
@@ -171,6 +179,10 @@ export interface Database {
           base_price?: number
           photo_url?: string | null
           active?: boolean
+          ncm?: string | null
+          cest?: string | null
+          origem?: number | null
+          unidade_med?: string
         }
       }
       product_variations: {
@@ -574,15 +586,51 @@ export interface Database {
       }
       mv_supplier_performance: {
         Row: {
+          // ── identidade ──────────────────────────────────────────────────
           supplier_id: number
           supplier_name: string
+          supplier_state: string | null
+          // ── compras (precisos) ──────────────────────────────────────────
           total_lots: number
+          total_units_purchased: number
           total_purchased_value: number
+          total_freight_cost: number
+          total_tax_cost: number
+          avg_real_cost_per_unit: number
+          avg_freight_pct: number
+          avg_tax_pct: number
+          product_count: number
+          // ── vendas legadas (lógica anterior, pode sobrecontar) ──────────
           total_units_sold: number
           total_revenue: number
           total_gross_profit: number
           avg_margin_pct: number
-          product_count: number
+          // ── estimativas de venda (atribuição por variação, não por lote) ─
+          estimated_total_units_sold: number
+          estimated_total_revenue: number
+          estimated_gross_profit: number
+          estimated_margin_pct: number
+        }
+      }
+      vw_supplier_cost_by_product: {
+        Row: {
+          supplier_id: number
+          supplier_name: string
+          supplier_state: string | null
+          product_id: number
+          product_name: string
+          product_variation_id: number
+          sku_variation: string
+          total_lots: number
+          total_qty_purchased: number
+          avg_unit_cost: number
+          avg_cost_per_unit: number
+          avg_freight_per_unit: number
+          avg_tax_per_unit: number
+          freight_impact_pct: number
+          tax_impact_pct: number
+          real_cost_impact_pct: number
+          last_purchase_date: string
         }
       }
       mv_daily_sales_summary: {
@@ -723,6 +771,7 @@ export type MvAbcByRevenue = Views<'mv_abc_by_revenue'>
 export type MvAbcByProfit = Views<'mv_abc_by_profit'>
 export type MvAbcByVolume = Views<'mv_abc_by_volume'>
 export type MvSupplierPerformance = Views<'mv_supplier_performance'>
+export type VwSupplierCostByProduct = Views<'vw_supplier_cost_by_product'>
 export type Category = Tables<'categories'>
 export type Customer = Tables<'customers'>
 export type CustomerMetrics = Tables<'customer_metrics'>

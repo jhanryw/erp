@@ -14,6 +14,19 @@ export const productSchema = z.object({
   base_price: z.coerce.number().positive('Preço deve ser > 0'),
   photo_url: z.string().url().nullable().optional(),
   active: z.boolean().default(true),
+  ncm: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{8}$/, 'NCM deve ter exatamente 8 dígitos').nullable().optional(),
+  ),
+  cest: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/, 'Formato CEST: 00.000.00').nullable().optional(),
+  ),
+  origem: z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().int().min(0).max(8).nullable().optional(),
+  ),
+  unidade_med: z.string().max(10).default('UN'),
 })
 
 // ─── Variação de Produto ──────────────────────────────────────────────────────

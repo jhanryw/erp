@@ -129,6 +129,11 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
         base_cost: product.base_cost ?? 0,
         base_price: product.base_price ?? 0,
         active: product.active ?? true,
+        ncm:         (product as any).ncm  ?? '',
+        cest:        (product as any).cest ?? '',
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        origem:      ((product as any).origem != null ? String((product as any).origem) : '') as any,
+        unidade_med: (product as any).unidade_med ?? 'UN',
       })
       setLoading(false)
     })
@@ -193,6 +198,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     if (data.base_price  !== undefined) payload.base_price  = Number(data.base_price)
     if (data.active      !== undefined) payload.active      = data.active
     if ('supplier_id' in data) payload.supplier_id = data.supplier_id ? Number(data.supplier_id) : null
+    if (data.ncm         !== undefined) payload.ncm         = data.ncm
+    if (data.cest        !== undefined) payload.cest        = data.cest
+    if (data.origem      !== undefined) payload.origem      = data.origem
+    if (data.unidade_med !== undefined) payload.unidade_med = data.unidade_med
 
     // Só inclui variações no payload se houver algo a fazer
     if (toDelete.length > 0) payload.variations_to_delete = toDelete
@@ -341,6 +350,58 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
             <label htmlFor="active" className="text-sm text-text-primary cursor-pointer">
               Produto ativo (visível nas vendas)
             </label>
+          </div>
+        </div>
+
+        {/* ── Dados Fiscais ── */}
+        <div className="card p-6 space-y-5">
+          <h3 className="text-sm font-semibold text-text-primary">
+            Dados Fiscais <span className="text-xs font-normal text-text-muted">(opcional)</span>
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="NCM"
+              placeholder="00000000"
+              error={errors.ncm?.message}
+              {...register('ncm')}
+            />
+            <Input
+              label="CEST"
+              placeholder="00.000.00"
+              error={errors.cest?.message}
+              {...register('cest')}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label-base">Origem da Mercadoria</label>
+              <select className="input-base" {...register('origem')}>
+                <option value="">Não informado</option>
+                <option value="0">0 – Nacional</option>
+                <option value="1">1 – Estrangeira (importação direta)</option>
+                <option value="2">2 – Estrangeira (mercado interno)</option>
+                <option value="3">3 – Nacional, mais de 40% conteúdo importado</option>
+                <option value="4">4 – Nacional, processos básicos produtivos</option>
+                <option value="5">5 – Nacional, até 40% conteúdo importado</option>
+                <option value="6">6 – Estrangeira (importação direta, sem similar nacional)</option>
+                <option value="7">7 – Estrangeira (mercado interno, sem similar nacional)</option>
+                <option value="8">8 – Nacional, mais de 70% conteúdo importado</option>
+              </select>
+              {errors.origem && <p className="text-xs text-error mt-1">{errors.origem.message}</p>}
+            </div>
+            <div>
+              <label className="label-base">Unidade de Medida</label>
+              <select className="input-base" {...register('unidade_med')}>
+                <option value="UN">UN – Unidade</option>
+                <option value="PAR">PAR – Par</option>
+                <option value="KG">KG – Quilograma</option>
+                <option value="G">G – Grama</option>
+                <option value="M">M – Metro</option>
+                <option value="M2">M² – Metro Quadrado</option>
+                <option value="L">L – Litro</option>
+                <option value="CX">CX – Caixa</option>
+              </select>
+            </div>
           </div>
         </div>
 

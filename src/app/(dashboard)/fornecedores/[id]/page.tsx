@@ -26,7 +26,7 @@ async function getSupplier(id: string) {
 
   if (!supplier) return null
 
-  const [{ data: performance }, { data: recentLots }, { data: products }] = await Promise.all([
+  const [{ data: performance }, { data: recentLots }, { data: products }, { data: costByProduct }] = await Promise.all([
     admin
       .from('mv_supplier_performance' as any)
       .select('*')
@@ -51,6 +51,12 @@ async function getSupplier(id: string) {
       .select('id, name, sku, base_price, base_cost, margin_pct, active')
       .eq('supplier_id', supplierId)
       .order('name', { ascending: true }) as unknown as Promise<{ data: any[] }>,
+
+    admin
+      .from('vw_supplier_cost_by_product' as any)
+      .select('product_name, sku_variation, total_qty_purchased, avg_unit_cost, avg_cost_per_unit, avg_freight_per_unit, real_cost_impact_pct, last_purchase_date')
+      .eq('supplier_id', supplierId)
+      .order('product_name', { ascending: true }) as unknown as Promise<{ data: any[] }>,
   ])
 
   return {
@@ -58,6 +64,7 @@ async function getSupplier(id: string) {
     performance,
     recentLots: recentLots ?? [],
     products: products ?? [],
+    costByProduct: costByProduct ?? [],
   }
 }
 
@@ -65,7 +72,7 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
   const result = await getSupplier(params.id)
   if (!result) notFound()
 
-  const { supplier, performance, recentLots, products } = result
+  const { supplier, performance, recentLots, products, costByProduct } = result
   const activeProducts = products.filter((p: any) => p.active).length
 
   return (
@@ -204,6 +211,55 @@ export default async function FornecedorDetalhePage({ params }: { params: { id: 
           )}
         </Card>
       </div>
+
+      {/* Custo por Produto */}
+      <Card>
+        <CardHeader>
+          <h3 className="text-sm font-semibold text-text-primary">Custo por Produto</h3>
+        </CardHeader>
+        {costByProduct.length === 0 ? (
+          <div className="p-8 text-center text-sm text-text-muted">
+            Nenhum dado de custo por produto disponível
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Produto</TableHead>
+                  <TableHead>SKU</TableHead>
+                  <TableHead align="right">Qtd Comprada</TableHead>
+                  <TableHead align="right">Custo Puro</TableHead>
+                  <TableHead align="right">Custo Real</TableHead>
+                  <TableHead align="right">Frete/Un</TableHead>
+                  <TableHead align="right">Impacto %</TableHead>
+                  <TableHead align="right">Última Compra</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {costByProduct.map((row: any) => (
+                  <TableRow key={row.sku_variation}>
+                    <TableCell>
+                      <span className="font-medium text-text-primary">{row.product_name}</span>
+                    </TableCell>
+                    <TableCell muted>{row.sku_variation}</TableCell>
+                    <TableCell align="right">{row.total_qty_purchased ?? 0}</TableCell>
+                    <TableCell align="right">{formatCurrency(row.avg_unit_cost ?? 0)}</TableCell>
+                    <TableCell align="right" className="font-medium">{formatCurrency(row.avg_cost_per_unit ?? 0)}</TableCell>
+                    <TableCell align="right">{formatCurrency(row.avg_freight_per_unit ?? 0)}</TableCell>
+                    <TableCell align="right">
+                      <span className={(row.real_cost_impact_pct ?? 0) > 10 ? 'text-warning font-medium' : 'text-text-secondary'}>
+                        {(row.real_cost_impact_pct ?? 0).toFixed(1)}%
+                      </span>
+                    </TableCell>
+                    <TableCell align="right" muted>{row.last_purchase_date ?? '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </Card>
 
       {supplier.notes && (
         <Card padding="md">

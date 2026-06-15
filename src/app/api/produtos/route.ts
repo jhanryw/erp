@@ -31,6 +31,19 @@ const schema = z.object({
   base_price: z.coerce.number().positive(),
   active: z.boolean().default(true),
   variants: z.array(variantSchema).optional(),
+  ncm: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{8}$/).nullable().optional(),
+  ),
+  cest: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/).nullable().optional(),
+  ),
+  origem: z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().int().min(0).max(8).nullable().optional(),
+  ),
+  unidade_med: z.string().max(10).default('UN').optional(),
 })
 
 export async function POST(request: Request) {

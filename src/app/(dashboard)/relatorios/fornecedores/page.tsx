@@ -56,42 +56,56 @@ export default async function RelatorioFornecedoresPage() {
         {suppliers.length === 0 ? (
           <div className="p-12 text-center text-sm text-text-muted">Nenhuma entrada de estoque registrada</div>
         ) : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Fornecedor</TableHead>
-                <TableHead align="right">Produtos</TableHead>
-                <TableHead align="right">Lotes</TableHead>
-                <TableHead align="right">Total Comprado</TableHead>
-                <TableHead align="right">Unid. Vendidas</TableHead>
-                <TableHead align="right">Faturamento</TableHead>
-                <TableHead align="right">Lucro Bruto</TableHead>
-                <TableHead align="right">Margem %</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {suppliers.map((sup) => (
-                <TableRow key={sup.supplier_id}>
-                  <TableCell>
-                    <Link href={`/fornecedores/${sup.supplier_id}`} className="font-medium hover:text-accent">
-                      {sup.supplier_name}
-                    </Link>
-                  </TableCell>
-                  <TableCell align="right">{sup.product_count ?? 0}</TableCell>
-                  <TableCell align="right">{sup.total_lots ?? 0}</TableCell>
-                  <TableCell align="right">{formatCurrency(sup.total_purchased_value ?? 0)}</TableCell>
-                  <TableCell align="right">{sup.total_units_sold ?? 0}</TableCell>
-                  <TableCell align="right" className="font-semibold">{formatCurrency(sup.total_revenue ?? 0)}</TableCell>
-                  <TableCell align="right" className="text-success">{formatCurrency(sup.total_gross_profit ?? 0)}</TableCell>
-                  <TableCell align="right">
-                    <span className={`font-semibold text-sm ${(sup.avg_margin_pct ?? 0) >= 30 ? 'text-success' : (sup.avg_margin_pct ?? 0) >= 15 ? 'text-warning' : 'text-error'}`}>
-                      {(sup.avg_margin_pct ?? 0).toFixed(1)}%
-                    </span>
-                  </TableCell>
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Fornecedor</TableHead>
+                  <TableHead>UF</TableHead>
+                  <TableHead align="right">Produtos</TableHead>
+                  <TableHead align="right">Lotes</TableHead>
+                  <TableHead align="right">Total Comprado</TableHead>
+                  <TableHead align="right">Frete Total</TableHead>
+                  <TableHead align="right">Imp. Total</TableHead>
+                  <TableHead align="right">Custo/Un Real</TableHead>
+                  <TableHead align="right">Frete %</TableHead>
+                  <TableHead align="right">Imp. %</TableHead>
+                  <TableHead align="right">Unid. Vendidas</TableHead>
+                  <TableHead align="right">Faturamento</TableHead>
+                  <TableHead align="right">Lucro Bruto</TableHead>
+                  <TableHead align="right">Margem %</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {suppliers.map((sup) => (
+                  <TableRow key={sup.supplier_id}>
+                    <TableCell>
+                      <Link href={`/fornecedores/${sup.supplier_id}`} className="font-medium hover:text-accent">
+                        {sup.supplier_name}
+                      </Link>
+                    </TableCell>
+                    <TableCell muted>{sup.supplier_state ?? '—'}</TableCell>
+                    <TableCell align="right">{sup.product_count ?? 0}</TableCell>
+                    <TableCell align="right">{sup.total_lots ?? 0}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.total_purchased_value ?? 0)}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.total_freight_cost ?? 0)}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.total_tax_cost ?? 0)}</TableCell>
+                    <TableCell align="right">{formatCurrency(sup.avg_real_cost_per_unit ?? 0)}</TableCell>
+                    <TableCell align="right">{(sup.avg_freight_pct ?? 0).toFixed(1)}%</TableCell>
+                    <TableCell align="right">{(sup.avg_tax_pct ?? 0).toFixed(1)}%</TableCell>
+                    <TableCell align="right">{sup.total_units_sold ?? 0}</TableCell>
+                    <TableCell align="right" className="font-semibold">{formatCurrency(sup.total_revenue ?? 0)}</TableCell>
+                    <TableCell align="right" className="text-success">{formatCurrency(sup.total_gross_profit ?? 0)}</TableCell>
+                    <TableCell align="right">
+                      <span className={`font-semibold text-sm ${(sup.avg_margin_pct ?? 0) >= 30 ? 'text-success' : (sup.avg_margin_pct ?? 0) >= 15 ? 'text-warning' : 'text-error'}`}>
+                        {(sup.avg_margin_pct ?? 0).toFixed(1)}%
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
         )}
       </Card>
     </div>

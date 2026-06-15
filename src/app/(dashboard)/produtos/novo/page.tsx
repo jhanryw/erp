@@ -40,6 +40,19 @@ const formSchema = z.object({
   base_price:  z.coerce.number().positive('Preço obrigatório'),
   active:      z.boolean().default(true),
   variants:    z.array(variantRowSchema),
+  ncm: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{8}$/, 'NCM deve ter exatamente 8 dígitos').nullable().optional(),
+  ),
+  cest: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/, 'Formato CEST: 00.000.00').nullable().optional(),
+  ),
+  origem: z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().int().min(0).max(8).nullable().optional(),
+  ),
+  unidade_med: z.string().max(10).default('UN'),
 })
 
 type FormData = z.infer<typeof formSchema>
@@ -355,6 +368,58 @@ export default function NovoProdutoPage() {
           <div className="flex items-center gap-3">
             <input type="checkbox" id="active" defaultChecked className="w-4 h-4 rounded border-border bg-bg-input accent-brand" {...register('active')} />
             <label htmlFor="active" className="text-sm text-text-primary cursor-pointer">Produto ativo (visível nas vendas)</label>
+          </div>
+        </div>
+
+        {/* ── Seção 1b: Dados Fiscais ── */}
+        <div className="card p-6 space-y-5">
+          <h3 className="text-sm font-semibold text-text-primary border-b border-border pb-3">
+            Dados Fiscais <span className="text-xs font-normal text-text-muted">(opcional)</span>
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="NCM"
+              placeholder="00000000"
+              error={errors.ncm?.message}
+              {...register('ncm')}
+            />
+            <Input
+              label="CEST"
+              placeholder="00.000.00"
+              error={errors.cest?.message}
+              {...register('cest')}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="label-base">Origem da Mercadoria</label>
+              <select className="input-base" {...register('origem')}>
+                <option value="">Não informado</option>
+                <option value="0">0 – Nacional</option>
+                <option value="1">1 – Estrangeira (importação direta)</option>
+                <option value="2">2 – Estrangeira (mercado interno)</option>
+                <option value="3">3 – Nacional, mais de 40% conteúdo importado</option>
+                <option value="4">4 – Nacional, processos básicos produtivos</option>
+                <option value="5">5 – Nacional, até 40% conteúdo importado</option>
+                <option value="6">6 – Estrangeira (importação direta, sem similar nacional)</option>
+                <option value="7">7 – Estrangeira (mercado interno, sem similar nacional)</option>
+                <option value="8">8 – Nacional, mais de 70% conteúdo importado</option>
+              </select>
+              {errors.origem && <p className="text-xs text-error mt-1">{errors.origem.message}</p>}
+            </div>
+            <div>
+              <label className="label-base">Unidade de Medida</label>
+              <select className="input-base" {...register('unidade_med')}>
+                <option value="UN">UN – Unidade</option>
+                <option value="PAR">PAR – Par</option>
+                <option value="KG">KG – Quilograma</option>
+                <option value="G">G – Grama</option>
+                <option value="M">M – Metro</option>
+                <option value="M2">M² – Metro Quadrado</option>
+                <option value="L">L – Litro</option>
+                <option value="CX">CX – Caixa</option>
+              </select>
+            </div>
           </div>
         </div>
 

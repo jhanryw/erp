@@ -36,6 +36,19 @@ const putSchema = z.object({
   active: z.boolean().optional(),
   variations_to_delete: z.array(z.number().int().positive()).optional(),
   variations_to_add: z.array(variantToAddSchema).optional(),
+  ncm: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{8}$/).nullable().optional(),
+  ),
+  cest: z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/).nullable().optional(),
+  ),
+  origem: z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().int().min(0).max(8).nullable().optional(),
+  ),
+  unidade_med: z.string().max(10).optional(),
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -64,7 +77,7 @@ export async function GET(
 
   const { data: product, error: productError } = await (admin as any)
     .from('products')
-    .select('id, name, sku, category_id, supplier_id, origin, base_cost, base_price, active, photo_url')
+    .select('id, name, sku, category_id, supplier_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med')
     .eq('id', productId)
     .eq('company_id', user.company_id)
     .single()
@@ -137,6 +150,7 @@ export async function PUT(
   type ProductSnap = {
     name: string; sku: string; category_id: number; supplier_id: number | null
     origin: 'own_brand' | 'third_party'; base_cost: number; base_price: number; active: boolean
+    ncm: string | null; cest: string | null; origem: number | null; unidade_med: string
   }
   const snap = before as unknown as ProductSnap
   const productFields = {
@@ -150,6 +164,11 @@ export async function PUT(
     base_cost:   patch.base_cost   ?? snap.base_cost,
     base_price:  patch.base_price  ?? snap.base_price,
     active:      patch.active      ?? snap.active,
+    // campos fiscais: null é intencional (limpar), undefined = não enviado → mantém banco
+    ncm:         patch.ncm    !== undefined ? patch.ncm    : snap.ncm,
+    cest:        patch.cest   !== undefined ? patch.cest   : snap.cest,
+    origem:      patch.origem !== undefined ? patch.origem : snap.origem,
+    unidade_med: patch.unidade_med ?? snap.unidade_med,
   }
 
   // ── Detecção de alteração de SKU (para auditoria) ───────────────────────────
@@ -179,6 +198,10 @@ export async function PUT(
       base_cost: productFields.base_cost,
       base_price: productFields.base_price,
       active: productFields.active,
+      ncm:         productFields.ncm,
+      cest:        productFields.cest,
+      origem:      productFields.origem,
+      unidade_med: productFields.unidade_med,
       ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
     .eq('id', productId) as { error: { code: string; message: string } | null }

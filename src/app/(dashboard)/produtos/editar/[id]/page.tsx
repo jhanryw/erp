@@ -34,6 +34,10 @@ type ProductApiResponse = {
     base_cost: number
     base_price: number
     active: boolean
+    ncm: string | null
+    cest: string | null
+    origem: number | null
+    unidade_med: string
   }
   error?: string
 }
@@ -99,6 +103,11 @@ export default function EditarProdutoPage({
           base_cost: Number(product.base_cost ?? 0),
           base_price: Number(product.base_price ?? 0),
           active: Boolean(product.active),
+          ncm:         product.ncm  ?? '',
+          cest:        product.cest ?? '',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          origem:      (product.origem != null ? String(product.origem) : '') as any,
+          unidade_med: product.unidade_med ?? 'UN',
         })
       } catch {
         toast.error('Erro ao carregar produto')
@@ -123,6 +132,10 @@ export default function EditarProdutoPage({
     if (data.active      !== undefined) payload.active      = data.active
     // supplier_id: null é intencional (remover fornecedor), undefined = não enviado
     if ('supplier_id' in data) payload.supplier_id = data.supplier_id ? Number(data.supplier_id) : null
+    if (data.ncm         !== undefined) payload.ncm         = data.ncm
+    if (data.cest        !== undefined) payload.cest        = data.cest
+    if (data.origem      !== undefined) payload.origem      = data.origem
+    if (data.unidade_med !== undefined) payload.unidade_med = data.unidade_med
 
     try {
       const res = await fetch(`/api/produtos/${params.id}`, {
@@ -250,6 +263,58 @@ export default function EditarProdutoPage({
           <input type="checkbox" {...register('active')} />
           Produto ativo
         </label>
+
+        {/* ── Dados Fiscais ── */}
+        <div className="rounded-lg border p-4 space-y-4">
+          <p className="text-sm font-semibold">
+            Dados Fiscais <span className="text-xs font-normal text-muted-foreground">(opcional)</span>
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Input
+              label="NCM"
+              placeholder="00000000"
+              error={errors.ncm?.message}
+              {...register('ncm')}
+            />
+            <Input
+              label="CEST"
+              placeholder="00.000.00"
+              error={errors.cest?.message}
+              {...register('cest')}
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Origem da Mercadoria</label>
+              <select className="w-full rounded-md border px-3 py-2 text-sm" {...register('origem')}>
+                <option value="">Não informado</option>
+                <option value="0">0 – Nacional</option>
+                <option value="1">1 – Estrangeira (importação direta)</option>
+                <option value="2">2 – Estrangeira (mercado interno)</option>
+                <option value="3">3 – Nacional, mais de 40% conteúdo importado</option>
+                <option value="4">4 – Nacional, processos básicos produtivos</option>
+                <option value="5">5 – Nacional, até 40% conteúdo importado</option>
+                <option value="6">6 – Estrangeira (importação direta, sem similar nacional)</option>
+                <option value="7">7 – Estrangeira (mercado interno, sem similar nacional)</option>
+                <option value="8">8 – Nacional, mais de 70% conteúdo importado</option>
+              </select>
+              {errors.origem && <p className="text-xs text-destructive mt-1">{errors.origem.message}</p>}
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Unidade de Medida</label>
+              <select className="w-full rounded-md border px-3 py-2 text-sm" {...register('unidade_med')}>
+                <option value="UN">UN – Unidade</option>
+                <option value="PAR">PAR – Par</option>
+                <option value="KG">KG – Quilograma</option>
+                <option value="G">G – Grama</option>
+                <option value="M">M – Metro</option>
+                <option value="M2">M² – Metro Quadrado</option>
+                <option value="L">L – Litro</option>
+                <option value="CX">CX – Caixa</option>
+              </select>
+            </div>
+          </div>
+        </div>
 
         <div className="flex gap-3 pt-2">
           <Link href={`/produtos/${params.id}`} className="flex-1">
