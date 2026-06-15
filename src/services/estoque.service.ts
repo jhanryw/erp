@@ -200,7 +200,84 @@ export async function createStockEntry(
   return success(data!)
 }
 
-// ─── Transferência entre locais ───────────────────────────────────────────────
+// ─── Transferência em massa entre locais ──────────────────────────────────────
+
+export interface StockTransferBulkInputItem {
+  product_variation_id: number
+  quantity: number
+}
+
+export interface StockTransferBulkInput {
+  from_location_id: number
+  to_location_id:   number
+  notes?:           string | null
+  items:            StockTransferBulkInputItem[]
+}
+
+export interface StockTransferBulkItem {
+  product_variation_id: number
+  product_name:         string | null
+  sku_variation:        string | null
+  quantity:             number
+  unit_cost:            number
+  from_qty_before:      number
+  from_qty_after:       number
+  to_qty_before:        number
+  to_qty_after:         number
+  to_avg_cost_after:    number
+}
+
+export interface StockTransferBulkItemError {
+  product_variation_id: number | null
+  product_name:         string | null
+  sku_variation:        string | null
+  quantity_requested:   number | null
+  balance_available:    number | null
+  reason:               string
+  suggestion:           string
+}
+
+export type StockTransferBulkOutcome =
+  | {
+      ok:               true
+      batch_id:         string
+      from_location_id: number
+      to_location_id:   number
+      total_items:      number
+      total_quantity:   number
+      transferred:      StockTransferBulkItem[]
+    }
+  | {
+      ok:     false
+      errors: StockTransferBulkItemError[]
+    }
+
+export async function transferStockBulk(
+  input: StockTransferBulkInput,
+  systemUserId: string
+): Promise<ServiceOutcome<StockTransferBulkOutcome>> {
+  const admin = createAdminClient()
+
+  const { data, error } = await (admin as any).rpc('rpc_stock_transfer_bulk', {
+    p_from_location_id: input.from_location_id,
+    p_to_location_id:   input.to_location_id,
+    p_notes:            input.notes ?? null,
+    p_user_id:          systemUserId,
+    p_items:            input.items,
+  }) as unknown as {
+    data:  StockTransferBulkOutcome | null
+    error: { code: string; message: string } | null
+  }
+
+  if (error) {
+    const status = error.code === 'P0001' ? 400 : 500
+    return failure(error.message, status)
+  }
+
+  return success(data!)
+}
+
+// ─── Transferência individual entre locais ─────────────────────────────────────
 
 export async function transferStock(
   input: StockTransferInput,

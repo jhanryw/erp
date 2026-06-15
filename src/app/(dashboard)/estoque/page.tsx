@@ -215,12 +215,19 @@ export default async function EstoquePage({
           </Button>
         </Link>
         {data.locations.length > 1 && (
-          <Link href="/estoque/localizacoes">
-            <Button variant="outline">
-              <ArrowLeftRight className="mr-2 h-4 w-4" />
-              Gerenciar Locais
-            </Button>
-          </Link>
+          <>
+            <Link href="/estoque/transferencia-em-massa">
+              <Button variant="outline">
+                <ArrowLeftRight className="mr-2 h-4 w-4" />
+                Transferência em Massa
+              </Button>
+            </Link>
+            <Link href="/estoque/localizacoes">
+              <Button variant="outline">
+                Gerenciar Locais
+              </Button>
+            </Link>
+          </>
         )}
         <Link href="/estoque/alertas">
           <Button variant="outline">
