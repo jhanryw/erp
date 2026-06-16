@@ -113,9 +113,10 @@ export async function POST(request: Request) {
 
             if (variationIds.length > 0) {
               const { data } = (await (admin as any)
-                .from('stock')
-                .select('product_variation_id, quantity')
-                .in('product_variation_id', variationIds)) as {
+                .from('stock_balances')
+                .select('product_variation_id, quantity, stock_locations!inner(active)')
+                .in('product_variation_id', variationIds)
+                .eq('stock_locations.active', true)) as {
                   data: Array<{ product_variation_id: number; quantity: number }> | null
                 }
               stockRows = data
@@ -124,7 +125,8 @@ export async function POST(request: Request) {
             const stockByVariation = new Map<number, number>()
             if (stockRows) {
               for (const row of stockRows) {
-                stockByVariation.set(row.product_variation_id, row.quantity)
+                const prev = stockByVariation.get(row.product_variation_id) ?? 0
+                stockByVariation.set(row.product_variation_id, prev + row.quantity)
               }
             }
 

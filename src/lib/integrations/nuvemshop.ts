@@ -175,6 +175,7 @@ export async function getMappedNuvemshopProduct(
     .select('external_id')
     .eq('produto_id', produtoId)
     .eq('source', 'nuvemshop')
+    .is('product_variation_id', null)   // linha de produto — evita conflito com linhas de variação
     .maybeSingle() as { data: { external_id: string } | null }
 
   return data ?? null
@@ -191,22 +192,37 @@ export async function mapProductToNuvemshop(
 ): Promise<void> {
   const admin = createAdminClient()
 
-  const { error } = (await (admin as any)
+  const { data: existing, error: selectError } = (await (admin as any)
     .from('produto_map')
-    .upsert(
-      { produto_id: produtoId, external_id: externalId, source: 'nuvemshop' },
-      { onConflict: 'produto_id,source' }
-    )
-  ) as { error: { message: string } | null }
+    .select('id')
+    .eq('source', 'nuvemshop')
+    .eq('produto_id', produtoId)
+    .is('product_variation_id', null)
+    .maybeSingle()) as { data: { id: number } | null; error: { message: string } | null }
 
-  if (error) throw new Error(`mapProductToNuvemshop: ${error.message}`)
+  if (selectError) throw new Error(`mapProductToNuvemshop (select): ${selectError.message}`)
+
+  if (existing) {
+    const { error } = (await (admin as any)
+      .from('produto_map')
+      .update({ external_id: externalId })
+      .eq('id', existing.id)
+    ) as { error: { message: string } | null }
+    if (error) throw new Error(`mapProductToNuvemshop (update): ${error.message}`)
+  } else {
+    const { error } = (await (admin as any)
+      .from('produto_map')
+      .insert({ produto_id: produtoId, external_id: externalId, source: 'nuvemshop', product_variation_id: null })
+    ) as { error: { message: string } | null }
+    if (error) throw new Error(`mapProductToNuvemshop (insert): ${error.message}`)
+  }
 }
 
 // ─── mapVariantToNuvemshop ────────────────────────────────────────────────────
 
 /**
  * Persiste o relacionamento variação interna ↔ variante externa na produto_map.
- * Usa ON CONFLICT DO NOTHING para ser idempotente.
+ * Idempotente: atualiza se já existir linha para essa variação interna.
  */
 export async function mapVariantToNuvemshop(
   produtoId:          number,
@@ -216,21 +232,35 @@ export async function mapVariantToNuvemshop(
 ): Promise<void> {
   const admin = createAdminClient()
 
-  const { error } = (await (admin as any)
+  const { data: existing, error: selectError } = (await (admin as any)
     .from('produto_map')
-    .upsert(
-      {
+    .select('id')
+    .eq('source', 'nuvemshop')
+    .eq('product_variation_id', productVariationId)
+    .maybeSingle()) as { data: { id: number } | null; error: { message: string } | null }
+
+  if (selectError) throw new Error(`mapVariantToNuvemshop (select): ${selectError.message}`)
+
+  if (existing) {
+    const { error } = (await (admin as any)
+      .from('produto_map')
+      .update({ external_id: externalProductId, external_variant_id: externalVariantId })
+      .eq('id', existing.id)
+    ) as { error: { message: string } | null }
+    if (error) throw new Error(`mapVariantToNuvemshop (update): ${error.message}`)
+  } else {
+    const { error } = (await (admin as any)
+      .from('produto_map')
+      .insert({
         produto_id:           produtoId,
         product_variation_id: productVariationId,
         external_id:          externalProductId,
         external_variant_id:  externalVariantId,
         source:               'nuvemshop',
-      },
-      { onConflict: 'source,external_variant_id', ignoreDuplicates: true }
-    )
-  ) as { error: { message: string } | null }
-
-  if (error) throw new Error(`mapVariantToNuvemshop: ${error.message}`)
+      })
+    ) as { error: { message: string } | null }
+    if (error) throw new Error(`mapVariantToNuvemshop (insert): ${error.message}`)
+  }
 }
 
 // ─── updateVariantStock ───────────────────────────────────────────────────────
