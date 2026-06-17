@@ -169,6 +169,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'id e event obrigatórios.' }, { status: 400 })
   }
 
+  // ── Allowlist de eventos — rejeita antes de qualquer chamada externa ─────────
+  const HANDLED_EVENTS = new Set([
+    'orders/paid',
+    'orders/cancelled',
+    'order/cancelled',
+    'orders/updated',   // alguns gateways mudam status para 'paid' num update
+  ])
+
+  if (!HANDLED_EVENTS.has(event)) {
+    return NextResponse.json({ ok: true, skipped: true, reason: 'event_not_handled' })
+  }
+
   try {
     const storeId      = process.env.NUVEMSHOP_STORE_ID
     const token        = process.env.NUVEMSHOP_ACCESS_TOKEN
