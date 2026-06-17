@@ -222,7 +222,11 @@ export async function POST(request: Request) {
     }
 
     // ── 3. Liberar locks zumbis antes de qualquer verificação ───────────────────
-    await (admin as any).rpc('release_stale_pedido_locks').catch(() => null)
+    try {
+      await (admin as any).rpc('release_stale_pedido_locks')
+    } catch {
+      // best-effort: falha não bloqueia processamento do pedido
+    }
 
     // ── 4. Verificar / criar staging do pedido ──────────────────────────────────
     const { data: existing } = (await (admin as any)
@@ -484,18 +488,18 @@ export async function POST(request: Request) {
 
     // ── 14. Registrar movimentações de estoque por canal ────────────────────────
     for (const item of mappedItens) {
-      await (admin as any)
-        .from('estoque_movimentacoes')
-        .insert({
-          product_variation_id: item.product_variation_id,
-          tipo:                 'saida',
-          origem:               'nuvemshop',
-          referencia_externa:   externalId,
-          quantidade:           item.quantidade,
-        })
-        .catch((err: unknown) =>
-          console.error('[webhook/order] Erro ao registrar estoque_movimentacoes', err)
-        )
+      void (async () => {
+        const { error } = await (admin as any)
+          .from('estoque_movimentacoes')
+          .insert({
+            product_variation_id: item.product_variation_id,
+            tipo:                 'saida',
+            origem:               'nuvemshop',
+            referencia_externa:   externalId,
+            quantidade:           item.quantidade,
+          })
+        if (error) console.error('[webhook/order] Erro ao registrar estoque_movimentacoes', error)
+      })()
     }
 
     // ── 15. Confirmar estoque final na Nuvemshop ─────────────────────────────────

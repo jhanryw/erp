@@ -19,7 +19,6 @@ type VariationRow = {
   id:                            number
   sku_variation:                 string | null
   product_variation_attributes:  AttributeRow[]
-  stock:                         { quantity: number }[]
 }
 
 export async function POST(request: Request) {
@@ -72,13 +71,31 @@ export async function POST(request: Request) {
           variation_value_id,
           variation_types:variation_type_id ( name, slug ),
           variation_values:variation_value_id ( value, slug )
-        ),
-        stock ( quantity )
+        )
       `)
       .eq('product_id', produtoId)
       .order('id', { ascending: true })) as { data: VariationRow[] | null }
 
     const allVariations: VariationRow[] = variations ?? []
+
+    // ── Buscar estoque via stock_balances (multi-local, somente locais ativos) ──
+    const variationIds = allVariations.map((v) => v.id)
+    const stockByVariation = new Map<number, number>()
+
+    if (variationIds.length > 0) {
+      const { data: stockRows } = (await (admin as any)
+        .from('stock_balances')
+        .select('product_variation_id, quantity, stock_locations!inner(active)')
+        .in('product_variation_id', variationIds)
+        .eq('stock_locations.active', true)) as {
+          data: Array<{ product_variation_id: number; quantity: number }> | null
+        }
+
+      for (const row of stockRows ?? []) {
+        const prev = stockByVariation.get(row.product_variation_id) ?? 0
+        stockByVariation.set(row.product_variation_id, prev + row.quantity)
+      }
+    }
 
     // ── Determinar atributos únicos ordenados (Cor antes de Tamanho) ──────────
     const typeOrder: Record<string, number> = { cor: 0, tamanho: 1 }
@@ -107,7 +124,7 @@ export async function POST(request: Request) {
       }
 
       const attributeValues = attributeSlugs.map((slug) => attrBySlug.get(slug) ?? '')
-      const stockQty         = v.stock?.[0]?.quantity ?? 0
+      const stockQty         = stockByVariation.get(v.id) ?? 0
 
       return {
         internalVariationId: v.id,

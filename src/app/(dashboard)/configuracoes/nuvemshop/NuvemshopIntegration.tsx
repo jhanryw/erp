@@ -5,6 +5,7 @@ import Link from 'next/link'
 import {
   ArrowLeft, Globe, RefreshCw, Package, RotateCcw,
   CheckCircle2, XCircle, AlertCircle, Loader2, ChevronDown, ChevronUp,
+  Layers, StopCircle,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
@@ -197,6 +198,13 @@ export function NuvemshopIntegration() {
   const [showSelector, setShowSelector]   = useState(false)
   const [loadingStatus, setLoadingStatus] = useState(true)
 
+  // Batch stock sync state
+  const [batchRunning, setBatchRunning]   = useState(false)
+  const [batchDone, setBatchDone]         = useState(false)
+  const [batchProgress, setBatchProgress] = useState({ processed: 0, success: 0, failed: 0, remaining: null as number | null })
+  const [batchErrors, setBatchErrors]     = useState<Array<{ variation_id: number; error: string }>>([])
+  const batchStopRef                      = useRef(false)
+
   const productSync = useStreamSync()
   const stockSync   = useStreamSync()
 
@@ -263,6 +271,57 @@ export function NuvemshopIntegration() {
     stockSync.run('/api/integrations/nuvemshop/stock/sync-stream')
   }
 
+  const handleBatchSyncStock = async () => {
+    batchStopRef.current = false
+    setBatchRunning(true)
+    setBatchDone(false)
+    setBatchProgress({ processed: 0, success: 0, failed: 0, remaining: null })
+    setBatchErrors([])
+
+    try {
+      while (!batchStopRef.current) {
+        const res  = await fetch('/api/integrations/nuvemshop/stock/sync-batch', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ limit: 25 }),
+        })
+        const data = await res.json()
+
+        if (!res.ok || !data.ok) {
+          setBatchErrors((prev) => [...prev, { variation_id: 0, error: data.error ?? `HTTP ${res.status}` }])
+          break
+        }
+
+        setBatchProgress((prev) => ({
+          processed: prev.processed + (data.processed ?? 0),
+          success:   prev.success   + (data.success   ?? 0),
+          failed:    prev.failed    + (data.failed     ?? 0),
+          remaining: data.remaining_unsynced,
+        }))
+
+        if (data.errors?.length > 0) {
+          setBatchErrors((prev) => [...prev, ...data.errors])
+        }
+
+        if (data.remaining_unsynced === 0 || data.processed === 0) {
+          setBatchDone(true)
+          break
+        }
+
+        await new Promise((r) => setTimeout(r, 500))
+      }
+    } catch (err) {
+      setBatchErrors((prev) => [...prev, { variation_id: 0, error: String(err) }])
+    } finally {
+      setBatchRunning(false)
+      fetchStatus()
+    }
+  }
+
+  const handleStopBatch = () => {
+    batchStopRef.current = true
+  }
+
   const formatDate = (iso: string | null) => {
     if (!iso) return 'Nunca'
     return new Date(iso).toLocaleString('pt-BR', {
@@ -271,7 +330,7 @@ export function NuvemshopIntegration() {
     })
   }
 
-  const anyLoading = productSync.loading || stockSync.loading
+  const anyLoading = productSync.loading || stockSync.loading || batchRunning
 
   return (
     <div className="space-y-6">
@@ -468,6 +527,92 @@ export function NuvemshopIntegration() {
           </div>
 
           <SyncLog events={stockSync.events} loading={stockSync.loading} />
+        </CardContent>
+      </Card>
+
+      {/* Seção: Sync de Estoque em Lotes */}
+      <Card>
+        <CardHeader>
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">Sincronizar Estoque Pendente</h3>
+            <p className="text-xs text-text-muted mt-0.5">
+              Processa 25 variações por vez sem manter conexão aberta. Sincroniza variações que ainda não foram enviadas ao site (sem data de sync). Para reenviar tudo, use o botão acima.
+            </p>
+          </div>
+        </CardHeader>
+
+        <CardContent>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              onClick={handleBatchSyncStock}
+              disabled={anyLoading}
+              loading={batchRunning}
+            >
+              <Layers className="w-3.5 h-3.5" />
+              {batchRunning ? 'Sincronizando...' : 'Sincronizar Pendentes em Lotes'}
+            </Button>
+
+            {batchRunning && (
+              <Button variant="secondary" size="sm" onClick={handleStopBatch}>
+                <StopCircle className="w-3.5 h-3.5" />
+                Parar
+              </Button>
+            )}
+          </div>
+
+          {/* Progresso */}
+          {(batchRunning || batchDone || batchProgress.processed > 0) && (
+            <div className="mt-4 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="rounded-lg bg-bg-overlay border border-border px-3 py-2 text-center">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wide">Processadas</p>
+                  <p className="text-lg font-bold text-text-primary">{batchProgress.processed}</p>
+                </div>
+                <div className="rounded-lg bg-bg-overlay border border-border px-3 py-2 text-center">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wide">Sucesso</p>
+                  <p className="text-lg font-bold text-success">{batchProgress.success}</p>
+                </div>
+                <div className="rounded-lg bg-bg-overlay border border-border px-3 py-2 text-center">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wide">Falhas</p>
+                  <p className="text-lg font-bold text-error">{batchProgress.failed}</p>
+                </div>
+                <div className="rounded-lg bg-bg-overlay border border-border px-3 py-2 text-center">
+                  <p className="text-[10px] text-text-muted uppercase tracking-wide">Restantes</p>
+                  <p className="text-lg font-bold text-text-primary">
+                    {batchProgress.remaining === null ? '—' : batchProgress.remaining}
+                  </p>
+                </div>
+              </div>
+
+              {batchDone && batchProgress.remaining === 0 && (
+                <div className="flex items-center gap-2 text-sm text-success">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Todas as variações sincronizadas com sucesso.
+                </div>
+              )}
+
+              {!batchRunning && !batchDone && batchProgress.processed > 0 && (
+                <div className="flex items-center gap-2 text-sm text-text-muted">
+                  <StopCircle className="w-4 h-4" />
+                  Sincronização interrompida. {batchProgress.remaining ?? '?'} variações restantes.
+                </div>
+              )}
+
+              {batchErrors.length > 0 && (
+                <div className="rounded-lg bg-error/5 border border-error/20 p-3 space-y-1 max-h-40 overflow-y-auto">
+                  <p className="text-xs font-semibold text-error mb-1">
+                    {batchErrors.length} erro(s) encontrado(s):
+                  </p>
+                  {batchErrors.map((e, i) => (
+                    <div key={i} className="text-xs text-error font-mono">
+                      {e.variation_id > 0 ? `Variação #${e.variation_id}: ` : ''}{e.error}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
 
