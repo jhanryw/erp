@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server'
+import { createHmac, timingSafeEqual } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { cancelSale } from '@/services/vendas.service'
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
+
+// ─── HMAC ────────────────────────────────────────────────────────────────────
+
+function verifyNuvemshopHmac(rawBody: string, receivedHmac: string, secret: string): boolean {
+  const expected = Buffer.from(
+    createHmac('sha256', secret).update(rawBody, 'utf8').digest('base64')
+  )
+  const received = Buffer.from(receivedHmac)
+
+  if (expected.length !== received.length) return false
+  return timingSafeEqual(expected, received)
+}
 
 // ─── Tipos do payload da Nuvemshop ────────────────────────────────────────────
 
@@ -111,9 +124,41 @@ async function findOrCreateCustomer(
 // ─── Rota ─────────────────────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
+  // ── HMAC: ler body bruto antes de qualquer parse ────────────────────────────
+  let rawBody: string
+  try {
+    rawBody = await request.text()
+  } catch {
+    return NextResponse.json({ error: 'Erro ao ler body.' }, { status: 400 })
+  }
+
+  const clientSecret = process.env.NUVEMSHOP_CLIENT_SECRET
+  const skipHmac     =
+    process.env.NODE_ENV !== 'production' &&
+    process.env.NUVEMSHOP_SKIP_WEBHOOK_HMAC === 'true'
+
+  if (skipHmac) {
+    console.warn(
+      '[webhook/order] ATENÇÃO: validação HMAC desabilitada via NUVEMSHOP_SKIP_WEBHOOK_HMAC=true. ' +
+      'NUNCA use isso em produção.'
+    )
+  } else if (!clientSecret) {
+    console.error('[webhook/order] NUVEMSHOP_CLIENT_SECRET não configurado. Rejeitar request.')
+    return NextResponse.json({ error: 'Configuração inválida do servidor.' }, { status: 500 })
+  } else {
+    const receivedHmac = request.headers.get('x-linkedstore-hmac-sha256') ?? ''
+    if (!receivedHmac) {
+      return NextResponse.json({ error: 'Assinatura inválida.' }, { status: 401 })
+    }
+    if (!verifyNuvemshopHmac(rawBody, receivedHmac, clientSecret)) {
+      return NextResponse.json({ error: 'Assinatura inválida.' }, { status: 401 })
+    }
+  }
+
+  // ── Parse do body já validado ───────────────────────────────────────────────
   let body: { store_id?: number; event?: string; id?: number }
   try {
-    body = await request.json()
+    body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'JSON inválido.' }, { status: 400 })
   }
@@ -413,7 +458,7 @@ export async function POST(request: Request) {
         p_notes:               `Pedido Nuvemshop #${externalId}`,
         p_items:               saleItems,
         p_system_user_id:      systemUserId,
-        p_accumulate_cashback: true,
+        p_stock_mode:          'online_priority',
       }) as unknown as { data: { id: number; sale_number: string } | null; error: { message: string } | null }
 
     if (saleError || !sale) {
