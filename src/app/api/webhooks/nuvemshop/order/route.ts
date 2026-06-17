@@ -147,10 +147,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Configuração inválida do servidor.' }, { status: 500 })
   } else {
     const receivedHmac = request.headers.get('x-linkedstore-hmac-sha256') ?? ''
-    if (!receivedHmac) {
-      return NextResponse.json({ error: 'Assinatura inválida.' }, { status: 401 })
-    }
-    if (!verifyNuvemshopHmac(rawBody, receivedHmac, clientSecret)) {
+    if (!receivedHmac || !verifyNuvemshopHmac(rawBody, receivedHmac, clientSecret)) {
+      console.warn('[webhook/order] hmac_invalid', { ts: new Date().toISOString() })
       return NextResponse.json({ error: 'Assinatura inválida.' }, { status: 401 })
     }
   }
@@ -169,6 +167,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'id e event obrigatórios.' }, { status: 400 })
   }
 
+  console.info('[webhook/order] received', { ts: new Date().toISOString(), event, orderId })
+
   // ── Allowlist de eventos — rejeita antes de qualquer chamada externa ─────────
   const HANDLED_EVENTS = new Set([
     'orders/paid',
@@ -178,6 +178,7 @@ export async function POST(request: Request) {
   ])
 
   if (!HANDLED_EVENTS.has(event)) {
+    console.info(`[webhook/order] event_not_handled: ${event}`)
     return NextResponse.json({ ok: true, skipped: true, reason: 'event_not_handled' })
   }
 
@@ -315,6 +316,7 @@ export async function POST(request: Request) {
 
     // ── 6. Pedido pago: verificação de status ───────────────────────────────────
     if (channelStatus !== 'paid') {
+      console.info(`[webhook/order] skipped_status: ${channelStatus}`, { orderId })
       return NextResponse.json({ ok: true, skipped: true })
     }
 
@@ -322,6 +324,8 @@ export async function POST(request: Request) {
     if (existing?.stock_processed && existing?.sale_id) {
       return NextResponse.json({ ok: true, already_processed: true })
     }
+
+    console.info(`[webhook/order] processing_paid_order: ${orderId}`)
 
     // ── 7. LOCK ATÔMICO — previne processamento duplicado ───────────────────────
     // UPDATE ... WHERE processing_lock = false RETURNING id é atômico no PG.
