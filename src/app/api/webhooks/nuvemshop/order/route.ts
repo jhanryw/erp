@@ -11,7 +11,7 @@ const APP_AGENT =
 
 function verifyNuvemshopHmac(rawBody: string, receivedHmac: string, secret: string): boolean {
   const expected = Buffer.from(
-    createHmac('sha256', secret).update(rawBody, 'utf8').digest('base64')
+    createHmac('sha256', secret).update(rawBody, 'utf8').digest('hex')
   )
   const received = Buffer.from(receivedHmac)
 
