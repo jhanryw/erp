@@ -39,13 +39,20 @@ type NuvemshopOrderItem = {
 }
 
 type NuvemshopOrder = {
-  id:               number
-  status:           string
-  total:            string
-  total_shipping?:  string
-  customer:         NuvemshopCustomer | null
-  products:         NuvemshopOrderItem[]
-  payment_details?: { method?: string } | null
+  id:                    number
+  status:                string
+  total:                 string
+  subtotal?:             string
+  discount?:             string
+  total_shipping?:       string
+  promotional_discount?: unknown
+  customer:              NuvemshopCustomer | null
+  products:              NuvemshopOrderItem[]
+  payment_details?: {
+    method?:               string
+    installments?:         number
+    credit_card_company?:  string | null
+  } | null
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -461,8 +468,51 @@ export async function POST(request: Request) {
       discount_amount:      0,
     }))
 
-    const shippingCharged = parseFloat(order.total_shipping ?? '0')
-    const paymentMethod   = mapPaymentMethod(order.payment_details?.method)
+    const shippingCharged    = parseFloat(order.total_shipping ?? '0')
+    const orderTotal         = parseFloat(order.total ?? '0')
+    const nuvemshopDiscount  = parseFloat(order.discount ?? '0')
+    const paymentMethod      = mapPaymentMethod(order.payment_details?.method)
+    const installments       = order.payment_details?.installments ?? 1
+    const cardBrand          = order.payment_details?.credit_card_company ?? null
+
+    // Subtotal calculado dos itens mapeados (evita violar sales_discount_valid)
+    const itemsSubtotal = saleItems.reduce((sum, i) => sum + i.unit_price * i.quantity, 0)
+    const discountSafe  = Math.min(nuvemshopDiscount, itemsSubtotal)
+
+    console.info('[webhook/order] payment_fields', {
+      orderId:             externalId,
+      status:              order.status,
+      total:               order.total,
+      subtotal:            order.subtotal,
+      discount:            order.discount,
+      total_shipping:      order.total_shipping,
+      payment_method:      order.payment_details?.method,
+      installments,
+      credit_card_company: cardBrand,
+    })
+
+    const saleNotes = [
+      `Pedido Nuvemshop #${externalId}`,
+      `Pagamento: ${order.payment_details?.method ?? paymentMethod}`,
+      installments > 1 ? `Parcelas: ${installments}x` : null,
+      nuvemshopDiscount > 0 ? `Desconto Nuvemshop: R$ ${nuvemshopDiscount.toFixed(2)}` : null,
+      shippingCharged > 0   ? `Frete: R$ ${shippingCharged.toFixed(2)}`                : null,
+    ].filter(Boolean).join('\n')
+
+    const salePayments = [{
+      method:          paymentMethod,
+      net_amount:      orderTotal,
+      amount_tendered: orderTotal,
+      installments,
+      card_brand:      cardBrand,
+      acquirer:        'nuvemshop',
+      fee_amount:      0,
+      metadata: {
+        external_order_id:          externalId,
+        nuvemshop_payment_method:   order.payment_details?.method ?? null,
+        promotional_discount:       order.promotional_discount ?? null,
+      },
+    }]
 
     // ── 13. Criar venda completa no ERP (atômico via RPC) ───────────────────────
     const { data: sale, error: saleError } = await (admin as any)
@@ -471,13 +521,14 @@ export async function POST(request: Request) {
         p_seller_id:           systemUserId,
         p_payment_method:      paymentMethod,
         p_sale_origin:         'website',
-        p_discount_amount:     0,
+        p_discount_amount:     discountSafe,
         p_surcharge_amount:    0,
         p_cashback_used:       0,
         p_shipping_charged:    shippingCharged,
-        p_notes:               `Pedido Nuvemshop #${externalId}`,
+        p_notes:               saleNotes,
         p_items:               saleItems,
         p_system_user_id:      systemUserId,
+        p_payments:            salePayments,
         p_stock_mode:          'online_priority',
       }) as unknown as { data: { id: number; sale_number: string } | null; error: { message: string } | null }
 
