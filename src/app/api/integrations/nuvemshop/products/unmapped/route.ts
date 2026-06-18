@@ -18,10 +18,20 @@ export async function GET() {
 
   const { data: products, error } = (await admin
     .from('products')
-    .select('id, name')
+    .select(`
+      id,
+      name,
+      product_variations (
+        stock_balances ( quantity )
+      )
+    `)
     .eq('active', true)
     .order('name', { ascending: true })) as unknown as {
-    data: Array<{ id: number; name: string }> | null
+    data: Array<{
+      id: number
+      name: string
+      product_variations: Array<{ stock_balances: Array<{ quantity: number }> }>
+    }> | null
     error: { message: string } | null
   }
 
@@ -29,7 +39,12 @@ export async function GET() {
     return NextResponse.json({ error: 'Erro ao buscar produtos.' }, { status: 500 })
   }
 
+  const withStock = products.filter((p) => {
+    const total = p.product_variations.flatMap((v) => v.stock_balances).reduce((sum, s) => sum + (s.quantity ?? 0), 0)
+    return total > 0
+  })
+
   return NextResponse.json({
-    products: products.filter((p) => !mappedIds.has(p.id)),
+    products: withStock.filter((p) => !mappedIds.has(p.id)).map(({ id, name }) => ({ id, name })),
   })
 }
