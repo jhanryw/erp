@@ -211,9 +211,8 @@ export async function POST(request: Request) {
     const order = await apiRes.json() as NuvemshopOrder
 
     const externalId    = String(order.id)
-    // Nuvemshop usa payment_status para estado do pagamento ('paid', 'pending'…)
-    // e status para estado do pedido ('open', 'closed', 'cancelled').
-    const channelStatus = order.payment_status ?? order.status ?? ''
+    const channelStatus = order.status ?? ''          // 'open' | 'closed' | 'cancelled'
+    const paymentStatus = order.payment_status ?? ''  // 'paid' | 'pending' | 'voided' | 'refunded'
     const total         = parseFloat(order.total ?? '0')
     const customerName  = order.customer?.name  ?? ''
     const customerEmail = order.customer?.email ?? ''
@@ -325,9 +324,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, cancelled: true })
     }
 
-    // ── 6. Pedido pago: verificação de status ───────────────────────────────────
-    if (channelStatus !== 'paid') {
-      console.info(`[webhook/order] skipped_status: ${channelStatus}`, { orderId })
+    // ── 6. Pedido pago: verificação de payment_status ──────────────────────────
+    if (paymentStatus !== 'paid') {
+      console.info('[webhook/order] skipped_status', { orderId, status: channelStatus, payment_status: paymentStatus })
       return NextResponse.json({ ok: true, skipped: true })
     }
 
