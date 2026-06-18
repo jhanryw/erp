@@ -179,6 +179,7 @@ export async function POST(request: Request) {
   // ── Allowlist de eventos — rejeita antes de qualquer chamada externa ─────────
   const HANDLED_EVENTS = new Set([
     'orders/paid',
+    'order/paid',       // Nuvemshop envia singular em alguns contextos
     'orders/cancelled',
     'order/cancelled',
     'orders/updated',   // alguns gateways mudam status para 'paid' num update
