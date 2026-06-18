@@ -545,23 +545,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Erro ao criar venda no ERP.' }, { status: 500 })
     }
 
-    // ── 14. Registrar movimentações de estoque por canal ────────────────────────
-    for (const item of mappedItens) {
-      void (async () => {
-        const { error } = await (admin as any)
-          .from('estoque_movimentacoes')
-          .insert({
-            product_variation_id: item.product_variation_id,
-            tipo:                 'saida',
-            origem:               'nuvemshop',
-            referencia_externa:   externalId,
-            quantidade:           item.quantidade,
-          })
-        if (error) console.error('[webhook/order] Erro ao registrar estoque_movimentacoes', error)
-      })()
-    }
-
-    // ── 15. Confirmar estoque final na Nuvemshop ─────────────────────────────────
+    // ── 14. Confirmar estoque final na Nuvemshop ─────────────────────────────────
     for (const item of mappedItens) {
       await pushVariantStockToNuvemshop(item.product_variation_id!, {
         eventType:       'stock_confirm_ns',
