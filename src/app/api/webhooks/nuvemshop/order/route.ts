@@ -40,7 +40,8 @@ type NuvemshopOrderItem = {
 
 type NuvemshopOrder = {
   id:                    number
-  status:                string
+  status:                string           // 'open' | 'closed' | 'cancelled'
+  payment_status?:       string           // 'pending' | 'paid' | 'voided' | 'refunded'
   total:                 string
   subtotal?:             string
   discount?:             string
@@ -210,7 +211,9 @@ export async function POST(request: Request) {
     const order = await apiRes.json() as NuvemshopOrder
 
     const externalId    = String(order.id)
-    const channelStatus = order.status ?? ''
+    // Nuvemshop usa payment_status para estado do pagamento ('paid', 'pending'…)
+    // e status para estado do pedido ('open', 'closed', 'cancelled').
+    const channelStatus = order.payment_status ?? order.status ?? ''
     const total         = parseFloat(order.total ?? '0')
     const customerName  = order.customer?.name  ?? ''
     const customerEmail = order.customer?.email ?? ''
@@ -483,6 +486,7 @@ export async function POST(request: Request) {
     console.info('[webhook/order] payment_fields', {
       orderId:             externalId,
       status:              order.status,
+      payment_status:      order.payment_status,
       total:               order.total,
       subtotal:            order.subtotal,
       discount:            order.discount,
