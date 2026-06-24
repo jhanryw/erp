@@ -32,6 +32,7 @@ export const SKU_TIPO = {
   camisola_americana:     '12',
   pijama_rendado:         '13',
   conjunto_calcinha_sutia:'14',
+  cinta:                  '15',
 } as const
 
 // ─── Modelos por tipo ─────────────────────────────────────────────────────────
@@ -135,6 +136,13 @@ export const SKU_MODELO: Record<string, Record<string, string>> = {
     renda_com_bojo:                   '04',
     bustie_cropped_renda:             '05',
     conjunto_com_calcinha_fio_dental: '06',
+  },
+
+  '15': { // Cinta
+    liga:              '01',
+    modeladora:        '02',
+    body_modelador:    '03',
+    regata_modeladora: '04',
   },
 
 }
