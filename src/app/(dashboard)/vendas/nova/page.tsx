@@ -16,6 +16,8 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
+import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
 import { Select } from '@/components/ui/select'
 
 const STEPS = ['Itens', 'Cliente', 'Pagamento', 'Confirmar']
@@ -35,9 +37,8 @@ export default function NovaVendaPage() {
   const [step, setStep] = useState(0)
 
   // ── Produto ──────────────────────────────────────────────────────────────────
-  const [productSearch, setProductSearch] = useState('')
   const [productNames, setProductNames] = useState<Record<number, string>>({})
-  const [productMeta, setProductMeta]   = useState<Record<number, { sku: string; cor?: string; tamanho?: string }>>({})
+  const [productMeta, setProductMeta]   = useState<Record<number, { sku: string; cor?: string; tamanho?: string; stock: number }>>({})
 
   // ── Cliente ──────────────────────────────────────────────────────────────────
   const [customerSearch, setCustomerSearch] = useState('')
@@ -77,7 +78,6 @@ export default function NovaVendaPage() {
   const supabase    = createClient()
 
   const debouncedCustomer = useDebounce(customerSearch, 300)
-  const debouncedProduct  = useDebounce(productSearch, 300)
 
   // ── Inicialização ─────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -136,47 +136,6 @@ export default function NovaVendaPage() {
     enabled: (debouncedCustomer?.length ?? 0) >= 2,
   })
 
-  const { data: products = [] } = useQuery({
-    queryKey: ['products-search', debouncedProduct],
-    queryFn: async () => {
-      if (!debouncedProduct) return []
-
-      const { data: matchingProducts } = await supabase
-        .from('products')
-        .select('id')
-        .ilike('name', `%${debouncedProduct}%`)
-        .limit(15)
-      const productIds = (matchingProducts ?? []).map((p: any) => p.id)
-
-      let query = supabase
-        .from('product_variations')
-        .select(`
-          id, sku_variation, price_override, cost_override,
-          products:product_id (id, name, sku, base_price, base_cost),
-          stock_balances(quantity),
-          product_variation_attributes (
-            variation_types:variation_type_id (slug),
-            variation_values:variation_value_id (value)
-          )
-        `)
-        .limit(20)
-
-      if (productIds.length > 0) {
-        query = query.or(`sku_variation.ilike.%${debouncedProduct}%,product_id.in.(${productIds.join(',')})`)
-      } else {
-        query = query.ilike('sku_variation', `%${debouncedProduct}%`)
-      }
-
-      const { data } = await query
-      return (data ?? []).filter((v: any) => {
-        const qty = Array.isArray(v.stock_balances)
-          ? v.stock_balances.reduce((s: number, b: any) => s + (b.quantity ?? 0), 0)
-          : (v.stock_balances?.quantity ?? 0)
-        return qty > 0
-      }).slice(0, 8)
-    },
-    enabled: debouncedProduct.length >= 2,
-  })
 
   // ── Handlers: cliente ─────────────────────────────────────────────────────────
   async function selectCustomer(customer: any) {
@@ -245,34 +204,39 @@ export default function NovaVendaPage() {
   }
 
   // ── Handlers: produto ─────────────────────────────────────────────────────────
-  function addProduct(variation: any) {
-    const product = variation.products
-    const price = variation.price_override ?? product.base_price
-    const cost  = variation.cost_override  ?? product.base_cost
-
-    // Extrai cor e tamanho dos atributos
-    const attrs: Array<{ variation_types: { slug: string }; variation_values: { value: string } }> =
-      variation.product_variation_attributes ?? []
-    const cor     = attrs.find(a => a.variation_types?.slug === 'cor')?.variation_values?.value
-    const tamanho = attrs.find(a => a.variation_types?.slug === 'tamanho')?.variation_values?.value
-
-    setProductNames((prev) => ({
-      ...prev,
-      [variation.id]: product?.name ?? `Variação #${variation.id}`,
-    }))
+  function addProduct(item: ProductSearchItem) {
+    // Persist metadata (idempotent — safe to run even on duplicate)
+    setProductNames((prev) => ({ ...prev, [item.variation_id]: item.product_name }))
     setProductMeta((prev) => ({
       ...prev,
-      [variation.id]: { sku: variation.sku_variation, cor, tamanho },
+      [item.variation_id]: {
+        sku: item.sku,
+        cor: item.cor ?? undefined,
+        tamanho: item.tamanho ?? undefined,
+        stock: item.stock,
+      },
     }))
+
+    // Check if this variation is already in the cart
+    const existingIndex = items.findIndex((it) => it.product_variation_id === item.variation_id)
+    if (existingIndex !== -1) {
+      const currentQty = items[existingIndex].quantity ?? 1
+      if (currentQty >= item.stock) {
+        toast.warning(`Estoque máximo atingido para ${item.product_name} (${item.stock} un.)`)
+        return
+      }
+      setValue(`items.${existingIndex}.quantity`, currentQty + 1)
+      return
+    }
+
     append({
-      product_variation_id: variation.id,
-      quantity:      1,
-      unit_price:    price,
-      unit_cost:     cost,
+      product_variation_id: item.variation_id,
+      quantity:        1,
+      unit_price:      item.price,
+      unit_cost:       item.cost,
       discount_amount: 0,
-      total_price:   price,
+      total_price:     item.price,
     })
-    setProductSearch('')
   }
 
   // ── Handlers: desconto R$ ↔ % ────────────────────────────────────────────────
@@ -541,46 +505,9 @@ export default function NovaVendaPage() {
                 )}
 
                 {/* Busca de produto */}
-                <div className="relative">
-                  <Input
-                    label="Buscar produto por nome ou SKU"
-                    value={productSearch}
-                    onChange={(e) => setProductSearch(e.target.value)}
-                    prefix={<Search className="w-4 h-4" />}
-                    placeholder="Digite SKU ou nome..."
-                    autoComplete="off"
-                  />
-                  {products.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-10 overflow-hidden">
-                      {products.map((v: any) => {
-                        const p = v.products
-                        const qty = Array.isArray(v.stock_balances)
-                          ? v.stock_balances.reduce((s: number, b: any) => s + (b.quantity ?? 0), 0)
-                          : (v.stock_balances?.quantity ?? 0)
-                        return (
-                          <button
-                            key={v.id}
-                            type="button"
-                            onClick={() => addProduct(v)}
-                            className="w-full flex items-center justify-between px-4 py-3.5 hover:bg-bg-hover text-left transition-colors border-b border-border/50 last:border-0"
-                          >
-                            <div className="flex-1 min-w-0 mr-3">
-                              <p className="text-sm font-medium text-text-primary truncate">{p?.name}</p>
-                              <p className="text-xs text-text-muted font-mono">{v.sku_variation}</p>
-                            </div>
-                            <div className="text-right flex-shrink-0">
-                              <p className="text-sm font-semibold text-text-primary">
-                                {formatCurrency(v.price_override ?? p?.base_price)}
-                              </p>
-                              <p className={`text-xs ${qty > 3 ? 'text-success' : qty > 0 ? 'text-warning' : 'text-error'}`}>
-                                {qty} em estoque
-                              </p>
-                            </div>
-                          </button>
-                        )
-                      })}
-                    </div>
-                  )}
+                <div>
+                  <label className="label-base mb-1 block">Buscar produto por nome ou SKU</label>
+                  <ProductSearchInput onSelect={addProduct} />
                 </div>
 
                 {/* Lista de itens */}
@@ -592,11 +519,13 @@ export default function NovaVendaPage() {
                 ) : (
                   <div className="space-y-2">
                     {fields.map((field, i) => {
-                      const varId = items[i]?.product_variation_id
-                      const name  = productNames[varId] ?? `Variação #${varId}`
-                      const meta  = productMeta[varId]
-                      const qty   = items[i]?.quantity ?? 1
-                      const price = items[i]?.unit_price ?? 0
+                      const varId    = items[i]?.product_variation_id
+                      const name     = productNames[varId] ?? `Variação #${varId}`
+                      const meta     = productMeta[varId]
+                      const qty      = items[i]?.quantity ?? 1
+                      const price    = items[i]?.unit_price ?? 0
+                      const maxStock = meta?.stock ?? Infinity
+                      const atLimit  = qty >= maxStock
                       return (
                         <div key={field.id} className="p-3.5 rounded-xl bg-bg-overlay space-y-2.5">
                           <div className="flex items-start justify-between gap-2">
@@ -629,8 +558,15 @@ export default function NovaVendaPage() {
                               <span className="text-base font-bold w-8 text-center tabular-nums">{qty}</span>
                               <button
                                 type="button"
-                                onClick={() => setValue(`items.${i}.quantity`, qty + 1)}
-                                className="w-11 h-11 rounded-xl bg-bg-hover flex items-center justify-center text-xl font-bold hover:bg-bg-active touch-manipulation"
+                                disabled={atLimit}
+                                onClick={() => {
+                                  if (atLimit) {
+                                    toast.warning(`Estoque máximo: ${maxStock} un.`)
+                                    return
+                                  }
+                                  setValue(`items.${i}.quantity`, qty + 1)
+                                }}
+                                className="w-11 h-11 rounded-xl bg-bg-hover flex items-center justify-center text-xl font-bold hover:bg-bg-active touch-manipulation disabled:opacity-40 disabled:cursor-not-allowed"
                               >+</button>
                             </div>
                             <p className="text-base font-bold tabular-nums">{formatCurrency(price * qty)}</p>

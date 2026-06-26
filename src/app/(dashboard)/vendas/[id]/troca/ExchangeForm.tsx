@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Search, X, Plus, RefreshCw, ArrowRightLeft } from 'lucide-react'
+import { X, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { formatCurrency } from '@/lib/utils/currency'
+import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
+import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -26,16 +27,6 @@ type ExchangeItem = {
       variation_values: { value: string }
     }[]
   } | null
-}
-
-type StockItem = {
-  product_variation_id: number
-  product_name: string
-  sku_variation: string
-  cor: string | null
-  tamanho: string | null
-  price: number
-  current_qty: number
 }
 
 type NewItem = {
@@ -74,10 +65,6 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
 
   // Seção 2: Levando
   const [newItems, setNewItems] = useState<NewItem[]>([])
-  const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState<StockItem[]>([])
-  const [searchLoading, setSearchLoading] = useState(false)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Seção 3: Pagamento (se diferença > crédito)
   const [paymentMethod, setPaymentMethod] = useState<string>('pix')
@@ -101,49 +88,29 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
   const hasReturning = Object.values(quantities).some(q => q > 0)
 
   // ── Busca de produtos ─────────────────────────────────────────────────────
-  const handleSearchChange = useCallback((value: string) => {
-    setSearch(value)
-    if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (value.length < 2) { setSearchResults([]); return }
-    debounceRef.current = setTimeout(async () => {
-      setSearchLoading(true)
-      try {
-        const res = await fetch(`/api/troca/produtos?q=${encodeURIComponent(value)}`)
-        const json = await res.json()
-        setSearchResults(json.items ?? [])
-      } catch {
-        setSearchResults([])
-      } finally {
-        setSearchLoading(false)
-      }
-    }, 300)
-  }, [])
-
-  function addNewItem(stock: StockItem) {
-    const variationParts = [stock.cor, stock.tamanho].filter(Boolean)
+  function addNewItem(item: ProductSearchItem) {
+    const variationParts = [item.cor, item.tamanho].filter(Boolean)
     const variationLabel = variationParts.length > 0 ? variationParts.join(' / ') : 'Padrão'
 
     setNewItems(prev => {
-      const existing = prev.find(i => i.product_variation_id === stock.product_variation_id)
+      const existing = prev.find(i => i.product_variation_id === item.variation_id)
       if (existing) {
         return prev.map(i =>
-          i.product_variation_id === stock.product_variation_id
+          i.product_variation_id === item.variation_id
             ? { ...i, quantity: Math.min(i.quantity + 1, i.current_qty) }
             : i
         )
       }
       return [...prev, {
-        product_variation_id: stock.product_variation_id,
-        product_name:  stock.product_name,
-        sku_variation: stock.sku_variation,
+        product_variation_id: item.variation_id,
+        product_name:    item.product_name,
+        sku_variation:   item.sku,
         variation_label: variationLabel,
-        quantity:   1,
-        unit_price: Number(stock.price),
-        current_qty: Number(stock.current_qty),
+        quantity:        1,
+        unit_price:      item.price,
+        current_qty:     item.stock,
       }]
     })
-    setSearch('')
-    setSearchResults([])
   }
 
   function removeNewItem(pvid: number) {
@@ -306,53 +273,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
           <CardContent className="space-y-4">
 
             {/* Busca */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-              <Input
-                type="search"
-                placeholder="Buscar peça por nome ou SKU..."
-                value={search}
-                onChange={e => handleSearchChange(e.target.value)}
-                className="pl-9"
-              />
-
-              {/* Dropdown de resultados */}
-              {(searchResults.length > 0 || searchLoading) && (
-                <div className="absolute top-full left-0 right-0 z-50 mt-1 rounded-xl border border-border bg-bg-card shadow-xl max-h-64 overflow-y-auto">
-                  {searchLoading && (
-                    <div className="px-4 py-3 text-sm text-text-muted">Buscando...</div>
-                  )}
-                  {searchResults.map(item => {
-                    const variationParts = [item.cor, item.tamanho].filter(Boolean)
-                    const variationLabel = variationParts.join(' / ') || 'Padrão'
-                    const alreadyAdded = newItems.some(i => i.product_variation_id === item.product_variation_id)
-                    return (
-                      <button
-                        key={item.product_variation_id}
-                        type="button"
-                        onClick={() => addNewItem(item)}
-                        className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-bg-hover transition-colors text-left border-b border-border last:border-0"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-text-primary truncate">{item.product_name}</p>
-                          <p className="text-xs text-text-muted">{variationLabel} · {item.sku_variation}</p>
-                        </div>
-                        <div className="flex-shrink-0 text-right">
-                          <p className="text-sm font-semibold text-text-primary">{formatCurrency(item.price)}</p>
-                          <p className="text-xs text-text-muted">{item.current_qty} em estoque</p>
-                        </div>
-                        {alreadyAdded && (
-                          <Plus className="w-4 h-4 text-brand flex-shrink-0" />
-                        )}
-                      </button>
-                    )
-                  })}
-                  {!searchLoading && searchResults.length === 0 && search.length >= 2 && (
-                    <div className="px-4 py-3 text-sm text-text-muted">Nenhuma peça encontrada.</div>
-                  )}
-                </div>
-              )}
-            </div>
+            <ProductSearchInput onSelect={addNewItem} />
 
             {/* Itens selecionados */}
             {newItems.length > 0 && (
