@@ -91,23 +91,24 @@ const paymentEntrySchema = z.object({
 })
 
 const schema = z.object({
-  customer_id:      z.number().int().positive(),
+  customer_id:             z.number().int().positive(),
+  responsible_seller_id:   z.number().int().positive({ message: 'Vendedor responsável obrigatório.' }),
   // Legado (campo único) — pode estar presente mesmo no novo fluxo como método dominante derivado
-  payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
+  payment_method:          z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
   // Novo fluxo multi-pagamento ([] = total zerado por cashback, sem pagamento em dinheiro)
-  payments:         z.array(paymentEntrySchema).optional(),
-  delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
-  sale_origin:      z.preprocess((v) => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other'], { required_error: 'Origem obrigatória' })),
+  payments:                z.array(paymentEntrySchema).optional(),
+  delivery_mode:           z.enum(['pickup', 'delivery']).default('delivery'),
+  sale_origin:             z.preprocess((v) => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other'], { required_error: 'Origem obrigatória' })),
   // 'use' → aplica saldo existente, não gera novo cashback
   // 'accumulate' → não usa saldo, gera cashback normalmente
-  cashback_action:  z.enum(['use', 'accumulate']).default('accumulate'),
-  discount_amount:  z.number().min(0).default(0),
-  surcharge_amount: z.number().min(0).default(0),
-  cashback_used:    z.number().min(0).default(0),
-  shipping_charged: z.number().min(0).default(0),
-  notes:            z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
-  items:            z.array(itemSchema).min(1),
-  cash_session_id:  z.number().int().positive().nullable().optional(),
+  cashback_action:         z.enum(['use', 'accumulate']).default('accumulate'),
+  discount_amount:         z.number().min(0).default(0),
+  surcharge_amount:        z.number().min(0).default(0),
+  cashback_used:           z.number().min(0).default(0),
+  shipping_charged:        z.number().min(0).default(0),
+  notes:                   z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  items:                   z.array(itemSchema).min(1),
+  cash_session_id:         z.number().int().positive().nullable().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
   { message: 'Informe payment_method ou payments[].' }
@@ -161,7 +162,12 @@ export async function POST(request: Request) {
     }
 
     // Criar venda via service (sale + itens + estoque + finance)
-    const result = await createSale({ ...saleData, systemUserId: user.id, cashSessionId: parsed.data.cash_session_id ?? null })
+    const result = await createSale({
+      ...saleData,
+      systemUserId:          user.id,
+      cashSessionId:         parsed.data.cash_session_id ?? null,
+      responsible_seller_id: parsed.data.responsible_seller_id,
+    })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
     const sale = result.data

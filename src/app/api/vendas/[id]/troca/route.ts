@@ -111,6 +111,7 @@ export async function POST(
           unit_cost:            0,   // custo resolvido pelo RPC via stock.avg_cost
           discount_amount:      0,
         })),
+        responsible_seller_id: null, // Fase 2 adicionará seleção via AuthorizationModal
       })
 
       if (saleResult.ok) {

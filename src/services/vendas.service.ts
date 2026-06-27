@@ -48,6 +48,8 @@ export interface CreateSaleInput {
   payments?: PaymentEntry[]
   /** ID da sessão de caixa física (nullable — vendas online não têm sessão) */
   cashSessionId?: number | null
+  /** Vendedor responsável pela venda (sellers.id). Obrigatório em vendas normais; nullable em trocas/devoluções. */
+  responsible_seller_id: number | null
 }
 
 export interface SaleResult {
@@ -250,20 +252,21 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   const p_payments = input.payments !== undefined ? input.payments : null
 
   const rpcParams = {
-    p_customer_id:      input.customer_id,
-    p_seller_id:        input.systemUserId,
-    p_payment_method:   input.payment_method,
-    p_sale_origin:      input.sale_origin ?? null,
-    p_discount_amount:  input.discount_amount,
-    p_surcharge_amount: input.surcharge_amount ?? 0,
-    p_cashback_used:    input.cashback_used,
-    p_shipping_charged: input.shipping_charged,
-    p_notes:            input.notes ?? null,
-    p_items:            input.items,
-    p_system_user_id:   input.systemUserId,
-    p_card_fee:         0,
+    p_customer_id:           input.customer_id,
+    p_seller_id:             input.systemUserId,
+    p_payment_method:        input.payment_method,
+    p_sale_origin:           input.sale_origin ?? null,
+    p_discount_amount:       input.discount_amount,
+    p_surcharge_amount:      input.surcharge_amount ?? 0,
+    p_cashback_used:         input.cashback_used,
+    p_shipping_charged:      input.shipping_charged,
+    p_notes:                 input.notes ?? null,
+    p_items:                 input.items,
+    p_system_user_id:        input.systemUserId,
+    p_card_fee:              0,
     p_payments,
-    p_cash_session_id:  input.cashSessionId ?? null,
+    p_cash_session_id:       input.cashSessionId ?? null,
+    p_responsible_seller_id: input.responsible_seller_id,
   }
 
   const { data: sale, error } = await (admin as any)

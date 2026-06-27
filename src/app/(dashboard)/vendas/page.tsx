@@ -23,6 +23,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { ORIGIN_LABELS, ORIGIN_COLORS } from '@/lib/constants/origins'
 import type { SaleStatus } from '@/types/database.types'
+import { hasMinRole } from '@/types/roles'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,10 +53,10 @@ type SaleRow = {
   sale_date:       string
   created_at:      string
   customers:       SaleCustomer | SaleCustomer[] | null
-  users:           SaleUser | SaleUser[] | null
+  sellers:         SaleUser | SaleUser[] | null
 }
 
-async function getSales(companyId: number, search?: string, page = 1) {
+async function getSales(companyId: number, search?: string, page = 1, responsibleSellerId?: number) {
   const supabase = createAdminClient()
 
   let query = supabase
@@ -64,10 +65,14 @@ async function getSales(companyId: number, search?: string, page = 1) {
       id, sale_number, total, discount_amount, cashback_used,
       payment_method, sale_origin, status, sale_date, created_at,
       customers:customer_id (id, name, cpf),
-      users:seller_id (id, name)
+      sellers:responsible_seller_id (id, name)
     `, { count: 'exact' })
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
+
+  if (responsibleSellerId != null) {
+    query = (query as any).eq('responsible_seller_id', responsibleSellerId)
+  }
 
   if (search) {
     // Filtra por número do pedido ou, via join, por nome do cliente
@@ -143,7 +148,28 @@ export default async function VendasPage({
     )
   }
 
-  const { sales, total, error } = await getSales(profile.company_id, search, page)
+  // Para usuario: filtrar apenas as vendas do seu responsible_seller_id
+  let responsibleSellerId: number | undefined
+  if (!hasMinRole(profile.role, 'gerente')) {
+    const adminClient = createAdminClient()
+    const { data: sellerRow } = await adminClient
+      .from('sellers')
+      .select('id')
+      .eq('user_id', authUser.id)
+      .eq('company_id', profile.company_id)
+      .maybeSingle() as unknown as { data: { id: number } | null }
+
+    if (!sellerRow) {
+      return (
+        <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
+          Esta conta não está vinculada a nenhum vendedor. Contate o administrador para configurar o acesso.
+        </div>
+      )
+    }
+    responsibleSellerId = sellerRow.id
+  }
+
+  const { sales, total, error } = await getSales(profile.company_id, search, page, responsibleSellerId)
   const totalPages = search ? 1 : Math.ceil(total / PAGE_SIZE)
 
   return (
@@ -210,9 +236,9 @@ export default async function VendasPage({
                     ? sale.customers[0] ?? null
                     : sale.customers ?? null
 
-                  const user = Array.isArray(sale.users)
-                    ? sale.users[0] ?? null
-                    : sale.users ?? null
+                  const seller = Array.isArray(sale.sellers)
+                    ? sale.sellers[0] ?? null
+                    : sale.sellers ?? null
 
                   return (
                     <TableRow key={sale.id}>
@@ -255,7 +281,7 @@ export default async function VendasPage({
                         <SaleStatusBadge status={sale.status} />
                       </TableCell>
 
-                      <TableCell>{user?.name ?? '—'}</TableCell>
+                      <TableCell>{seller?.name ?? '—'}</TableCell>
                     </TableRow>
                   )
                 })}

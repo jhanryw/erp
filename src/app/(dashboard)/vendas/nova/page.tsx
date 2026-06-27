@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
+import { SellerPicker } from '@/components/vendas/SellerPicker'
 import { Select } from '@/components/ui/select'
 
 const STEPS = ['Itens', 'Cliente', 'Pagamento', 'Confirmar']
@@ -58,6 +59,10 @@ export default function NovaVendaPage() {
   // ── Desconto vinculado R$ ↔ % ────────────────────────────────────────────────
   const [discountRaw, setDiscountRaw] = useState('')   // string no campo R$
   const [discountPct, setDiscountPct] = useState('')   // string no campo %
+
+  // ── Vendedor responsável ─────────────────────────────────────────────────────
+  const [responsibleSellerId, setResponsibleSellerId] = useState<number | null>(null)
+  const [sellerBlockedError, setSellerBlockedError] = useState<string | null>(null)
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
@@ -356,15 +361,22 @@ export default function NovaVendaPage() {
       ? paymentsToSend.reduce((a, b) => b.net_amount > a.net_amount ? b : a)
       : { method: 'pix' }  // placeholder — total=0, método não importa
 
+    if (!responsibleSellerId) {
+      submitting.current = false
+      toast.error('Selecione o vendedor responsável antes de confirmar a venda.')
+      return
+    }
+
     try {
       const res = await fetch('/api/vendas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...data,
-          payment_method:  dominant.method,
-          payments:        paymentsToSend,
-          cash_session_id: cashSession ? cashSession.id : null,
+          payment_method:        dominant.method,
+          payments:              paymentsToSend,
+          cash_session_id:       cashSession ? cashSession.id : null,
+          responsible_seller_id: responsibleSellerId,
         }),
       })
       const json = await res.json()
@@ -466,6 +478,19 @@ export default function NovaVendaPage() {
             {step === 0 && (
               <div className="card p-5 space-y-4">
                 <h3 className="text-sm font-semibold text-text-primary">Adicionar Itens</h3>
+
+                {/* Vendedor responsável */}
+                {sellerBlockedError ? (
+                  <div className="rounded-lg bg-error/10 border border-error/30 p-3 text-sm text-error">
+                    {sellerBlockedError}
+                  </div>
+                ) : (
+                  <SellerPicker
+                    value={responsibleSellerId}
+                    onChange={setResponsibleSellerId}
+                    onBlockedError={setSellerBlockedError}
+                  />
+                )}
 
                 {/* Modo de entrega */}
                 <div className="space-y-1.5">
@@ -603,6 +628,8 @@ export default function NovaVendaPage() {
                   type="button"
                   onClick={() => setStep(1)}
                   disabled={
+                    !!sellerBlockedError ||
+                    !responsibleSellerId ||
                     fields.length === 0 ||
                     !saleOrigin ||
                     (deliveryMode === 'pickup' && cashSession === null)
