@@ -51,6 +51,20 @@ export async function POST(
   const { customer_id, items, new_items, payment_method, notes } = parsed.data
   const admin = createAdminClient()
 
+  // ── 0. Herdar responsible_seller_id da venda original ────────
+  const { data: originalSale } = await admin
+    .from('sales')
+    .select('responsible_seller_id, company_id')
+    .eq('id', saleId)
+    .eq('company_id', user.company_id)
+    .maybeSingle() as unknown as {
+      data: { responsible_seller_id: number | null; company_id: number } | null
+    }
+
+  if (!originalSale) {
+    return NextResponse.json({ error: 'Venda não encontrada.' }, { status: 404 })
+  }
+
   // ── 1. Processar a troca (devolução + crédito) ──────────────
   const { data: exchangeData, error: exchangeError } = await (admin as any).rpc(
     'rpc_process_exchange',
@@ -111,7 +125,7 @@ export async function POST(
           unit_cost:            0,   // custo resolvido pelo RPC via stock.avg_cost
           discount_amount:      0,
         })),
-        responsible_seller_id: null, // Fase 2 adicionará seleção via AuthorizationModal
+        responsible_seller_id: originalSale.responsible_seller_id,
       })
 
       if (saleResult.ok) {
