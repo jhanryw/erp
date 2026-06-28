@@ -2,8 +2,11 @@ import { ShoppingCart, TrendingUp, Users, Package, BarChart2 } from 'lucide-reac
 import Link from 'next/link'
 
 import { createClient } from '@/lib/supabase/server'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { getUserProfile } from '@/lib/auth/getProfile'
 import { getDashboardData } from '@/services/dashboard'
+import { getSellerDashboardData } from '@/services/sellerDashboard'
+import { SellerDashboard } from '@/app/(dashboard)/_components/seller-dashboard'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -76,6 +79,33 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const { data: { user } } = await supabase.auth.getUser()
   const profile = user ? await getUserProfile(user.id, user.email) : null
   const role = profile?.role ?? 'usuario'
+
+  // Vendedora: mostrar apenas dados pessoais — sem financials, sem outros vendedores
+  if (role === 'usuario' && user && profile?.company_id) {
+    const admin = createAdminClient()
+    const { data: sellerRow } = await (admin as any)
+      .from('sellers')
+      .select('id, name')
+      .eq('user_id', user.id)
+      .eq('company_id', profile.company_id)
+      .eq('active', true)
+      .maybeSingle() as unknown as { data: { id: number; name: string } | null }
+
+    if (sellerRow) {
+      const sellerData = await getSellerDashboardData(
+        sellerRow.id, sellerRow.name, profile.company_id, dateFrom, dateTo,
+      )
+      return (
+        <SellerDashboard
+          data={sellerData}
+          activeRange={activeRange}
+          rangeLabel={rangeLabel}
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+        />
+      )
+    }
+  }
 
   const data = await getDashboardData(role, dateFrom, dateTo)
 
