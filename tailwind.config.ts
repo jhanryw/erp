@@ -28,6 +28,11 @@ const config: Config = {
           overlay:  'var(--bg-overlay)',
           hover:    'var(--bg-hover)',
           active:   'var(--bg-active)',
+          // Alias tokens (widely used, now resolved via CSS vars)
+          card:     'var(--bg-card)',
+          surface:  'var(--bg-surface)',
+          input:    'var(--bg-input)',
+          subtle:   'var(--bg-subtle)',
         },
         // Borders
         border: {

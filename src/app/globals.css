@@ -12,6 +12,11 @@
     --bg-overlay:  #F0F0F2;
     --bg-hover:    #E8E8EC;
     --bg-active:   #DCDCE0;
+    /* Alias tokens */
+    --bg-card:     #FFFFFF;
+    --bg-surface:  #F9F9FB;
+    --bg-input:    #FFFFFF;
+    --bg-subtle:   #F4F4F5;
 
     --border:        #E4E4E7;
     --border-strong: #D4D4D8;
@@ -39,6 +44,11 @@
     --bg-overlay:  #222222;
     --bg-hover:    #2A2A2A;
     --bg-active:   #333333;
+    /* Alias tokens */
+    --bg-card:     #161616;
+    --bg-surface:  #1A1A1A;
+    --bg-input:    #161616;
+    --bg-subtle:   #222222;
 
     --border:        #27272A;
     --border-strong: #3F3F46;

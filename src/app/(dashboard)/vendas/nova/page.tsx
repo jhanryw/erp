@@ -995,7 +995,7 @@ export default function NovaVendaPage() {
                       autoComplete="off"
                     />
                     {customers.length > 0 && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-10 overflow-hidden">
+                      <div className="absolute top-full left-0 right-0 mt-1 bg-bg-card border border-border rounded-lg shadow-modal z-30 overflow-hidden">
                         {customers.map((c: any) => (
                           <button
                             key={c.id}

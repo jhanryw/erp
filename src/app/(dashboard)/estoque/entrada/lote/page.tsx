@@ -169,7 +169,7 @@ function ProductSearchInput({
       )}
 
       {open && (
-        <div className="absolute top-full left-0 right-0 mt-1 bg-bg-elevated border border-border rounded-lg shadow-modal z-20 overflow-hidden max-h-64 overflow-y-auto">
+        <div className="absolute top-full left-0 right-0 mt-1 bg-bg-card border border-border rounded-lg shadow-modal z-30 overflow-hidden max-h-64 overflow-y-auto">
           {filtered.length === 0 ? (
             <p className="px-4 py-3 text-sm text-text-muted">Nenhum produto encontrado</p>
           ) : (

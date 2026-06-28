@@ -105,7 +105,7 @@ export function ProductSearchCombobox({
           {suggestions.map((p) => (
             <li
               key={p.id}
-              className="flex items-baseline gap-2 px-3 py-2 cursor-pointer hover:bg-bg-hover text-sm select-none"
+              className="flex items-baseline gap-2 px-3 py-2 cursor-pointer hover:bg-bg-hover transition-colors text-sm select-none"
               onMouseDown={(e) => { e.preventDefault(); handleSelect(p) }}
             >
               <span className="font-medium text-text-primary flex-1 truncate">{p.name}</span>

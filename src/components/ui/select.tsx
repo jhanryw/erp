@@ -26,7 +26,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           id={selectId}
           className={cn(
             'input-base appearance-none',
-            error && 'border-error/50 focus:ring-error/50 focus:border-error',
+            error && 'border-error focus:ring-error/50 focus:border-error',
             className
           )}
           {...props}

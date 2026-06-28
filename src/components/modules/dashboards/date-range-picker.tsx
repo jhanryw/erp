@@ -80,7 +80,7 @@ export function DateRangePicker({ activeRange, dateFrom, dateTo }: DateRangePick
 
       {/* Custom date dropdown */}
       {customOpen && (
-        <div className="absolute right-0 top-10 z-50 w-72 rounded-xl border border-border bg-bg-card shadow-xl p-4 space-y-3">
+        <div className="absolute right-0 top-full mt-2 z-50 w-72 rounded-xl border border-border bg-bg-card shadow-xl p-4 space-y-3">
           <p className="text-sm font-medium text-text-primary">Período personalizado</p>
 
           <div className="grid grid-cols-2 gap-2">
