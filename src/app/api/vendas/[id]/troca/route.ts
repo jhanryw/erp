@@ -184,8 +184,10 @@ export async function POST(
       items_returned: items.length,
       new_sale_id:    newSaleId,
     },
-    authorized_by: authorizedBy,
-    reason:        authReason,
+    authorized_by:          authorizedBy,
+    reason:                 authReason,
+    authorization_token_id: authorization_token_id ?? undefined,
+    authorization_action:   authorizedBy ? 'exchange_sale' : undefined,
   })
 
   return NextResponse.json({

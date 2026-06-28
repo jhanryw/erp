@@ -44,8 +44,12 @@ export interface AuditPayload {
   after?:         Record<string, unknown> | null
   detail?:        string
   /** UUID de quem autorizou a ação (para ações que requerem delegação) */
-  authorized_by?: string
-  reason?:        string
+  authorized_by?:          string
+  reason?:                 string
+  authorization_token_id?: string
+  authorization_action?:   string
+  discount_percent?:       number
+  discount_amount_audit?:  number
 }
 
 interface AuditContext {
@@ -88,8 +92,12 @@ export function createAuditLogger(ctx: AuditContext) {
       detail:        payload.detail,
       ip_address:    ctx.ipAddress,
       user_agent:    ctx.userAgent,
-      authorized_by: payload.authorized_by ?? undefined,
-      reason:        payload.reason ?? undefined,
+      authorized_by:          payload.authorized_by ?? undefined,
+      reason:                 payload.reason ?? undefined,
+      authorization_token_id: payload.authorization_token_id ?? undefined,
+      authorization_action:   payload.authorization_action ?? undefined,
+      discount_percent:       payload.discount_percent ?? undefined,
+      discount_amount_audit:  payload.discount_amount_audit ?? undefined,
     }
 
     // 1. Stdout sempre (capturado pelo EasyPanel / log aggregator)
@@ -114,16 +122,20 @@ export function createAuditLogger(ctx: AuditContext) {
  * Mantém retrocompatibilidade com código existente.
  */
 export function auditLog(entry: {
-  userId:         string
-  userRole:       string
-  action:         AuditAction
-  resource:       AuditResource
-  resourceId?:    string | number
-  before?:        Record<string, unknown> | null
-  after?:         Record<string, unknown> | null
-  detail?:        string
-  authorized_by?: string
-  reason?:        string
+  userId:                  string
+  userRole:                string
+  action:                  AuditAction
+  resource:                AuditResource
+  resourceId?:             string | number
+  before?:                 Record<string, unknown> | null
+  after?:                  Record<string, unknown> | null
+  detail?:                 string
+  authorized_by?:          string
+  reason?:                 string
+  authorization_token_id?: string
+  authorization_action?:   string
+  discount_percent?:       number
+  discount_amount_audit?:  number
 }): void {
   const log = createAuditLogger({
     userId:    entry.userId,
@@ -131,13 +143,17 @@ export function auditLog(entry: {
     requestId: generateRequestId(),
   })
   log({
-    action:         entry.action,
-    resource:       entry.resource,
-    resourceId:     entry.resourceId,
-    before:         entry.before,
-    after:          entry.after,
-    detail:         entry.detail,
-    authorized_by:  entry.authorized_by,
-    reason:         entry.reason,
+    action:                  entry.action,
+    resource:                entry.resource,
+    resourceId:              entry.resourceId,
+    before:                  entry.before,
+    after:                   entry.after,
+    detail:                  entry.detail,
+    authorized_by:           entry.authorized_by,
+    reason:                  entry.reason,
+    authorization_token_id:  entry.authorization_token_id,
+    authorization_action:    entry.authorization_action,
+    discount_percent:        entry.discount_percent,
+    discount_amount_audit:   entry.discount_amount_audit,
   })
 }

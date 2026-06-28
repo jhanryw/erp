@@ -67,8 +67,9 @@ export default function NovaVendaPage() {
   const [isLockedRole, setIsLockedRole] = useState(false)
 
   // ── Autorização de desconto ──────────────────────────────────────────────────
-  const [showDiscountAuthModal, setShowDiscountAuthModal] = useState(false)
-  const [discountAuthTokenId, setDiscountAuthTokenId] = useState<string | null>(null)
+  const [showDiscountAuthModal, setShowDiscountAuthModal]         = useState(false)
+  const [discountAuthTokenId, setDiscountAuthTokenId]             = useState<string | null>(null)
+  const [authorizedAtDiscountAmount, setAuthorizedAtDiscountAmount] = useState<number | null>(null)
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
@@ -284,6 +285,17 @@ export default function NovaVendaPage() {
   const currentDiscountPct  = subtotal > 0 && discountAmount > 0 ? (discountAmount / subtotal) * 100 : 0
   const gross               = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
   const total    = Math.max(0, gross - cashbackUsed)
+
+  // Invalida o token de desconto se o valor mudar depois da autorização
+  useEffect(() => {
+    if (discountAuthTokenId !== null && authorizedAtDiscountAmount !== null) {
+      if (Math.abs(discountAmount - authorizedAtDiscountAmount) > 0.01) {
+        setDiscountAuthTokenId(null)
+        setAuthorizedAtDiscountAmount(null)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [discountAmount])
 
   // Quando o crédito cobre 100% do valor, limpa pagamentos já adicionados
   // (evita que o RPC receba payments[sum=X] com total=0 e rejeite por divergência)
@@ -1339,8 +1351,11 @@ export default function NovaVendaPage() {
         title="Autorização necessária"
         description={`Desconto de ${currentDiscountPct.toFixed(1)}% requer aprovação de gerente (limite: 10%).`}
         resourceType="sale"
+        discountPct={currentDiscountPct}
+        discountAmount={discountAmount}
         onAuthorized={(tokenId) => {
           setDiscountAuthTokenId(tokenId)
+          setAuthorizedAtDiscountAmount(discountAmount)
           setShowDiscountAuthModal(false)
           setStep(3)
         }}

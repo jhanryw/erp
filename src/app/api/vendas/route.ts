@@ -149,6 +149,14 @@ export async function POST(request: Request) {
     }
 
     // Regra 4: desconto > 10% para usuario requer autorização de gerente
+    let discountAuditFields: {
+      authorized_by?: string
+      authorization_token_id?: string
+      authorization_action?: string
+      discount_percent?: number
+      discount_amount_audit?: number
+    } = {}
+
     if (user.role === 'usuario' && parsed.data.discount_amount > 0) {
       const itemsSubtotal = parsed.data.items.reduce(
         (s, i) => s + i.unit_price * i.quantity - i.discount_amount, 0
@@ -170,6 +178,25 @@ export async function POST(request: Request) {
         })
         if (!tokenResult.ok) {
           return NextResponse.json({ error: tokenResult.error }, { status: 403 })
+        }
+        // Garantir que o desconto não foi aumentado depois da autorização
+        if (
+          tokenResult.authorizedDiscountPct !== undefined &&
+          discountPct > tokenResult.authorizedDiscountPct + 0.01
+        ) {
+          return NextResponse.json(
+            {
+              error: `Desconto atual (${discountPct.toFixed(1)}%) excede o autorizado (${tokenResult.authorizedDiscountPct.toFixed(1)}%). Solicite nova autorização.`,
+            },
+            { status: 403 }
+          )
+        }
+        discountAuditFields = {
+          authorized_by:          tokenResult.authorizedBy,
+          authorization_token_id: tokenId,
+          authorization_action:   'approve_discount',
+          discount_percent:       discountPct,
+          discount_amount_audit:  parsed.data.discount_amount,
         }
       }
     }
@@ -203,6 +230,7 @@ export async function POST(request: Request) {
       userId: user.id, userRole: user.role,
       action: 'create', resource: 'sale',
       resourceId: sale.id, detail: sale.sale_number,
+      ...discountAuditFields,
     })
 
     // Sincronizar estoque para Nuvemshop (não-fatal, fire-and-forget)

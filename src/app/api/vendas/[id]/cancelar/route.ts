@@ -59,8 +59,10 @@ export async function POST(
       userId: user.id, userRole: user.role,
       action: 'cancel', resource: 'sale', resourceId: saleId,
       after: { status: 'cancelled' },
-      authorized_by: authorizedBy,
+      authorized_by:          authorizedBy,
       reason,
+      authorization_token_id: typeof body.authorization_token_id === 'string' ? body.authorization_token_id : undefined,
+      authorization_action:   authorizedBy ? 'cancel_sale' : undefined,
     })
 
     const variationIds = [...new Set((items ?? []).map((i) => i.product_variation_id).filter(Boolean))]

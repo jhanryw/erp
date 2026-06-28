@@ -51,8 +51,10 @@ export async function POST(
       userId: user.id, userRole: user.role,
       action: 'return', resource: 'sale', resourceId: saleId,
       after: { status: 'returned' },
-      authorized_by: authorizedBy,
+      authorized_by:          authorizedBy,
       reason,
+      authorization_token_id: typeof body.authorization_token_id === 'string' ? body.authorization_token_id : undefined,
+      authorization_action:   authorizedBy ? 'return_sale' : undefined,
     })
 
     return NextResponse.json({ success: true })

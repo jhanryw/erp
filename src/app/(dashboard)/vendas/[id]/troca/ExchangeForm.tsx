@@ -437,7 +437,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
         description="Esta ação requer aprovação de gerente. Informe as credenciais de um gerente ou administrador."
         resourceType="sale"
         resourceId={String(saleId)}
-        reasonRequired={false}
+        reasonRequired={true}
         onAuthorized={(tokenId) => {
           setShowAuthModal(false)
           doSubmit(tokenId)

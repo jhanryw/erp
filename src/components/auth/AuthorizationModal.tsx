@@ -7,15 +7,18 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 
 interface AuthorizationModalProps {
-  open:          boolean
-  action:        string
-  title:         string
-  description:   string
-  resourceType?: string
-  resourceId?:   string
+  open:            boolean
+  action:          string
+  title:           string
+  description:     string
+  resourceType?:   string
+  resourceId?:     string
   reasonRequired?: boolean
-  onAuthorized:  (tokenId: string) => void
-  onCancel:      () => void
+  /** Para approve_discount: percentual e valor a gravar no token */
+  discountPct?:    number
+  discountAmount?: number
+  onAuthorized:    (tokenId: string) => void
+  onCancel:        () => void
 }
 
 export function AuthorizationModal({
@@ -26,6 +29,8 @@ export function AuthorizationModal({
   resourceType,
   resourceId,
   reasonRequired = false,
+  discountPct,
+  discountAmount,
   onAuthorized,
   onCancel,
 }: AuthorizationModalProps) {
@@ -54,9 +59,11 @@ export function AuthorizationModal({
           email,
           password,
           action,
-          resource_type: resourceType,
-          resource_id:   resourceId,
-          reason:        reason.trim() || undefined,
+          resource_type:   resourceType,
+          resource_id:     resourceId,
+          reason:          reason.trim() || undefined,
+          discount_pct:    discountPct,
+          discount_amount: discountAmount,
         }),
       })
       const json = await res.json()
