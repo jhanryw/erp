@@ -20,6 +20,7 @@ import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
 import { SellerPicker } from '@/components/vendas/SellerPicker'
 import { Select } from '@/components/ui/select'
+import { AuthorizationModal } from '@/components/auth/AuthorizationModal'
 
 const STEPS = ['Itens', 'Cliente', 'Pagamento', 'Confirmar']
 
@@ -63,6 +64,11 @@ export default function NovaVendaPage() {
   // ── Vendedor responsável ─────────────────────────────────────────────────────
   const [responsibleSellerId, setResponsibleSellerId] = useState<number | null>(null)
   const [sellerBlockedError, setSellerBlockedError] = useState<string | null>(null)
+  const [isLockedRole, setIsLockedRole] = useState(false)
+
+  // ── Autorização de desconto ──────────────────────────────────────────────────
+  const [showDiscountAuthModal, setShowDiscountAuthModal] = useState(false)
+  const [discountAuthTokenId, setDiscountAuthTokenId] = useState<string | null>(null)
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
@@ -274,8 +280,9 @@ export default function NovaVendaPage() {
   const cashbackAction  = watch('cashback_action')  ?? 'accumulate'
   const saleOrigin      = watch('sale_origin')
 
-  const subtotal = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
-  const gross    = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
+  const subtotal            = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
+  const currentDiscountPct  = subtotal > 0 && discountAmount > 0 ? (discountAmount / subtotal) * 100 : 0
+  const gross               = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
   const total    = Math.max(0, gross - cashbackUsed)
 
   // Quando o crédito cobre 100% do valor, limpa pagamentos já adicionados
@@ -373,10 +380,11 @@ export default function NovaVendaPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...data,
-          payment_method:        dominant.method,
-          payments:              paymentsToSend,
-          cash_session_id:       cashSession ? cashSession.id : null,
-          responsible_seller_id: responsibleSellerId,
+          payment_method:                  dominant.method,
+          payments:                        paymentsToSend,
+          cash_session_id:                 cashSession ? cashSession.id : null,
+          responsible_seller_id:           responsibleSellerId,
+          discount_authorization_token_id: discountAuthTokenId ?? undefined,
         }),
       })
       const json = await res.json()
@@ -489,6 +497,7 @@ export default function NovaVendaPage() {
                     value={responsibleSellerId}
                     onChange={setResponsibleSellerId}
                     onBlockedError={setSellerBlockedError}
+                    onLockedChange={setIsLockedRole}
                   />
                 )}
 
@@ -909,11 +918,20 @@ export default function NovaVendaPage() {
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => setStep(3)}
+                    onClick={() => {
+                      if (isLockedRole && currentDiscountPct > 10 && !discountAuthTokenId) {
+                        setShowDiscountAuthModal(true)
+                        return
+                      }
+                      setStep(3)
+                    }}
                     disabled={!canFinalize}
                     className="flex-1 h-11"
                   >
                     Continuar
+                    {isLockedRole && currentDiscountPct > 10 && !discountAuthTokenId && (
+                      <span className="ml-1 text-xs opacity-75">· requer autorização</span>
+                    )}
                   </Button>
                 </div>
               </div>
@@ -1314,6 +1332,20 @@ export default function NovaVendaPage() {
           </div>
         </div>
       </form>
+
+      <AuthorizationModal
+        open={showDiscountAuthModal}
+        action="approve_discount"
+        title="Autorização necessária"
+        description={`Desconto de ${currentDiscountPct.toFixed(1)}% requer aprovação de gerente (limite: 10%).`}
+        resourceType="sale"
+        onAuthorized={(tokenId) => {
+          setDiscountAuthTokenId(tokenId)
+          setShowDiscountAuthModal(false)
+          setStep(3)
+        }}
+        onCancel={() => setShowDiscountAuthModal(false)}
+      />
     </div>
   )
 }

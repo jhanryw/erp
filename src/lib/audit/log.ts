@@ -35,14 +35,17 @@ export type AuditResource =
   | 'cash_session' | 'cash_movement'
 
 export interface AuditPayload {
-  action:      AuditAction
-  resource:    AuditResource
-  resourceId?: string | number
+  action:         AuditAction
+  resource:       AuditResource
+  resourceId?:    string | number
   /** Estado do registro ANTES da mutação */
-  before?:     Record<string, unknown> | null
+  before?:        Record<string, unknown> | null
   /** Estado do registro APÓS a mutação (ou campos alterados) */
-  after?:      Record<string, unknown> | null
-  detail?:     string
+  after?:         Record<string, unknown> | null
+  detail?:        string
+  /** UUID de quem autorizou a ação (para ações que requerem delegação) */
+  authorized_by?: string
+  reason?:        string
 }
 
 interface AuditContext {
@@ -73,18 +76,20 @@ export function generateRequestId(): string {
 export function createAuditLogger(ctx: AuditContext) {
   return function log(payload: AuditPayload): void {
     const entry = {
-      ts:          new Date().toISOString(),
-      request_id:  ctx.requestId,
-      user_id:     ctx.userId,
-      user_role:   ctx.userRole,
-      action:      payload.action,
-      resource:    payload.resource,
-      resource_id: payload.resourceId != null ? String(payload.resourceId) : undefined,
-      before_data: payload.before ?? undefined,
-      after_data:  payload.after ?? undefined,
-      detail:      payload.detail,
-      ip_address:  ctx.ipAddress,
-      user_agent:  ctx.userAgent,
+      ts:            new Date().toISOString(),
+      request_id:    ctx.requestId,
+      user_id:       ctx.userId,
+      user_role:     ctx.userRole,
+      action:        payload.action,
+      resource:      payload.resource,
+      resource_id:   payload.resourceId != null ? String(payload.resourceId) : undefined,
+      before_data:   payload.before ?? undefined,
+      after_data:    payload.after ?? undefined,
+      detail:        payload.detail,
+      ip_address:    ctx.ipAddress,
+      user_agent:    ctx.userAgent,
+      authorized_by: payload.authorized_by ?? undefined,
+      reason:        payload.reason ?? undefined,
     }
 
     // 1. Stdout sempre (capturado pelo EasyPanel / log aggregator)
@@ -109,14 +114,16 @@ export function createAuditLogger(ctx: AuditContext) {
  * Mantém retrocompatibilidade com código existente.
  */
 export function auditLog(entry: {
-  userId:     string
-  userRole:   string
-  action:     AuditAction
-  resource:   AuditResource
-  resourceId?: string | number
-  before?:    Record<string, unknown> | null
-  after?:     Record<string, unknown> | null
-  detail?:    string
+  userId:         string
+  userRole:       string
+  action:         AuditAction
+  resource:       AuditResource
+  resourceId?:    string | number
+  before?:        Record<string, unknown> | null
+  after?:         Record<string, unknown> | null
+  detail?:        string
+  authorized_by?: string
+  reason?:        string
 }): void {
   const log = createAuditLogger({
     userId:    entry.userId,
@@ -124,11 +131,13 @@ export function auditLog(entry: {
     requestId: generateRequestId(),
   })
   log({
-    action:     entry.action,
-    resource:   entry.resource,
-    resourceId: entry.resourceId,
-    before:     entry.before,
-    after:      entry.after,
-    detail:     entry.detail,
+    action:         entry.action,
+    resource:       entry.resource,
+    resourceId:     entry.resourceId,
+    before:         entry.before,
+    after:          entry.after,
+    detail:         entry.detail,
+    authorized_by:  entry.authorized_by,
+    reason:         entry.reason,
   })
 }

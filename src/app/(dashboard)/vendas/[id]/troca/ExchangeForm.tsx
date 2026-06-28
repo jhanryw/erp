@@ -9,6 +9,7 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils/currency'
 import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
+import { AuthorizationModal } from '@/components/auth/AuthorizationModal'
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -47,15 +48,16 @@ const PAYMENT_LABELS: Record<string, string> = {
 }
 
 interface Props {
-  saleId: number
-  customerId: number
-  customerName: string
-  items: ExchangeItem[]
+  saleId:        number
+  customerId:    number
+  customerName:  string
+  items:         ExchangeItem[]
+  requiresAuth?: boolean
 }
 
 // ── Componente ───────────────────────────────────────────────────────────────
 
-export function ExchangeForm({ saleId, customerId, customerName, items }: Props) {
+export function ExchangeForm({ saleId, customerId, customerName, items, requiresAuth }: Props) {
   const router = useRouter()
 
   // Seção 1: Devolvendo
@@ -72,6 +74,9 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
   // Observações
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
+
+  // Autorização inline para usuario
+  const [showAuthModal, setShowAuthModal] = useState(false)
 
   const availableItems = items.filter(i => i.available_to_return > 0)
 
@@ -138,12 +143,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
   }
 
   // ── Submeter ─────────────────────────────────────────────────────────────
-  async function handleSubmit() {
-    if (!hasReturning) {
-      toast.error('Selecione ao menos uma peça para devolver.')
-      return
-    }
-
+  async function doSubmit(authorizationTokenId?: string) {
     const selectedItems = availableItems
       .filter(i => (quantities[i.id] ?? 0) > 0)
       .map(i => ({ sale_item_id: i.id, quantity_returned: quantities[i.id] }))
@@ -163,6 +163,10 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
       if (toPay > 0.009) {
         payload.payment_method = paymentMethod
       }
+    }
+
+    if (authorizationTokenId) {
+      payload.authorization_token_id = authorizationTokenId
     }
 
     setLoading(true)
@@ -197,6 +201,18 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
       router.push(`/vendas/${saleId}`)
     } finally {
       setLoading(false)
+    }
+  }
+
+  function handleSubmit() {
+    if (!hasReturning) {
+      toast.error('Selecione ao menos uma peça para devolver.')
+      return
+    }
+    if (requiresAuth) {
+      setShowAuthModal(true)
+    } else {
+      doSubmit()
     }
   }
 
@@ -413,6 +429,21 @@ export function ExchangeForm({ saleId, customerId, customerName, items }: Props)
           </Button>
         </Card>
       )}
+
+      <AuthorizationModal
+        open={showAuthModal}
+        action="exchange_sale"
+        title="Autorizar troca"
+        description="Esta ação requer aprovação de gerente. Informe as credenciais de um gerente ou administrador."
+        resourceType="sale"
+        resourceId={String(saleId)}
+        reasonRequired={false}
+        onAuthorized={(tokenId) => {
+          setShowAuthModal(false)
+          doSubmit(tokenId)
+        }}
+        onCancel={() => setShowAuthModal(false)}
+      />
     </div>
   )
 }

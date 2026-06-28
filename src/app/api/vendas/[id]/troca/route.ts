@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createSale } from '@/services/vendas.service'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
+import { validateAuthorizationToken } from '@/lib/auth/validateAuthorizationToken'
 
 const returnedItemSchema = z.object({
   sale_item_id:      z.coerce.number().int().positive(),
@@ -18,18 +19,19 @@ const newItemSchema = z.object({
 })
 
 const schema = z.object({
-  customer_id:    z.coerce.number().int().positive(),
-  items:          z.array(returnedItemSchema).min(1),
-  new_items:      z.array(newItemSchema).optional().default([]),
-  payment_method: z.enum(['cash', 'pix', 'credit_card', 'debit_card']).optional(),
-  notes:          z.string().max(500).optional(),
+  customer_id:             z.coerce.number().int().positive(),
+  items:                   z.array(returnedItemSchema).min(1),
+  new_items:               z.array(newItemSchema).optional().default([]),
+  payment_method:          z.enum(['cash', 'pix', 'credit_card', 'debit_card']).optional(),
+  notes:                   z.string().max(500).optional(),
+  authorization_token_id:  z.string().uuid().optional(),
 })
 
 export async function POST(
   request: Request,
   { params }: { params: { id: string } }
 ) {
-  const { user, response: unauth } = await requireRole('gerente')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) {
     return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
@@ -48,7 +50,30 @@ export async function POST(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
   }
 
-  const { customer_id, items, new_items, payment_method, notes } = parsed.data
+  const { customer_id, items, new_items, payment_method, notes, authorization_token_id } = parsed.data
+
+  let authorizedBy: string | undefined
+  let authReason: string | undefined
+
+  if (user.role === 'usuario') {
+    if (!authorization_token_id) {
+      return NextResponse.json(
+        { error: 'Autorização de gerente necessária para registrar troca.' },
+        { status: 403 }
+      )
+    }
+    const tokenResult = await validateAuthorizationToken({
+      tokenId:     authorization_token_id,
+      action:      'exchange_sale',
+      requestedBy: user.id,
+      companyId:   user.company_id,
+    })
+    if (!tokenResult.ok) {
+      return NextResponse.json({ error: tokenResult.error }, { status: 403 })
+    }
+    authorizedBy = tokenResult.authorizedBy
+    authReason   = tokenResult.reason
+  }
   const admin = createAdminClient()
 
   // ── 0. Herdar responsible_seller_id da venda original ────────
@@ -159,6 +184,8 @@ export async function POST(
       items_returned: items.length,
       new_sale_id:    newSaleId,
     },
+    authorized_by: authorizedBy,
+    reason:        authReason,
   })
 
   return NextResponse.json({

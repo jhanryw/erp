@@ -1,4 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Package, Truck, Printer, Pencil } from 'lucide-react'
@@ -129,6 +131,11 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   const sale = await getSale(params.id)
   if (!sale) notFound()
 
+  const serverClient = createClient()
+  const { data: { user: authUser } } = await serverClient.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const requiresAuth = profile?.role === 'usuario'
+
   const isTerminal  = sale.status === 'cancelled' || sale.status === 'returned'
   const canReturn   = sale.status === 'delivered' || sale.status === 'paid'
   const canExchange = canReturn && !isTerminal
@@ -198,8 +205,8 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
             </Link>
           )}
           {/* Só mostra Devolução se não tiver trocas parciais — evita dupla devolução */}
-          {canReturn && !sale.hasExchanges && <ReturnButton saleId={sale.id} />}
-          {!isTerminal && <CancelSaleButton saleId={sale.id} />}
+          {canReturn && !sale.hasExchanges && <ReturnButton saleId={sale.id} requiresAuth={requiresAuth} />}
+          {!isTerminal && <CancelSaleButton saleId={sale.id} requiresAuth={requiresAuth} />}
         </div>
       </div>
 

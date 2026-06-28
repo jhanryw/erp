@@ -8,13 +8,15 @@ interface SellerPickerProps {
   onChange: (sellerId: number) => void
   /** Called when the user's account has no seller linked (blocks sale creation) */
   onBlockedError?: (msg: string) => void
+  /** Called with the locked state after seller data loads */
+  onLockedChange?: (locked: boolean) => void
   /** Validation error message to display below chips */
   error?: string
 }
 
 export type { Seller }
 
-export function SellerPicker({ value, onChange, onBlockedError, error }: SellerPickerProps) {
+export function SellerPicker({ value, onChange, onBlockedError, onLockedChange, error }: SellerPickerProps) {
   const [sellers, setSellers] = useState<Seller[]>([])
   const [locked, setLocked] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -26,6 +28,7 @@ export function SellerPicker({ value, onChange, onBlockedError, error }: SellerP
       .then((json: SellersResponse) => {
         setSellers(json.sellers)
         setLocked(json.locked)
+        onLockedChange?.(json.locked)
 
         if (json.locked && json.my_seller) {
           onChange(json.my_seller.id)

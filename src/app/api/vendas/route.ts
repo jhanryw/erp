@@ -6,6 +6,7 @@ import { logError } from '@/lib/errors/log'
 import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { validateAuthorizationToken } from '@/lib/auth/validateAuthorizationToken'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -108,7 +109,8 @@ const schema = z.object({
   shipping_charged:        z.number().min(0).default(0),
   notes:                   z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
   items:                   z.array(itemSchema).min(1),
-  cash_session_id:         z.number().int().positive().nullable().optional(),
+  cash_session_id:                  z.number().int().positive().nullable().optional(),
+  discount_authorization_token_id:  z.string().uuid().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
   { message: 'Informe payment_method ou payments[].' }
@@ -144,6 +146,32 @@ export async function POST(request: Request) {
         { error: `Venda com margem negativa requer aprovação de gerente. ${priceCheck.warnings[0]}` },
         { status: 403 }
       )
+    }
+
+    // Regra 4: desconto > 10% para usuario requer autorização de gerente
+    if (user.role === 'usuario' && parsed.data.discount_amount > 0) {
+      const itemsSubtotal = parsed.data.items.reduce(
+        (s, i) => s + i.unit_price * i.quantity - i.discount_amount, 0
+      )
+      const discountPct = itemsSubtotal > 0 ? (parsed.data.discount_amount / itemsSubtotal) * 100 : 0
+      if (discountPct > 10) {
+        const tokenId = parsed.data.discount_authorization_token_id
+        if (!tokenId) {
+          return NextResponse.json(
+            { error: 'Desconto acima de 10% requer autorização de gerente.' },
+            { status: 403 }
+          )
+        }
+        const tokenResult = await validateAuthorizationToken({
+          tokenId,
+          action:      'approve_discount',
+          requestedBy: user.id,
+          companyId:   user.company_id,
+        })
+        if (!tokenResult.ok) {
+          return NextResponse.json({ error: tokenResult.error }, { status: 403 })
+        }
+      }
     }
 
     // Derivar payment_method do método dominante (maior net_amount) quando payments[] fornecido
