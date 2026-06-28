@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,6 +20,8 @@ async function getProductsData() {
 }
 
 export default async function RelatorioProdutosPage() {
+  await requirePageRole('gerente')
+
   const products = await getProductsData()
 
   const totalRevenue = products.reduce((s, p) => s + (p.total_revenue ?? 0), 0)

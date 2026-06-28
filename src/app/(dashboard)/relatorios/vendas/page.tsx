@@ -8,6 +8,7 @@ import { SaleStatusBadge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import type { SaleStatus } from '@/types/database.types'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,8 @@ async function getSalesData() {
 const PAYMENT_LABELS: Record<string, string> = { pix: 'PIX', card: 'Cartão', cash: 'Dinheiro' }
 
 export default async function RelatorioVendasPage() {
+  await requirePageRole('gerente')
+
   const { sales, summary } = await getSalesData()
 
   const totalRevenue = sales.filter(s => !['cancelled', 'returned'].includes(s.status)).reduce((sum, s) => sum + s.total, 0)

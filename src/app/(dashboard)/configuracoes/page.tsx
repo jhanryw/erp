@@ -17,6 +17,8 @@ const SETTINGS_SECTIONS = [
 ]
 
 export default async function ConfiguracoesPage() {
+  await requirePageRole('gerente')
+
   await requirePageRole('admin')
   return (
     <div className="space-y-5">

@@ -7,6 +7,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,6 +22,8 @@ async function getStockData() {
 }
 
 export default async function RelatorioEstoquePage() {
+  await requirePageRole('gerente')
+
   const stock = await getStockData()
 
   const totalItems = stock.reduce((s, i) => s + (i.current_qty ?? 0), 0)

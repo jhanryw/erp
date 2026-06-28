@@ -14,6 +14,9 @@ import {
   TableHead,
   TableCell,
 } from '@/components/ui/table'
+import { hasMinRole } from '@/types/roles'
+import { useRouter } from 'next/navigation'
+import { useUserContext } from '@/components/layout/user-context'
 
 type ShipmentStatus =
   | 'aguardando_confirmacao'
@@ -101,6 +104,11 @@ function canPayRepasse(s: Shipment): boolean {
 }
 
 export default function EnviosPage() {
+  const router = useRouter()
+  const { userRole } = useUserContext()
+  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
+  if (!hasMinRole(userRole, 'gerente')) return null
+
   const [shipments, setShipments]   = useState<Shipment[]>([])
   const [loading, setLoading]       = useState(true)
   const [expandedId, setExpandedId] = useState<number | null>(null)

@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
 import { DashboardCharts } from './charts-section'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -381,6 +382,8 @@ async function getDashboardData() {
 }
 
 export default async function DashboardPage() {
+  await requirePageRole('gerente')
+
   const {
     faturamento,
     lucro,

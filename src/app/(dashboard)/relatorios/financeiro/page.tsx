@@ -6,6 +6,7 @@ import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -37,6 +38,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 }
 
 export default async function RelatorioFinanceiroPage() {
+  await requirePageRole('gerente')
+
   const { months, entries } = await getFinancialData()
   const current = months[0]
 

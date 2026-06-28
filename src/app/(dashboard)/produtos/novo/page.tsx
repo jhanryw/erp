@@ -58,6 +58,8 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>
 
 import { SKU_TIPO, SKU_MODELO, SKU_COR, SKU_TAMANHO, generateSKU, normalizeKey } from '@/lib/sku/sku-map'
+import { hasMinRole } from '@/types/roles'
+import { useUserContext } from '@/components/layout/user-context'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -69,6 +71,10 @@ function keyToLabel(key: string) {
 
 export default function NovoProdutoPage() {
   const router = useRouter()
+  const { userRole } = useUserContext()
+  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
+  if (!hasMinRole(userRole, 'gerente')) return null
+
 
   const [categories,  setCategories]  = useState<{ id: number; name: string }[]>([])
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])

@@ -100,6 +100,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Erro ao buscar produtos.' }, { status: 500 })
   }
 
+  const isUsuario = user.role === 'usuario'
+
   const items: ProductSearchItem[] = (rows ?? []).map((v) => {
     const attrs = v.product_variation_attributes ?? []
     const cor = attrs.find((a) => a.variation_types?.slug === 'cor')?.variation_values?.value ?? null
@@ -113,7 +115,8 @@ export async function GET(request: NextRequest) {
       sku:          v.sku_variation,
       product_name: v.products?.name ?? `Variação #${v.id}`,
       price:        v.price_override ?? v.products?.base_price ?? 0,
-      cost:         v.cost_override  ?? v.products?.base_cost  ?? 0,
+      // Custo nunca sai para usuario — campo sensível de margem
+      cost:         isUsuario ? 0 : (v.cost_override ?? v.products?.base_cost ?? 0),
       cor,
       tamanho,
       stock,

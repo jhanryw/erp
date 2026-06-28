@@ -2,8 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { hasMinRole } from '@/types/roles'
+import { useRouter } from 'next/navigation'
+import { useUserContext } from '@/components/layout/user-context'
 
 export default function DebugPage() {
+  const router = useRouter()
+  const { userRole } = useUserContext()
+  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
+  if (!hasMinRole(userRole, 'gerente')) return null
+
   const [serverResult, setServerResult] = useState<any>(null)
   const [clientResult, setClientResult] = useState<any>(null)
   const [loading, setLoading] = useState(true)

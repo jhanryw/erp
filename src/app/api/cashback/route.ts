@@ -15,7 +15,7 @@ const schema = z.object({
 })
 
 export async function GET() {
-  const { user, response: unauth } = await requireRole('usuario')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 

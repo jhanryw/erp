@@ -7,6 +7,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -33,6 +34,8 @@ async function getClientsData() {
 }
 
 export default async function RelatorioClientesPage() {
+  await requirePageRole('gerente')
+
   const customers = await getClientsData()
 
   const totalSpent = customers.reduce((s, c) => s + (c.customer_metrics?.total_spent ?? 0), 0)
