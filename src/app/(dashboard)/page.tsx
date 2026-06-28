@@ -1,4 +1,4 @@
-import { ShoppingCart, TrendingUp, Users, Package, BarChart2 } from 'lucide-react'
+import { ShoppingCart, TrendingUp, Users, Package, BarChart2, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
 
 import { createClient } from '@/lib/supabase/server'
@@ -80,8 +80,22 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const profile = user ? await getUserProfile(user.id, user.email) : null
   const role = profile?.role ?? 'usuario'
 
-  // Vendedora: mostrar apenas dados pessoais — sem financials, sem outros vendedores
-  if (role === 'usuario' && user && profile?.company_id) {
+  // ── Bloco exclusivo role=usuario ─────────────────────────────────────────
+  // usuario NUNCA pode sair deste bloco sem um return explícito.
+  // Nenhum caminho aqui pode cair no getDashboardData abaixo.
+  if (role === 'usuario') {
+    if (!user || !profile?.company_id) {
+      return (
+        <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 text-center">
+          <AlertTriangle className="h-8 w-8 text-destructive" />
+          <h2 className="text-lg font-semibold">Sessão inválida</h2>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Não foi possível identificar sua conta. Faça logout e entre novamente.
+          </p>
+        </div>
+      )
+    }
+
     const admin = createAdminClient()
     const { data: sellerRow } = await (admin as any)
       .from('sellers')
@@ -91,21 +105,34 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
       .eq('active', true)
       .maybeSingle() as unknown as { data: { id: number; name: string } | null }
 
-    if (sellerRow) {
-      const sellerData = await getSellerDashboardData(
-        sellerRow.id, sellerRow.name, profile.company_id, dateFrom, dateTo,
-      )
+    if (!sellerRow) {
       return (
-        <SellerDashboard
-          data={sellerData}
-          activeRange={activeRange}
-          rangeLabel={rangeLabel}
-          dateFrom={dateFrom}
-          dateTo={dateTo}
-        />
+        <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 text-center">
+          <AlertTriangle className="h-8 w-8 text-yellow-500" />
+          <h2 className="text-lg font-semibold">Vendedor não configurado</h2>
+          <p className="text-sm text-muted-foreground max-w-sm">
+            Sua conta ainda não está vinculada a um vendedor.
+            Fale com um administrador para configurar o acesso.
+          </p>
+        </div>
       )
     }
+
+    const sellerData = await getSellerDashboardData(
+      sellerRow.id, sellerRow.name, profile.company_id, dateFrom, dateTo,
+    )
+    return (
+      <SellerDashboard
+        data={sellerData}
+        activeRange={activeRange}
+        rangeLabel={rangeLabel}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+      />
+    )
   }
+
+  // ── Dashboard gerente/admin — role=usuario nunca chega aqui ──────────────
 
   const data = await getDashboardData(role, dateFrom, dateTo)
 
