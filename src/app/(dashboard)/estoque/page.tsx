@@ -12,6 +12,9 @@ import {
 } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
+import { hasMinRole } from '@/types/roles'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -20,8 +23,6 @@ import { EstoqueSearch } from './estoque-search'
 import { EstoqueMultiTable } from './estoque-multi-table'
 
 export const dynamic = 'force-dynamic'
-
-// ─── Tipos (espelham vw_stock_live_multi + stock_locations) ──────────────────
 
 type LocationBalance = {
   location_id:   number
@@ -58,8 +59,6 @@ type StockLocation = {
   priority:      number
 }
 
-// ─── Fetch ────────────────────────────────────────────────────────────────────
-
 async function getMultiStockData(search?: string) {
   const supabase = createAdminClient()
 
@@ -78,7 +77,6 @@ async function getMultiStockData(search?: string) {
 
   const [stockResult, summaryResult, locationsResult] = await Promise.all([
     itemsQuery,
-    // Summary sem filtro de busca para stat cards sempre refletirem o total
     (supabase as any)
       .from('vw_stock_live_multi')
       .select('product_id, total_qty, main_store_qty, needs_transfer, total_stock_value_at_cost, total_stock_value_at_price'),
@@ -98,16 +96,14 @@ async function getMultiStockData(search?: string) {
   return {
     items,
     locations,
-    productCount:      new Set(withStock.map((r) => r.product_id)).size,
-    totalQty:          withStock.reduce((s, r) => s + Number(r.total_qty),                  0),
-    totalCostValue:    withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost  ?? 0), 0),
-    totalSaleValue:    withStock.reduce((s, r) => s + Number(r.total_stock_value_at_price ?? 0), 0),
-    alertCount:        all.filter((r) => Number(r.total_qty) > 0 && Number(r.total_qty) <= 3).length,
+    productCount:       new Set(withStock.map((r) => r.product_id)).size,
+    totalQty:           withStock.reduce((s, r) => s + Number(r.total_qty), 0),
+    totalCostValue:     withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost  ?? 0), 0),
+    totalSaleValue:     withStock.reduce((s, r) => s + Number(r.total_stock_value_at_price ?? 0), 0),
+    alertCount:         all.filter((r) => Number(r.total_qty) > 0 && Number(r.total_qty) <= 3).length,
     needsTransferCount: all.filter((r) => r.needs_transfer).length,
   }
 }
-
-// ─── Página ───────────────────────────────────────────────────────────────────
 
 export default async function EstoquePage({
   searchParams,
@@ -116,44 +112,42 @@ export default async function EstoquePage({
 }) {
   const { q } = await searchParams
   const search = q?.trim() || undefined
+
+  const serverClient = createClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  const profile = user ? await getUserProfile(user.id, user.email) : null
+  const isManager = hasMinRole(profile?.role ?? 'usuario', 'gerente')
+
   const data = await getMultiStockData(search)
+
+  if (!isManager) {
+    return <EstoqueLiteView data={data} search={search} q={q} />
+  }
 
   return (
     <div className="space-y-6">
-      {/* ── Header ── */}
+      {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Estoque</h1>
-          <p className="text-sm text-muted-foreground">
-            {data.locations.length > 1
-              ? `${data.locations.length} locais ativos`
-              : 'Posição atual'}
+          <p className="text-sm text-text-muted">
+            {data.locations.length > 1 ? `${data.locations.length} locais ativos` : 'Posição atual'}
           </p>
         </div>
-
         <div className="flex gap-2">
           <Link href="/estoque/entrada/lote">
-            <Button variant="outline">
-              <Plus className="mr-2 h-4 w-4" />
-              Entrada em Lote
-            </Button>
+            <Button variant="outline"><Plus className="mr-2 h-4 w-4" />Entrada em Lote</Button>
           </Link>
           <Link href="/estoque/entrada/matriz">
-            <Button variant="outline">
-              <Plus className="mr-2 h-4 w-4" />
-              Entrada em Matriz
-            </Button>
+            <Button variant="outline"><Plus className="mr-2 h-4 w-4" />Entrada em Matriz</Button>
           </Link>
           <Link href="/estoque/entrada">
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              Registrar Entrada
-            </Button>
+            <Button><Plus className="mr-2 h-4 w-4" />Registrar Entrada</Button>
           </Link>
         </div>
       </div>
 
-      {/* ── Alerta: produtos que precisam de transferência ── */}
+      {/* Alerta de transferência */}
       {data.needsTransferCount > 0 && (
         <div className="flex items-start gap-3 rounded-xl border border-warning/40 bg-warning/8 px-4 py-3">
           <AlertTriangle className="h-5 w-5 text-warning mt-0.5 shrink-0" />
@@ -164,34 +158,18 @@ export default async function EstoquePage({
             </p>
             <p className="text-xs text-text-secondary mt-0.5">
               Esses produtos não podem ser vendidos presencialmente até que o estoque seja
-              transferido para o Estoque Loja. Use o botão "Transferir" na linha do produto.
+              transferido para o Estoque Loja. Use o botão &ldquo;Transferir&rdquo; na linha do produto.
             </p>
           </div>
         </div>
       )}
 
-      {/* ── Stat cards ── */}
+      {/* Stat cards completos */}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
-        <StatCard
-          title="Produtos"
-          value={formatNumber(data.productCount)}
-          icon={<Boxes className="h-4 w-4" />}
-        />
-        <StatCard
-          title="Quantidade Total"
-          value={formatNumber(data.totalQty)}
-          icon={<Warehouse className="h-4 w-4" />}
-        />
-        <StatCard
-          title="Valor em Custo"
-          value={formatCurrency(data.totalCostValue)}
-          icon={<DollarSign className="h-4 w-4" />}
-        />
-        <StatCard
-          title="Valor em Venda"
-          value={formatCurrency(data.totalSaleValue)}
-          icon={<Package className="h-4 w-4" />}
-        />
+        <StatCard title="Produtos"          value={formatNumber(data.productCount)} icon={<Boxes className="h-4 w-4" />} />
+        <StatCard title="Quantidade Total"  value={formatNumber(data.totalQty)}     icon={<Warehouse className="h-4 w-4" />} />
+        <StatCard title="Valor em Custo"    value={formatCurrency(data.totalCostValue)} icon={<DollarSign className="h-4 w-4" />} />
+        <StatCard title="Valor em Venda"    value={formatCurrency(data.totalSaleValue)} icon={<Package className="h-4 w-4" />} />
         <StatCard
           title="Alertas de Estoque"
           value={formatNumber(data.alertCount)}
@@ -200,33 +178,19 @@ export default async function EstoquePage({
         />
       </div>
 
-      {/* ── Botões de ação ── */}
+      {/* Botões de ação administrativos */}
       <div className="flex flex-wrap gap-3">
-        <Link href="/estoque/movimentacoes">
-          <Button variant="outline">Ver Movimentações</Button>
-        </Link>
-        <Link href="/estoque/ajuste">
-          <Button variant="outline">Ajuste de Estoque</Button>
-        </Link>
+        <Link href="/estoque/movimentacoes"><Button variant="outline">Ver Movimentações</Button></Link>
+        <Link href="/estoque/ajuste"><Button variant="outline">Ajuste de Estoque</Button></Link>
         <Link href="/estoque/inventario">
-          <Button variant="outline">
-            <ClipboardList className="mr-2 h-4 w-4" />
-            Conferir Estoque
-          </Button>
+          <Button variant="outline"><ClipboardList className="mr-2 h-4 w-4" />Conferir Estoque</Button>
         </Link>
         {data.locations.length > 1 && (
           <>
             <Link href="/estoque/transferencia-em-massa">
-              <Button variant="outline">
-                <ArrowLeftRight className="mr-2 h-4 w-4" />
-                Transferência em Massa
-              </Button>
+              <Button variant="outline"><ArrowLeftRight className="mr-2 h-4 w-4" />Transferência em Massa</Button>
             </Link>
-            <Link href="/estoque/localizacoes">
-              <Button variant="outline">
-                Gerenciar Locais
-              </Button>
-            </Link>
+            <Link href="/estoque/localizacoes"><Button variant="outline">Gerenciar Locais</Button></Link>
           </>
         )}
         <Link href="/estoque/alertas">
@@ -241,18 +205,53 @@ export default async function EstoquePage({
         </Link>
       </div>
 
-      {/* ── Busca ── */}
-      <Suspense>
-        <EstoqueSearch defaultValue={q} />
-      </Suspense>
+      <Suspense><EstoqueSearch defaultValue={q} /></Suspense>
 
-      {/* ── Tabela / empty state ── */}
       {data.items.length === 0 ? (
         <EmptyState
           icon={<Warehouse className="h-4 w-4" />}
           title="Estoque vazio"
           description="Registre a primeira entrada de estoque."
           action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
+        />
+      ) : (
+        <EstoqueMultiTable items={data.items} locations={data.locations} />
+      )}
+    </div>
+  )
+}
+
+// ─── Visão somente consulta para usuario/vendedor ─────────────────────────────
+
+function EstoqueLiteView({
+  data,
+  search,
+  q,
+}: {
+  data: Awaited<ReturnType<typeof getMultiStockData>>
+  search?: string
+  q?: string
+}) {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Estoque</h1>
+        <p className="text-sm text-text-muted">Consulta de disponibilidade</p>
+      </div>
+
+      {/* Apenas cards operacionais: produtos e quantidade */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <StatCard title="Produtos com Estoque" value={formatNumber(data.productCount)} icon={<Boxes className="h-4 w-4" />} />
+        <StatCard title="Quantidade Total"     value={formatNumber(data.totalQty)}     icon={<Warehouse className="h-4 w-4" />} />
+      </div>
+
+      <Suspense><EstoqueSearch defaultValue={q} /></Suspense>
+
+      {data.items.length === 0 ? (
+        <EmptyState
+          icon={<Warehouse className="h-4 w-4" />}
+          title={search ? `Nenhum item para "${search}"` : 'Estoque vazio'}
+          description={search ? 'Tente outro termo.' : 'Nenhum produto com estoque no momento.'}
         />
       ) : (
         <EstoqueMultiTable items={data.items} locations={data.locations} />

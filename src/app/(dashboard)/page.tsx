@@ -118,18 +118,12 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
       )
     }
 
+    // Dashboard da vendedora sempre mostra apenas hoje — ignora range da URL
+    const todayStr = brazilDate()
     const sellerData = await getSellerDashboardData(
-      sellerRow.id, sellerRow.name, profile.company_id, dateFrom, dateTo,
+      sellerRow.id, sellerRow.name, profile.company_id, todayStr, todayStr,
     )
-    return (
-      <SellerDashboard
-        data={sellerData}
-        activeRange={activeRange}
-        rangeLabel={rangeLabel}
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-      />
-    )
+    return <SellerDashboard data={sellerData} />
   }
 
   // ── Dashboard gerente/admin — role=usuario nunca chega aqui ──────────────

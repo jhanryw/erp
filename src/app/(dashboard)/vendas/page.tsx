@@ -203,8 +203,8 @@ export default async function VendasPage({
       {!error && sales.length === 0 ? (
         <EmptyState
           icon={<ShoppingCart className="h-4 w-4" />}
-          title={search ? `Nenhuma venda encontrada para "${search}"` : 'Nenhuma venda registrada'}
-          description={search ? 'Tente outro termo de busca.' : 'Registre a primeira venda do sistema.'}
+          title={search ? `Nenhuma venda encontrada para "${search}"` : (responsibleSellerId ? 'Nenhuma venda atribuída a você' : 'Nenhuma venda registrada')}
+          description={search ? 'Tente outro termo de busca.' : (responsibleSellerId ? 'As vendas aparecerão aqui quando forem registradas com você como vendedor responsável.' : 'Registre a primeira venda do sistema.')}
           action={search ? undefined : { label: 'Nova venda', href: '/vendas/nova' }}
         />
       ) : (
