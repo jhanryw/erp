@@ -41,6 +41,13 @@ export interface OriginStat {
   pct: number
 }
 
+export interface SellerStat {
+  sellerId: number
+  sellerName: string
+  revenue: number
+  pct: number
+}
+
 export interface DailyOriginPoint {
   sale_date: string
   [key: string]: number | string
@@ -52,6 +59,7 @@ export interface DashboardData {
   dailySeries: DailySalesPoint[]
   originBreakdown: OriginStat[]
   dailyOriginSeries: DailyOriginPoint[]
+  sellerBreakdown: SellerStat[]
   topProducts: TopProduct[]
   stockAlerts: StockAlert[]
   showFinancials: boolean
@@ -80,6 +88,8 @@ export async function getDashboardData(
     originSeriesRes,
     topProductsRes,
     stockAlertsRes,
+    sellerSalesRes,
+    sellersRes,
   ] = await Promise.all([
 
     // Vendas de hoje (sempre hoje, independente do range)
@@ -142,6 +152,24 @@ export async function getDashboardData(
       .gt('current_qty', 0)
       .order('current_qty', { ascending: true })
       .limit(6)
+    ,
+
+    // Faturamento por vendedor responsável no período
+    // Usa responsible_seller_id (quem fez a venda), nunca o login
+    supabase
+      .from('sales')
+      .select('responsible_seller_id, subtotal, discount_amount, cashback_used')
+      .gte('sale_date', from)
+      .lte('sale_date', to)
+      .not('status', 'in', '("cancelled","returned")')
+    ,
+
+    // Lista de vendedores ativos (para exibir nome e incluir quem não vendeu)
+    supabase
+      .from('sellers')
+      .select('id, name')
+      .eq('active', true)
+      .order('name')
     ,
   ])
 
@@ -280,6 +308,47 @@ export async function getDashboardData(
     }
   }
 
+  // ── Faturamento por vendedor responsável ─────────────────────────────────
+  type SellerSaleRow = {
+    responsible_seller_id: number | null
+    subtotal: number | null
+    discount_amount: number | null
+    cashback_used: number | null
+  }
+  type SellerRow = { id: number; name: string }
+
+  const sellerSaleRows = (sellerSalesRes.data ?? []) as SellerSaleRow[]
+  const allSellers     = (sellersRes.data     ?? []) as SellerRow[]
+
+  // Agrega receita líquida por responsible_seller_id
+  const sellerRevenueMap: Record<number, number> = {}
+  for (const r of sellerSaleRows) {
+    if (!r.responsible_seller_id) continue
+    const net =
+      Number(r.subtotal        ?? 0) -
+      Number(r.discount_amount ?? 0) -
+      Number(r.cashback_used   ?? 0)
+    sellerRevenueMap[r.responsible_seller_id] =
+      (sellerRevenueMap[r.responsible_seller_id] ?? 0) + net
+  }
+
+  // Monta breakdown com nome do vendedor, filtra quem não vendeu
+  const sellerBreakdownRaw: SellerStat[] = allSellers
+    .map((s) => ({
+      sellerId:   s.id,
+      sellerName: s.name,
+      revenue:    sellerRevenueMap[s.id] ?? 0,
+      pct:        0,
+    }))
+    .filter((s) => s.revenue > 0)
+    .sort((a, b) => b.revenue - a.revenue)
+
+  const totalSellerRevenue = sellerBreakdownRaw.reduce((sum, s) => sum + s.revenue, 0)
+  const sellerBreakdown: SellerStat[] = sellerBreakdownRaw.map((s) => ({
+    ...s,
+    pct: totalSellerRevenue > 0 ? (s.revenue / totalSellerRevenue) * 100 : 0,
+  }))
+
   // ── Montar resposta ───────────────────────────────────────────────────────
   return {
     today: {
@@ -295,6 +364,7 @@ export async function getDashboardData(
     dailySeries,
     originBreakdown,
     dailyOriginSeries,
+    sellerBreakdown,
     topProducts: topProductRows.map(row => ({
       product_id:        row.product_id,
       product_name:      row.product_name,

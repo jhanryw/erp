@@ -17,6 +17,7 @@ import { RefreshViewsButton } from '@/components/modules/dashboards/refresh-view
 import { DateRangePicker } from '@/components/modules/dashboards/date-range-picker'
 import { SalesByOriginChart } from '@/components/modules/dashboards/sales-by-origin-chart'
 import { OriginBreakdownWidget } from '@/components/modules/dashboards/origin-breakdown-widget'
+import { SellerBreakdownWidget } from '@/components/modules/dashboards/seller-breakdown-widget'
 import { formatCurrency } from '@/lib/utils/currency'
 import { hasMinRole } from '@/types/roles'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
@@ -232,15 +233,30 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <h2 className="text-lg font-semibold">Breakdown por Canal</h2>
-            <p className="text-sm text-muted-foreground">{periodLabel}</p>
-          </CardHeader>
-          <CardContent>
-            <OriginBreakdownWidget origins={data.originBreakdown} />
-          </CardContent>
-        </Card>
+        {/* Coluna direita: dois breakdowns empilhados */}
+        <div className="flex flex-col gap-6">
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">Breakdown por Canal</h2>
+              <p className="text-sm text-muted-foreground">{periodLabel}</p>
+            </CardHeader>
+            <CardContent>
+              <OriginBreakdownWidget origins={data.originBreakdown} />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <h2 className="text-lg font-semibold">Faturamento por Vendedor</h2>
+              <p className="text-sm text-muted-foreground">
+                Receita líquida por vendedor no período selecionado.
+              </p>
+            </CardHeader>
+            <CardContent>
+              <SellerBreakdownWidget sellers={data.sellerBreakdown} />
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       {/* ── Top Produtos + Alertas ──────────────────────────────────── */}
