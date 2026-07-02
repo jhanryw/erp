@@ -23,7 +23,6 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { ORIGIN_LABELS, ORIGIN_COLORS } from '@/lib/constants/origins'
 import type { SaleStatus } from '@/types/database.types'
-import { hasMinRole } from '@/types/roles'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,7 +55,7 @@ type SaleRow = {
   sellers:         SaleUser | SaleUser[] | null
 }
 
-async function getSales(companyId: number, search?: string, page = 1, responsibleSellerId?: number) {
+async function getSales(companyId: number, search?: string, page = 1) {
   const supabase = createAdminClient()
 
   let query = supabase
@@ -69,10 +68,6 @@ async function getSales(companyId: number, search?: string, page = 1, responsibl
     `, { count: 'exact' })
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
-
-  if (responsibleSellerId != null) {
-    query = (query as any).eq('responsible_seller_id', responsibleSellerId)
-  }
 
   if (search) {
     // Filtra por número do pedido ou, via join, por nome do cliente
@@ -148,28 +143,7 @@ export default async function VendasPage({
     )
   }
 
-  // Para usuario: filtrar apenas as vendas do seu responsible_seller_id
-  let responsibleSellerId: number | undefined
-  if (!hasMinRole(profile.role, 'gerente')) {
-    const adminClient = createAdminClient()
-    const { data: sellerRow } = await adminClient
-      .from('sellers')
-      .select('id')
-      .eq('user_id', authUser.id)
-      .eq('company_id', profile.company_id)
-      .maybeSingle() as unknown as { data: { id: number } | null }
-
-    if (!sellerRow) {
-      return (
-        <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-sm text-warning">
-          Esta conta não está vinculada a nenhum vendedor. Contate o administrador para configurar o acesso.
-        </div>
-      )
-    }
-    responsibleSellerId = sellerRow.id
-  }
-
-  const { sales, total, error } = await getSales(profile.company_id, search, page, responsibleSellerId)
+  const { sales, total, error } = await getSales(profile.company_id, search, page)
   const totalPages = search ? 1 : Math.ceil(total / PAGE_SIZE)
 
   return (
@@ -203,8 +177,8 @@ export default async function VendasPage({
       {!error && sales.length === 0 ? (
         <EmptyState
           icon={<ShoppingCart className="h-4 w-4" />}
-          title={search ? `Nenhuma venda encontrada para "${search}"` : (responsibleSellerId ? 'Nenhuma venda atribuída a você' : 'Nenhuma venda registrada')}
-          description={search ? 'Tente outro termo de busca.' : (responsibleSellerId ? 'As vendas aparecerão aqui quando forem registradas com você como vendedor responsável.' : 'Registre a primeira venda do sistema.')}
+          title={search ? `Nenhuma venda encontrada para "${search}"` : 'Nenhuma venda registrada'}
+          description={search ? 'Tente outro termo de busca.' : 'Registre a primeira venda do sistema.'}
           action={search ? undefined : { label: 'Nova venda', href: '/vendas/nova' }}
         />
       ) : (
