@@ -43,12 +43,10 @@ export async function GET(): Promise<NextResponse> {
 
   const mySeller = list.find((s) => s.user_id === user.id) ?? null
 
-  const isUsuario = user.role === 'usuario'
-
   const response: SellersResponse = {
     sellers: list.map(({ id, name }) => ({ id, name })),
     my_seller: mySeller ? { id: mySeller.id, name: mySeller.name } : null,
-    locked: isUsuario,
+    locked: false,
   }
 
   return NextResponse.json(response)
