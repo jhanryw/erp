@@ -164,11 +164,11 @@ export async function getDashboardData(
       .not('status', 'in', '("cancelled","returned")')
     ,
 
-    // Lista de vendedores ativos (para exibir nome e incluir quem não vendeu)
+    // Todos os sellers — sem filtro active, para que inativos (ex: Santtorini)
+    // apareçam nos relatórios históricos quando houver vendas atribuídas a eles
     supabase
       .from('sellers')
       .select('id, name')
-      .eq('active', true)
       .order('name')
     ,
   ])
@@ -320,27 +320,33 @@ export async function getDashboardData(
   const sellerSaleRows = (sellerSalesRes.data ?? []) as SellerSaleRow[]
   const allSellers     = (sellersRes.data     ?? []) as SellerRow[]
 
-  // Agrega receita líquida por responsible_seller_id
-  const sellerRevenueMap: Record<number, number> = {}
+  // Mapa id → name para lookup rápido (inclui inativos como Santtorini)
+  const sellerNameById: Record<number, string> = {}
+  for (const s of allSellers) sellerNameById[s.id] = s.name
+
+  // Agrega receita líquida: keyed por seller_id numérico (string) ou 'null'
+  const sellerRevenueMap: Record<string, number> = {}
   for (const r of sellerSaleRows) {
-    if (!r.responsible_seller_id) continue
+    const key = r.responsible_seller_id != null ? String(r.responsible_seller_id) : 'null'
     const net =
       Number(r.subtotal        ?? 0) -
       Number(r.discount_amount ?? 0) -
       Number(r.cashback_used   ?? 0)
-    sellerRevenueMap[r.responsible_seller_id] =
-      (sellerRevenueMap[r.responsible_seller_id] ?? 0) + net
+    sellerRevenueMap[key] = (sellerRevenueMap[key] ?? 0) + net
   }
 
-  // Monta breakdown com nome do vendedor, filtra quem não vendeu
-  const sellerBreakdownRaw: SellerStat[] = allSellers
-    .map((s) => ({
-      sellerId:   s.id,
-      sellerName: s.name,
-      revenue:    sellerRevenueMap[s.id] ?? 0,
-      pct:        0,
+  // Monta breakdown a partir das entradas do mapa (não da lista de sellers)
+  // — garante que vendedores inativos com vendas apareçam
+  const sellerBreakdownRaw: SellerStat[] = Object.entries(sellerRevenueMap)
+    .filter(([, rev]) => rev > 0)
+    .map(([key, rev]) => ({
+      sellerId:   key === 'null' ? 0 : Number(key),
+      sellerName: key === 'null'
+        ? 'Sem vendedor'
+        : (sellerNameById[Number(key)] ?? `Vendedor #${key}`),
+      revenue: rev,
+      pct:     0,
     }))
-    .filter((s) => s.revenue > 0)
     .sort((a, b) => b.revenue - a.revenue)
 
   const totalSellerRevenue = sellerBreakdownRaw.reduce((sum, s) => sum + s.revenue, 0)
