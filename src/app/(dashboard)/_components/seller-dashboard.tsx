@@ -97,7 +97,7 @@ export function SellerDashboard({ data }: Props) {
 
       {today.orders === 0 && (
         <div className="rounded-xl border border-border bg-bg-elevated px-4 py-4 text-sm text-text-muted text-center">
-          Nenhuma venda atribuída a {data.sellerName} hoje.
+          Nenhuma venda registrada hoje.
         </div>
       )}
     </div>

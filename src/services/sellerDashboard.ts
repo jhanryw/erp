@@ -73,7 +73,6 @@ export async function getSellerDashboardData(
     admin
       .from('sales')
       .select('id, total, discount_amount, customer_id, payment_method, sale_origin')
-      .eq('responsible_seller_id', sellerId)
       .eq('company_id', companyId)
       .eq('sale_date', today)
       .not('status', 'in', '("cancelled","returned")')
@@ -90,7 +89,6 @@ export async function getSellerDashboardData(
           )
         )
       `)
-      .eq('responsible_seller_id', sellerId)
       .eq('company_id', companyId)
       .gte('sale_date', dateFrom)
       .lte('sale_date', dateTo)
@@ -178,7 +176,6 @@ export async function getSellerDashboardData(
     const { data: monthSales } = await admin
       .from('sales')
       .select('total')
-      .eq('responsible_seller_id', sellerId)
       .eq('company_id', companyId)
       .gte('sale_date', monthFrom)
       .lte('sale_date', today)
