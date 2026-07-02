@@ -20,7 +20,6 @@ import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
 import { SellerPicker } from '@/components/vendas/SellerPicker'
 import { Select } from '@/components/ui/select'
-import { AuthorizationModal } from '@/components/auth/AuthorizationModal'
 
 const STEPS = ['Itens', 'Cliente', 'Pagamento', 'Confirmar']
 
@@ -65,11 +64,6 @@ export default function NovaVendaPage() {
   const [responsibleSellerId, setResponsibleSellerId] = useState<number | null>(null)
   const [sellerBlockedError, setSellerBlockedError] = useState<string | null>(null)
   const [isLockedRole, setIsLockedRole] = useState(false)
-
-  // ── Autorização de desconto ──────────────────────────────────────────────────
-  const [showDiscountAuthModal, setShowDiscountAuthModal]         = useState(false)
-  const [discountAuthTokenId, setDiscountAuthTokenId]             = useState<string | null>(null)
-  const [authorizedAtDiscountAmount, setAuthorizedAtDiscountAmount] = useState<number | null>(null)
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
@@ -287,16 +281,6 @@ export default function NovaVendaPage() {
   const total    = Math.max(0, gross - cashbackUsed)
 
   // Invalida o token de desconto se o valor mudar depois da autorização
-  useEffect(() => {
-    if (discountAuthTokenId !== null && authorizedAtDiscountAmount !== null) {
-      if (Math.abs(discountAmount - authorizedAtDiscountAmount) > 0.01) {
-        setDiscountAuthTokenId(null)
-        setAuthorizedAtDiscountAmount(null)
-      }
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [discountAmount])
-
   // Quando o crédito cobre 100% do valor, limpa pagamentos já adicionados
   // (evita que o RPC receba payments[sum=X] com total=0 e rejeite por divergência)
   useEffect(() => {
@@ -396,7 +380,6 @@ export default function NovaVendaPage() {
           payments:                        paymentsToSend,
           cash_session_id:                 cashSession ? cashSession.id : null,
           responsible_seller_id:           responsibleSellerId,
-          discount_authorization_token_id: discountAuthTokenId ?? undefined,
         }),
       })
       const json = await res.json()
@@ -930,20 +913,11 @@ export default function NovaVendaPage() {
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => {
-                      if (isLockedRole && currentDiscountPct > 10 && !discountAuthTokenId) {
-                        setShowDiscountAuthModal(true)
-                        return
-                      }
-                      setStep(3)
-                    }}
+                    onClick={() => setStep(3)}
                     disabled={!canFinalize}
                     className="flex-1 h-11"
                   >
                     Continuar
-                    {isLockedRole && currentDiscountPct > 10 && !discountAuthTokenId && (
-                      <span className="ml-1 text-xs opacity-75">· requer autorização</span>
-                    )}
                   </Button>
                 </div>
               </div>
@@ -1345,22 +1319,6 @@ export default function NovaVendaPage() {
         </div>
       </form>
 
-      <AuthorizationModal
-        open={showDiscountAuthModal}
-        action="approve_discount"
-        title="Autorização necessária"
-        description={`Desconto de ${currentDiscountPct.toFixed(1)}% requer aprovação de gerente (limite: 10%).`}
-        resourceType="sale"
-        discountPct={currentDiscountPct}
-        discountAmount={discountAmount}
-        onAuthorized={(tokenId) => {
-          setDiscountAuthTokenId(tokenId)
-          setAuthorizedAtDiscountAmount(discountAmount)
-          setShowDiscountAuthModal(false)
-          setStep(3)
-        }}
-        onCancel={() => setShowDiscountAuthModal(false)}
-      />
     </div>
   )
 }
