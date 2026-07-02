@@ -61,6 +61,27 @@ export async function POST(request: Request) {
   const admin = createAdminClient()
   const { variants, ...productData } = parsed.data
 
+  // Verificar duplicata antes de inserir — retorna 409 com id do existente
+  const { data: existingProduct } = (await admin
+    .from('products')
+    .select('id, name')
+    .eq('company_id', user.company_id)
+    .ilike('name', productData.name.trim())
+    .eq('tipo', productData.tipo)
+    .eq('modelo', productData.modelo)
+    .eq('ano', productData.ano)
+    .maybeSingle()) as unknown as { data: { id: number; name: string } | null }
+
+  if (existingProduct) {
+    return NextResponse.json(
+      {
+        error: `Produto "${existingProduct.name}" com este tipo, modelo e ano já existe. Deseja adicionar variações a ele?`,
+        existingId: existingProduct.id,
+      },
+      { status: 409 }
+    )
+  }
+
   const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
 
   const { data: product, error: productError } = (await (admin as any)

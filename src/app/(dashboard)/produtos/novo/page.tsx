@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useFieldArray } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -91,6 +91,10 @@ export default function NovoProdutoPage() {
     resolver: zodResolver(formSchema),
     defaultValues: { origin: 'third_party', base_cost: 0, active: true, variants: [] },
   })
+
+  // Lock explícito contra double-submit — cobre a janela entre o clique e
+  // isSubmitting virar true, e impede retry acidental durante resposta lenta.
+  const submittingRef = useRef(false)
 
   const { fields, replace } = useFieldArray({ control, name: 'variants' })
 
@@ -264,32 +268,51 @@ export default function NovoProdutoPage() {
 
   // Submit
   async function onSubmit(data: FormData) {
-    if (data.variants.length === 0) {
-      toast.error('Gere ao menos uma variante antes de salvar')
-      return
+    if (submittingRef.current) return
+    submittingRef.current = true
+
+    try {
+      if (data.variants.length === 0) {
+        toast.error('Gere ao menos uma variante antes de salvar')
+        return
+      }
+
+      const res = await fetch('/api/produtos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...data,
+          category_id: Number(data.category_id),
+          supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
+          base_cost:   Number(data.base_cost),
+          base_price:  Number(data.base_price),
+        }),
+      })
+
+      const json = await res.json()
+
+      if (res.status === 409) {
+        // Produto já existe — oferece link para editar o existente
+        toast.error('Produto duplicado', {
+          description: json.error,
+          action: json.existingId
+            ? { label: 'Ver produto', onClick: () => router.push(`/produtos/${json.existingId}`) }
+            : undefined,
+        })
+        return
+      }
+
+      if (!res.ok) {
+        toast.error('Erro ao cadastrar produto', { description: json.error })
+        return
+      }
+
+      toast.success('Produto cadastrado com sucesso!')
+      router.refresh()
+      router.push(`/produtos/${json.product.id}`)
+    } finally {
+      submittingRef.current = false
     }
-
-    const res = await fetch('/api/produtos', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...data,
-        category_id: Number(data.category_id),
-        supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
-        base_cost:   Number(data.base_cost),
-        base_price:  Number(data.base_price),
-      }),
-    })
-
-    const json = await res.json()
-    if (!res.ok) {
-      toast.error('Erro ao cadastrar produto', { description: json.error })
-      return
-    }
-
-    toast.success('Produto cadastrado com sucesso!')
-    router.refresh()
-    router.push(`/produtos/${json.product.id}`)
   }
 
   const baseCost  = Number(watch('base_cost')) || 0
@@ -629,7 +652,7 @@ export default function NovoProdutoPage() {
           <Link href="/produtos" className="flex-1">
             <Button type="button" variant="secondary" className="w-full">Cancelar</Button>
           </Link>
-          <Button type="submit" loading={isSubmitting} className="flex-1" disabled={fields.length === 0}>
+          <Button type="submit" loading={isSubmitting} className="flex-1" disabled={fields.length === 0 || isSubmitting}>
             <Plus className="w-4 h-4" />
             Salvar Produto ({fields.length} variante{fields.length !== 1 ? 's' : ''})
           </Button>
