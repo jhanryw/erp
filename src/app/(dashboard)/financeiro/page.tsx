@@ -59,9 +59,20 @@ async function getFinancialData() {
   }
 
   const rows = data ?? []
-  const current  = rows[0]  ?? null
-  const previous = rows[1]  ?? null
-  const months   = rows.slice(0, 12)
+
+  // Remove linhas fantasma: meses onde absolutamente nada foi registrado
+  // (acontece quando um finance_entry existe mas não bate com nenhuma categoria da view)
+  const nonEmpty = rows.filter((r) =>
+    Number(r.receita_liquida) !== 0 ||
+    Number(r.cmv)             !== 0 ||
+    Number(r.total_opex)      !== 0 ||
+    Number(r.outras_receitas) !== 0 ||
+    Number(r.saida_caixa_estoque) !== 0
+  )
+
+  const current  = nonEmpty[0]  ?? null
+  const previous = nonEmpty[1]  ?? null
+  const months   = nonEmpty.slice(0, 12)
 
   return { current, previous, months }
 }
@@ -73,11 +84,13 @@ function trendPct(current: number, previous: number) {
   return { value: ((current - previous) / previous) * 100, label: 'vs mês anterior' }
 }
 
-function fmtPct(value: number) {
+function fmtPct(value: number, hasRevenue: boolean) {
+  if (!hasRevenue) return '—'
   return `${value.toFixed(1)}%`
 }
 
-function marginColor(pct: number) {
+function marginColor(pct: number, hasRevenue: boolean) {
+  if (!hasRevenue) return 'text-text-muted'
   if (pct >= 20) return 'text-success'
   if (pct >= 10) return 'text-warning'
   return 'text-error'
@@ -171,9 +184,9 @@ export default async function FinanceiroPage() {
 
           <StatCard
             title="Margem Bruta"
-            value={fmtPct(margemBruta)}
+            value={fmtPct(margemBruta, receitaLiquida > 0)}
             icon={<DollarSign className="h-4 w-4" />}
-            valueClassName={marginColor(margemBruta)}
+            valueClassName={marginColor(margemBruta, receitaLiquida > 0)}
           />
 
           <StatCard
@@ -192,9 +205,9 @@ export default async function FinanceiroPage() {
 
           <StatCard
             title="Margem Líquida"
-            value={fmtPct(margemLiquida)}
+            value={fmtPct(margemLiquida, receitaLiquida > 0)}
             icon={margemLiquida >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            valueClassName={marginColor(margemLiquida)}
+            valueClassName={marginColor(margemLiquida, receitaLiquida > 0)}
           />
         </div>
       </div>
@@ -248,7 +261,10 @@ export default async function FinanceiroPage() {
       {/* ── Tabela histórica ──────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">DRE — Últimos 12 meses</h2>
+          <div className="flex items-baseline gap-3">
+            <h2 className="text-lg font-semibold">DRE — Últimos 12 meses</h2>
+            <span className="text-xs text-text-muted">meses sem movimento são omitidos</span>
+          </div>
         </CardHeader>
 
         <CardContent className="overflow-x-auto">
@@ -271,31 +287,32 @@ export default async function FinanceiroPage() {
 
               <TableBody>
                 {months.map((m) => {
-                  const rl  = Number(m.receita_liquida        ?? 0)
-                  const c   = Number(m.cmv                    ?? 0)
-                  const lb  = Number(m.lucro_bruto            ?? 0)
-                  const mb  = Number(m.margem_bruta_pct       ?? 0)
-                  const op  = Number(m.total_opex             ?? 0)
+                  const rl  = Number(m.receita_liquida         ?? 0)
+                  const c   = Number(m.cmv                     ?? 0)
+                  const lb  = Number(m.lucro_bruto             ?? 0)
+                  const mb  = Number(m.margem_bruta_pct        ?? 0)
+                  const op  = Number(m.total_opex              ?? 0)
                   const ll  = Number(m.lucro_liquido_gerencial ?? 0)
-                  const ml  = Number(m.margem_liquida_pct     ?? 0)
+                  const ml  = Number(m.margem_liquida_pct      ?? 0)
+                  const hr  = rl > 0
 
                   return (
                     <TableRow key={m.mes}>
                       <TableCell>{formatDate(m.mes, 'MMM yyyy')}</TableCell>
                       <TableCell>{formatCurrency(rl)}</TableCell>
                       <TableCell>{formatCurrency(c)}</TableCell>
-                      <TableCell className={lb >= 0 ? 'text-success' : 'text-error'}>
+                      <TableCell className={hr ? (lb >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
                         {formatCurrency(lb)}
                       </TableCell>
-                      <TableCell className={marginColor(mb)}>
-                        {fmtPct(mb)}
+                      <TableCell className={marginColor(mb, hr)}>
+                        {fmtPct(mb, hr)}
                       </TableCell>
                       <TableCell>{formatCurrency(op)}</TableCell>
-                      <TableCell className={ll >= 0 ? 'text-success' : 'text-error'}>
+                      <TableCell className={hr ? (ll >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
                         {formatCurrency(ll)}
                       </TableCell>
-                      <TableCell className={marginColor(ml)}>
-                        {fmtPct(ml)}
+                      <TableCell className={marginColor(ml, hr)}>
+                        {fmtPct(ml, hr)}
                       </TableCell>
                     </TableRow>
                   )
