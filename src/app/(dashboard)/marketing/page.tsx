@@ -113,6 +113,13 @@ export default async function MarketingPage() {
             <Button variant="outline">Ver Custos</Button>
           </Link>
 
+          <Link href="/marketing/performance">
+            <Button variant="outline">
+              <TrendingUp className="mr-2 h-4 w-4" />
+              Performance
+            </Button>
+          </Link>
+
           <Link href="/marketing/custos/novo">
             <Button>
               <Plus className="mr-2 h-4 w-4" />

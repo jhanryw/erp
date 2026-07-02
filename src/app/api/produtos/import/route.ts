@@ -13,26 +13,26 @@ import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
-  color_name:     z.string().min(1).nullable().optional(),   // usado quando a cor não existe ainda
+  color_name:     z.string().min(1).nullable().optional(),
   size_value_id:  z.number().int().positive().nullable().optional(),
-  size_name:      z.string().min(1).nullable().optional(),   // usado quando o tamanho não existe ainda
+  size_name:      z.string().min(1).nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
   cost_override:  z.coerce.number().min(0).nullable().optional(),
   initial_stock:  z.coerce.number().int().min(0).default(0),
 })
 
 const productSchema = z.object({
-  name: z.string().min(2),
-  tipo: z.string().min(1),
-  modelo: z.string().min(1),
-  ano: z.string().min(1),
+  name:        z.string().min(2),
+  tipo:        z.string().min(1),
+  modelo:      z.string().min(1),
+  ano:         z.string().min(1),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
-  origin: z.enum(['own_brand', 'third_party']),
-  base_cost: z.coerce.number().min(0),
-  base_price: z.coerce.number().positive(),
-  active: z.boolean().default(true),
-  variants: z.array(variantSchema).optional(),
+  origin:      z.enum(['own_brand', 'third_party']),
+  base_cost:   z.coerce.number().min(0),
+  base_price:  z.coerce.number().positive(),
+  active:      z.boolean().default(true),
+  variants:    z.array(variantSchema).optional(),
 })
 
 const importSchema = z.array(productSchema)
@@ -44,26 +44,72 @@ export async function POST(request: Request) {
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   let body: unknown
-  try {
-    body = await request.json()
-  } catch {
+  try { body = await request.json() } catch {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
   }
 
   const parsed = importSchema.safeParse(body)
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
+    return NextResponse.json({ error: 'Dados inválidos.', details: parsed.error.flatten() }, { status: 422 })
   }
 
   const admin = createAdminClient()
-  const results = { imported: 0, errors: [] as string[] }
+
+  // ─── Fase 1: pré-validação — nenhuma escrita no banco ────────────────────────
+  const preflight: string[] = []
+
+  // Duplicatas dentro do próprio CSV
+  const requestKeys = new Map<string, string>()
+  for (const item of parsed.data) {
+    const key = `${item.name.toLowerCase().trim()}|${item.tipo}|${item.modelo}|${item.ano}`
+    if (requestKeys.has(key)) {
+      preflight.push(`Produto duplicado no CSV: "${item.name}" (${item.tipo} / ${item.modelo} / ${item.ano})`)
+    } else {
+      requestKeys.set(key, item.name)
+    }
+  }
+
+  // Conflito com produtos já existentes no ERP
+  const { data: existingProducts, error: fetchError } = (await admin
+    .from('products')
+    .select('name, tipo, modelo, ano')
+    .eq('company_id', user.company_id)) as unknown as {
+    data: { name: string; tipo: string; modelo: string; ano: string }[] | null
+    error: any
+  }
+
+  if (fetchError) {
+    return NextResponse.json({ error: 'Erro ao verificar produtos existentes no ERP.' }, { status: 500 })
+  }
+
+  const existingKeys = new Set(
+    (existingProducts ?? []).map(p =>
+      `${p.name.toLowerCase().trim()}|${p.tipo}|${p.modelo}|${p.ano}`
+    )
+  )
 
   for (const item of parsed.data) {
-    const { variants, ...productData } = item
+    const key = `${item.name.toLowerCase().trim()}|${item.tipo}|${item.modelo}|${item.ano}`
+    if (existingKeys.has(key)) {
+      preflight.push(`"${item.name}" (${item.tipo} / ${item.modelo} / ${item.ano}) já existe no ERP. Remova do CSV.`)
+    }
+  }
 
-    try {
-      // Gera o SKU pai. Se tipo/modelo não forem códigos do mapa, usa fallback
-      // baseado no nome do produto para não bloquear o import.
+  if (preflight.length > 0) {
+    return NextResponse.json({
+      error: 'O CSV contém erros que impedem a importação. Nenhum produto foi salvo.',
+      validationErrors: preflight,
+      imported: 0,
+    }, { status: 400 })
+  }
+
+  // ─── Fase 2: inserção em série — rollback suave em caso de falha ─────────────
+  const insertedIds: number[] = []
+
+  try {
+    for (const item of parsed.data) {
+      const { variants, ...productData } = item
+
       let parentSku: string
       try {
         parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
@@ -72,55 +118,35 @@ export async function POST(request: Request) {
         parentSku = `IMP${hash}${productData.ano ?? '00'}`
       }
 
-      // 1. Criar produto — se já existir (mesmo SKU = reposição), usa o existente
-      let product: { id: number } | null = null
-
       const { data: insertedProduct, error: productError } = (await admin
         .from('products')
         .insert({
           ...productData,
-          sku: parentSku,
-          supplier_id: productData.supplier_id ?? null,
+          sku:            parentSku,
+          supplier_id:    productData.supplier_id ?? null,
           subcategory_id: null,
-          collection_id: null,
-          company_id: user.company_id,
+          collection_id:  null,
+          company_id:     user.company_id,
         } as any)
         .select('id')
         .single()) as unknown as { data: { id: number } | null; error: any }
 
       if (productError) {
-        if (productError.code === '23505') {
-          // Produto já existe — busca pelo SKU para reposição de estoque
-          const { data: existing } = (await admin
-            .from('products')
-            .select('id')
-            .eq('sku', parentSku)
-            .single()) as unknown as { data: { id: number } | null }
-          if (existing) {
-            product = existing
-          } else {
-            throw new Error(`Produto ${productData.name}: já existe mas não foi possível localizá-lo.`)
-          }
-        } else {
-          throw new Error(
-            `Produto ${productData.name}: ` +
-              (productError.code === '23503'
-                ? 'Categoria ou fornecedor inválido.'
-                : productError.message)
-          )
-        }
-      } else {
-        product = insertedProduct
+        const msg = productError.code === '23503'
+          ? `Produto "${productData.name}": categoria ou fornecedor inválido.`
+          : `Produto "${productData.name}": ${productError.message}`
+        throw new Error(msg)
       }
 
-      // 2. Criar variantes (se houver)
-      if (variants && variants.length > 0 && product) {
+      const product = insertedProduct!
+      insertedIds.push(product.id)
+
+      if (variants && variants.length > 0) {
         for (const v of variants) {
           const attrs: any[] = []
           let colorSkuCode: string | undefined
           let sizeSkuCode:  string | undefined
 
-          // Cor: resolve por ID (existente) ou por nome (cria se não existir)
           if (v.color_value_id) {
             const { data: colorType } = (await admin
               .from('variation_values')
@@ -133,9 +159,7 @@ export async function POST(request: Request) {
               attrs.push({ variation_type_id: colorType.variation_type_id, variation_value_id: v.color_value_id })
             }
           } else if (v.color_name) {
-            const result = await getOrCreateColorSkuCode(v.color_name, admin)
-            colorSkuCode = result
-            // Buscar o ID que foi criado/encontrado
+            colorSkuCode = await getOrCreateColorSkuCode(v.color_name, admin)
             const { data: colorRow } = (await admin
               .from('variation_values')
               .select('id, variation_type_id')
@@ -145,7 +169,6 @@ export async function POST(request: Request) {
             if (colorRow) attrs.push({ variation_type_id: colorRow.variation_type_id, variation_value_id: colorRow.id })
           }
 
-          // Tamanho: resolve por ID (existente) ou por nome (cria se não existir)
           if (v.size_value_id) {
             const { data: sizeType } = (await admin
               .from('variation_values')
@@ -158,8 +181,7 @@ export async function POST(request: Request) {
               attrs.push({ variation_type_id: sizeType.variation_type_id, variation_value_id: v.size_value_id })
             }
           } else if (v.size_name) {
-            const result = await getOrCreateSizeSkuCode(v.size_name, admin)
-            sizeSkuCode = result
+            sizeSkuCode = await getOrCreateSizeSkuCode(v.size_name, admin)
             const { data: sizeRow } = (await admin
               .from('variation_values')
               .select('id, variation_type_id')
@@ -177,78 +199,65 @@ export async function POST(request: Request) {
             ano:         productData.ano,
           })
 
-          // Verificar se a variante já existe (reposição)
-          const { data: existingVariant } = (await admin
-            .from('product_variations')
-            .select('id')
-            .eq('product_id', product.id)
-            .like('sku_variation', `${baseSku}%`)
-            .limit(1)
-            .single()) as unknown as { data: { id: number } | null }
+          const insertResult = await insertVariationWithRetry(
+            baseSku,
+            {
+              product_id:     product.id,
+              cost_override:  v.cost_override  ?? null,
+              price_override: v.price_override ?? null,
+              active: true,
+            },
+            admin,
+          )
 
-          let pvId: number
-
-          if (existingVariant) {
-            // Variante já existe → apenas soma o estoque (reposição)
-            pvId = existingVariant.id
-          } else {
-            // Variante nova → cria normalmente
-            const insertResult = await insertVariationWithRetry(
-              baseSku,
-              {
-                product_id:    product.id,
-                cost_override: v.cost_override ?? null,
-                price_override: v.price_override ?? null,
-                active: true,
-              },
-              admin,
-            )
-
-            if (!insertResult.ok) {
-              throw new Error(`Erro ao criar variante (base ${baseSku}): ${insertResult.message}`)
-            }
-
-            pvId = insertResult.pv.id
-
-            if (attrs.length > 0) {
-              await admin.from('product_variation_attributes').insert(
-                attrs.map(a => ({ ...a, product_variation_id: pvId })) as any
-              )
-            }
+          if (!insertResult.ok) {
+            throw new Error(`Variante do produto "${productData.name}" (${baseSku}): ${insertResult.message}`)
           }
 
-          // 3. Carga/reposição de estoque via RPC
+          const pvId = insertResult.pv.id
+
+          if (attrs.length > 0) {
+            await admin.from('product_variation_attributes').insert(
+              attrs.map(a => ({ ...a, product_variation_id: pvId })) as any
+            )
+          }
+
           if (v.initial_stock > 0) {
             const stockInit = await initializeStock({
               product_variation_id: pvId,
-              quantity: v.initial_stock,
-              avg_cost: v.cost_override ?? productData.base_cost,
+              quantity:  v.initial_stock,
+              avg_cost:  v.cost_override ?? productData.base_cost,
             }, user.id)
             if (!stockInit.ok) {
-              throw new Error(`Erro ao registrar estoque: ${stockInit.error}`)
+              throw new Error(`Estoque do produto "${productData.name}": ${stockInit.error}`)
             }
           }
         }
       }
-
-      results.imported++
-    } catch (err: any) {
-      results.errors.push(err.message)
     }
+  } catch (err: any) {
+    // Rollback suave: remove todos os produtos inseridos nesta importação.
+    // A FK em product_variations cascateia para variantes, atributos e estoque.
+    if (insertedIds.length > 0) {
+      await admin.from('products').delete().in('id', insertedIds)
+    }
+    const msg = err instanceof Error ? err.message : 'Erro inesperado durante a importação.'
+    return NextResponse.json({
+      error: `${msg} Nenhum produto foi salvo (rollback executado).`,
+      imported: 0,
+    }, { status: 500 })
   }
 
   auditLog({
-    userId: user.id,
+    userId:   user.id,
     userRole: user.role,
-    action: 'create',
+    action:   'create',
     resource: 'product',
-    detail: `Importou ${results.imported} produtos. Erros: ${results.errors.length}`,
+    detail:   `Importação CSV: ${insertedIds.length} produtos`,
   })
 
-  // Retorna sucesso parcial ou total
   return NextResponse.json({
-    message: `Importou ${results.imported} produtos. ${results.errors.length} erros.`,
-    errors: results.errors,
-    imported: results.imported,
-  }, { status: 200 })
+    message:  `${insertedIds.length} produto${insertedIds.length !== 1 ? 's' : ''} importado${insertedIds.length !== 1 ? 's' : ''} com sucesso.`,
+    imported: insertedIds.length,
+  }, { status: 201 })
 }
