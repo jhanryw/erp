@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { DollarSign, TrendingUp, TrendingDown, Minus, Info, BarChart2 } from 'lucide-react'
+import { DollarSign, TrendingUp, TrendingDown, Minus, BarChart2, ShoppingBag, Users, Receipt, Package } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { StatCard } from '@/components/ui/stat-card'
@@ -22,28 +22,38 @@ export const dynamic = 'force-dynamic'
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type DreRow = {
-  mes:                    string
-  receita_bruta:          number
-  descontos:              number
-  receita_liquida:        number
-  cmv:                    number
-  lucro_bruto:            number
-  margem_bruta_pct:       number
-  marketing:              number
-  aluguel:                number
-  salarios:               number
-  operacional:            number
-  impostos:               number
-  frete:                  number
-  outras_despesas:        number
-  total_opex:             number
-  outras_receitas:        number
+  mes:                     string
+  receita_bruta:           number
+  descontos:               number
+  receita_liquida:         number
+  cmv:                     number
+  lucro_bruto:             number
+  margem_bruta_pct:        number
+  marketing:               number
+  aluguel:                 number
+  salarios:                number
+  operacional:             number
+  impostos:                number
+  frete:                   number
+  outras_despesas:         number
+  total_opex:              number
+  outras_receitas:         number
   lucro_liquido_gerencial: number
-  margem_liquida_pct:     number
-  saida_caixa_estoque:    number
+  margem_liquida_pct:      number
+  saida_caixa_estoque:     number
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
+
+function monthBounds(mesIso: string) {
+  // mesIso = '2026-07-01'
+  const [y, m] = mesIso.split('-').map(Number)
+  const lastDay = new Date(y, m, 0).getDate()
+  return {
+    start: mesIso,
+    end: `${y}-${String(m).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`,
+  }
+}
 
 async function getFinancialData() {
   const supabase = createAdminClient()
@@ -54,27 +64,43 @@ async function getFinancialData() {
     .order('mes', { ascending: false })
     .limit(13) as unknown as { data: DreRow[] | null; error: { message: string } | null }
 
-  if (error) {
-    console.error('Erro ao carregar DRE:', error.message)
-  }
+  if (error) console.error('Erro ao carregar DRE:', error.message)
 
-  const rows = data ?? []
-
-  // Remove linhas fantasma: meses onde absolutamente nada foi registrado
-  // (acontece quando um finance_entry existe mas não bate com nenhuma categoria da view)
-  const nonEmpty = rows.filter((r) =>
-    Number(r.receita_liquida) !== 0 ||
-    Number(r.cmv)             !== 0 ||
-    Number(r.total_opex)      !== 0 ||
-    Number(r.outras_receitas) !== 0 ||
+  const rows = (data ?? []).filter((r) =>
+    Number(r.receita_liquida)    !== 0 ||
+    Number(r.cmv)                !== 0 ||
+    Number(r.total_opex)         !== 0 ||
+    Number(r.outras_receitas)    !== 0 ||
     Number(r.saida_caixa_estoque) !== 0
   )
 
-  const current  = nonEmpty[0]  ?? null
-  const previous = nonEmpty[1]  ?? null
-  const months   = nonEmpty.slice(0, 12)
+  const current  = rows[0] ?? null
+  const previous = rows[1] ?? null
+  const months   = rows.slice(0, 12)
 
-  return { current, previous, months }
+  // KPIs operacionais do mês corrente (contagem de vendas e clientes)
+  let totalVendas    = 0
+  let uniqueClientes = 0
+
+  if (current?.mes) {
+    const { start, end } = monthBounds(current.mes)
+    const { data: salesData } = await supabase
+      .from('sales')
+      .select('id, customer_id')
+      .gte('sale_date', start)
+      .lte('sale_date', end)
+      .not('status', 'eq', 'cancelled')
+      .not('status', 'eq', 'returned') as unknown as {
+        data: { id: number; customer_id: number | null }[] | null
+        error: unknown
+      }
+
+    const salesList = salesData ?? []
+    totalVendas    = salesList.length
+    uniqueClientes = new Set(salesList.map((s) => s.customer_id).filter(Boolean)).size
+  }
+
+  return { current, previous, months, totalVendas, uniqueClientes }
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -100,219 +126,236 @@ function marginColor(pct: number, hasRevenue: boolean) {
 
 export default async function FinanceiroPage() {
   await requirePageRole('gerente')
-  const { current, previous, months } = await getFinancialData()
+  const { current, previous, months, totalVendas, uniqueClientes } = await getFinancialData()
 
-  // Mês corrente — zeros se ainda sem dados
-  const receitaLiquida       = Number(current?.receita_liquida        ?? 0)
-  const cmv                  = Number(current?.cmv                    ?? 0)
-  const lucroBruto           = Number(current?.lucro_bruto            ?? 0)
-  const margemBruta          = Number(current?.margem_bruta_pct       ?? 0)
-  const totalOpex            = Number(current?.total_opex             ?? 0)
-  const lucroLiquidoGerencial = Number(current?.lucro_liquido_gerencial ?? 0)
-  const margemLiquida        = Number(current?.margem_liquida_pct     ?? 0)
-  const saidaEstoque         = Number(current?.saida_caixa_estoque    ?? 0)
+  const rl   = Number(current?.receita_liquida         ?? 0)
+  const cmv  = Number(current?.cmv                     ?? 0)
+  const lb   = Number(current?.lucro_bruto             ?? 0)
+  const mb   = Number(current?.margem_bruta_pct        ?? 0)
+  const opex = Number(current?.total_opex              ?? 0)
+  const ll   = Number(current?.lucro_liquido_gerencial ?? 0)
+  const ml   = Number(current?.margem_liquida_pct      ?? 0)
+  const se   = Number(current?.saida_caixa_estoque     ?? 0)
+  const hr   = rl > 0
 
-  // Mês anterior para tendências
-  const prevReceita = Number(previous?.receita_liquida        ?? 0)
-  const prevCmv     = Number(previous?.cmv                    ?? 0)
-  const prevLucro   = Number(previous?.lucro_liquido_gerencial ?? 0)
+  const prevRl = Number(previous?.receita_liquida         ?? 0)
+  const prevLl = Number(previous?.lucro_liquido_gerencial ?? 0)
+
+  // KPIs derivados
+  const ticketMedio    = totalVendas > 0 ? rl / totalVendas : 0
+  const lucroPorVenda  = totalVendas > 0 ? ll / totalVendas : 0
+  const cmvPct         = hr ? (cmv  / rl) * 100 : 0
+  const opexPct        = hr ? (opex / rl) * 100 : 0
 
   return (
-    <div className="space-y-6">
-      {/* ── Header ────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="space-y-5">
+      {/* ── Header ──────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Financeiro</h1>
           <p className="text-sm text-muted-foreground">Regime de competência · mês atual</p>
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Link href="/financeiro/fluxo">
-            <Button variant="outline">Fluxo de Caixa</Button>
-          </Link>
-          <Link href="/financeiro/lucro">
-            <Button variant="outline">Lucro por Venda</Button>
-          </Link>
-          <Link href="/financeiro/ranking">
-            <Button variant="outline">Ranking de Produtos</Button>
-          </Link>
-          <Link href="/financeiro/clientes">
-            <Button variant="outline">Lucro por Cliente</Button>
-          </Link>
           <Link href="/financeiro/dre">
-            <Button variant="outline">
-              <BarChart2 className="mr-2 h-4 w-4" />
+            <Button variant="outline" size="sm">
+              <BarChart2 className="mr-1.5 h-3.5 w-3.5" />
               DRE Completa
             </Button>
           </Link>
+          <Link href="/financeiro/fluxo">
+            <Button variant="outline" size="sm">Fluxo de Caixa</Button>
+          </Link>
+          <Link href="/financeiro/lucro">
+            <Button variant="outline" size="sm">Lucro por Venda</Button>
+          </Link>
+          <Link href="/financeiro/ranking">
+            <Button variant="outline" size="sm">Ranking</Button>
+          </Link>
+          <Link href="/financeiro/clientes">
+            <Button variant="outline" size="sm">Por Cliente</Button>
+          </Link>
           <Link href="/financeiro/lancamentos">
-            <Button variant="outline">Ver Lançamentos</Button>
+            <Button variant="outline" size="sm">Lançamentos</Button>
           </Link>
           <Link href="/financeiro/lancamentos/novo">
-            <Button>Lançamento</Button>
+            <Button size="sm">+ Lançamento</Button>
           </Link>
         </div>
       </div>
 
-      {/* ── Bloco 1: Resultado Gerencial ──────────────────────────────────── */}
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+      {/* ── Bloco 1: Resultado Gerencial ────────────────────────────────────── */}
+      <section>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-3">
           Resultado Gerencial — Competência
         </p>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
           <StatCard
             title="Receita Líquida"
-            value={formatCurrency(receitaLiquida)}
+            value={formatCurrency(rl)}
             icon={<TrendingUp className="h-4 w-4" />}
-            trend={previous ? trendPct(receitaLiquida, prevReceita) : undefined}
+            trend={previous ? trendPct(rl, prevRl) : undefined}
           />
 
           <StatCard
-            title="CMV (custo real vendido)"
+            title="CMV"
             value={formatCurrency(cmv)}
-            icon={<TrendingDown className="h-4 w-4" />}
-            trend={previous ? trendPct(cmv, prevCmv) : undefined}
+            subtitle="custo real vendido"
+            icon={<Package className="h-4 w-4" />}
           />
 
           <StatCard
             title="Lucro Bruto"
-            value={formatCurrency(lucroBruto)}
-            icon={lucroBruto >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            valueClassName={lucroBruto >= 0 ? 'text-success' : 'text-error'}
+            value={formatCurrency(lb)}
+            icon={lb >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+            valueClassName={hr ? (lb >= 0 ? 'text-success' : 'text-error') : undefined}
           />
 
           <StatCard
             title="Margem Bruta"
-            value={fmtPct(margemBruta, receitaLiquida > 0)}
+            value={fmtPct(mb, hr)}
             icon={<DollarSign className="h-4 w-4" />}
-            valueClassName={marginColor(margemBruta, receitaLiquida > 0)}
+            valueClassName={marginColor(mb, hr)}
           />
 
           <StatCard
             title="Despesas Operacionais"
-            value={formatCurrency(totalOpex)}
+            value={formatCurrency(opex)}
             icon={<TrendingDown className="h-4 w-4" />}
           />
 
           <StatCard
             title="Lucro Líquido Gerencial"
-            value={formatCurrency(lucroLiquidoGerencial)}
-            icon={lucroLiquidoGerencial >= 0 ? <DollarSign className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
-            valueClassName={lucroLiquidoGerencial >= 0 ? 'text-success' : 'text-error'}
-            trend={previous ? trendPct(lucroLiquidoGerencial, prevLucro) : undefined}
+            value={formatCurrency(ll)}
+            icon={ll >= 0 ? <DollarSign className="h-4 w-4" /> : <Minus className="h-4 w-4" />}
+            valueClassName={hr ? (ll >= 0 ? 'text-success' : 'text-error') : undefined}
+            trend={previous ? trendPct(ll, prevLl) : undefined}
           />
 
           <StatCard
             title="Margem Líquida"
-            value={fmtPct(margemLiquida, receitaLiquida > 0)}
-            icon={margemLiquida >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-            valueClassName={marginColor(margemLiquida, receitaLiquida > 0)}
+            value={fmtPct(ml, hr)}
+            icon={ml >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+            valueClassName={marginColor(ml, hr)}
+          />
+
+          <StatCard
+            title="Compras de Estoque"
+            value={se > 0 ? formatCurrency(se) : '—'}
+            subtitle="saída de caixa · fora da DRE"
+            icon={<ShoppingBag className="h-4 w-4" />}
           />
         </div>
-      </div>
+      </section>
 
-      {/* ── Bloco 2: Movimento de Caixa ───────────────────────────────────── */}
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-          Movimento de Caixa
+      {/* ── Bloco 2: Eficiência Operacional ─────────────────────────────────── */}
+      <section>
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-muted mb-3">
+          Eficiência Operacional — Mês Atual
         </p>
 
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          <div className="rounded-xl border border-border bg-bg-subtle px-4 py-4 flex items-start gap-3">
-            <Info className="w-4 h-4 text-text-muted mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-text-secondary">Compras de Estoque</p>
-              <p className="text-xs text-text-muted mt-0.5 leading-relaxed">
-                Saída de caixa para formação de inventário. Não reduz o lucro líquido gerencial
-                — o CMV acima já reflete o custo das peças efetivamente vendidas.
-              </p>
-              <p className="text-lg font-bold tabular-nums text-text-primary mt-2">
-                {saidaEstoque > 0 ? formatCurrency(saidaEstoque) : '—'}
-              </p>
-            </div>
-          </div>
+        <div className="grid gap-3 grid-cols-2 md:grid-cols-4">
+          <StatCard
+            title="Vendas no Mês"
+            value={String(totalVendas)}
+            icon={<Receipt className="h-4 w-4" />}
+          />
 
-          <div className="rounded-xl border border-border bg-bg-subtle px-4 py-4 flex flex-col justify-between gap-3">
-            <p className="text-sm font-medium text-text-secondary">Fluxo de Caixa Detalhado</p>
-            <p className="text-xs text-text-muted leading-relaxed">
-              Entradas, saídas e saldo por período com visão de caixa real.
-            </p>
-            <Link href="/financeiro/fluxo">
-              <Button variant="outline" className="w-full">Ver Fluxo de Caixa</Button>
-            </Link>
-          </div>
+          <StatCard
+            title="Clientes Atendidos"
+            value={String(uniqueClientes)}
+            icon={<Users className="h-4 w-4" />}
+          />
 
-          <div className="rounded-xl border border-border bg-bg-subtle px-4 py-4 flex flex-col justify-between gap-3">
-            <p className="text-sm font-medium text-text-secondary">DRE Gerencial Completa</p>
-            <p className="text-xs text-text-muted leading-relaxed">
-              Demonstrativo mensal com navegação por período, breakdown por categoria e margem.
-            </p>
-            <Link href="/financeiro/dre">
-              <Button variant="outline" className="w-full">
-                <BarChart2 className="mr-2 h-4 w-4" />
-                Abrir DRE
-              </Button>
-            </Link>
-          </div>
+          <StatCard
+            title="Ticket Médio"
+            value={totalVendas > 0 ? formatCurrency(ticketMedio) : '—'}
+            subtitle="receita líquida / vendas"
+            icon={<DollarSign className="h-4 w-4" />}
+          />
+
+          <StatCard
+            title="Lucro por Venda"
+            value={totalVendas > 0 ? formatCurrency(lucroPorVenda) : '—'}
+            subtitle="lucro líquido / vendas"
+            icon={lucroPorVenda >= 0 ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+            valueClassName={totalVendas > 0 ? (lucroPorVenda >= 0 ? 'text-success' : 'text-error') : undefined}
+          />
+
+          <StatCard
+            title="CMV %"
+            value={fmtPct(cmvPct, hr)}
+            subtitle="% da receita líquida"
+            icon={<Package className="h-4 w-4" />}
+            valueClassName={hr ? (cmvPct <= 40 ? 'text-success' : cmvPct <= 60 ? 'text-warning' : 'text-error') : undefined}
+          />
+
+          <StatCard
+            title="Despesas Op. %"
+            value={fmtPct(opexPct, hr)}
+            subtitle="% da receita líquida"
+            icon={<TrendingDown className="h-4 w-4" />}
+            valueClassName={hr ? (opexPct <= 20 ? 'text-success' : opexPct <= 35 ? 'text-warning' : 'text-error') : undefined}
+          />
         </div>
-      </div>
+      </section>
 
-      {/* ── Tabela histórica ──────────────────────────────────────────────── */}
+      {/* ── Tabela histórica ────────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
           <div className="flex items-baseline gap-3">
-            <h2 className="text-lg font-semibold">DRE — Últimos 12 meses</h2>
+            <h2 className="text-base font-semibold">Histórico — Últimos 12 meses</h2>
             <span className="text-xs text-text-muted">meses sem movimento são omitidos</span>
           </div>
         </CardHeader>
 
-        <CardContent className="overflow-x-auto">
+        <CardContent className="overflow-x-auto p-0">
           {months.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4">Nenhum dado encontrado.</p>
+            <p className="text-sm text-muted-foreground px-6 py-4">Nenhum dado encontrado.</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead>Mês</TableHead>
-                  <TableHead>Receita Líquida</TableHead>
+                  <TableHead>Receita Líq.</TableHead>
                   <TableHead>CMV</TableHead>
                   <TableHead>Lucro Bruto</TableHead>
-                  <TableHead>Margem Bruta</TableHead>
-                  <TableHead>Despesas Op.</TableHead>
-                  <TableHead>Lucro Líquido</TableHead>
-                  <TableHead>Margem Líq.</TableHead>
+                  <TableHead>Mg. Bruta</TableHead>
+                  <TableHead>Desp. Op.</TableHead>
+                  <TableHead>Lucro Líq.</TableHead>
+                  <TableHead>Mg. Líq.</TableHead>
                 </TableRow>
               </TableHeader>
 
               <TableBody>
                 {months.map((m) => {
-                  const rl  = Number(m.receita_liquida         ?? 0)
-                  const c   = Number(m.cmv                     ?? 0)
-                  const lb  = Number(m.lucro_bruto             ?? 0)
-                  const mb  = Number(m.margem_bruta_pct        ?? 0)
-                  const op  = Number(m.total_opex              ?? 0)
-                  const ll  = Number(m.lucro_liquido_gerencial ?? 0)
-                  const ml  = Number(m.margem_liquida_pct      ?? 0)
-                  const hr  = rl > 0
+                  const mrl = Number(m.receita_liquida         ?? 0)
+                  const mc  = Number(m.cmv                     ?? 0)
+                  const mlb = Number(m.lucro_bruto             ?? 0)
+                  const mmb = Number(m.margem_bruta_pct        ?? 0)
+                  const mop = Number(m.total_opex              ?? 0)
+                  const mll = Number(m.lucro_liquido_gerencial ?? 0)
+                  const mml = Number(m.margem_liquida_pct      ?? 0)
+                  const mhr = mrl > 0
 
                   return (
                     <TableRow key={m.mes}>
-                      <TableCell>{formatDate(m.mes, 'MMM yyyy')}</TableCell>
-                      <TableCell>{formatCurrency(rl)}</TableCell>
-                      <TableCell>{formatCurrency(c)}</TableCell>
-                      <TableCell className={hr ? (lb >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
-                        {formatCurrency(lb)}
+                      <TableCell className="font-medium">{formatDate(m.mes, 'MMM yyyy')}</TableCell>
+                      <TableCell>{formatCurrency(mrl)}</TableCell>
+                      <TableCell>{formatCurrency(mc)}</TableCell>
+                      <TableCell className={mhr ? (mlb >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
+                        {formatCurrency(mlb)}
                       </TableCell>
-                      <TableCell className={marginColor(mb, hr)}>
-                        {fmtPct(mb, hr)}
+                      <TableCell className={marginColor(mmb, mhr)}>
+                        {fmtPct(mmb, mhr)}
                       </TableCell>
-                      <TableCell>{formatCurrency(op)}</TableCell>
-                      <TableCell className={hr ? (ll >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
-                        {formatCurrency(ll)}
+                      <TableCell>{formatCurrency(mop)}</TableCell>
+                      <TableCell className={mhr ? (mll >= 0 ? 'text-success' : 'text-error') : 'text-text-muted'}>
+                        {formatCurrency(mll)}
                       </TableCell>
-                      <TableCell className={marginColor(ml, hr)}>
-                        {fmtPct(ml, hr)}
+                      <TableCell className={marginColor(mml, mhr)}>
+                        {fmtPct(mml, mhr)}
                       </TableCell>
                     </TableRow>
                   )

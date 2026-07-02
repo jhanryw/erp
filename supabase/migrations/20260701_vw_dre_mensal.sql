@@ -21,22 +21,37 @@
 --   = Lucro Líquido Gerencial
 --
 --   (separado) saida_caixa_estoque = SUM(finance_entries WHERE category = 'stock_purchase')
+--
+-- ATENÇÃO — fan-out evitado:
+--   O JOIN entre sales e sale_items é feito via CTE pré-agregada (cmv_por_venda),
+--   garantindo que cada venda contribua exatamente uma vez para receita_bruta,
+--   descontos e receita_liquida. Sem este cuidado, vendas com N itens teriam
+--   subtotal/desconto contado N vezes.
 -- =============================================================================
 
 DROP VIEW IF EXISTS vw_dre_mensal;
 
 CREATE VIEW vw_dre_mensal AS
-WITH vendas AS (
-  -- Receita e CMV por mês/empresa, apenas vendas efetivadas
+WITH cmv_por_venda AS (
+  -- Agrega CMV por venda — evita fan-out no JOIN com sales
+  SELECT
+    sale_id,
+    SUM(COALESCE(unit_cost, 0) * COALESCE(quantity, 0)) AS cmv
+  FROM sale_items
+  GROUP BY sale_id
+),
+vendas AS (
+  -- Receita e CMV por mês/empresa, apenas vendas efetivadas.
+  -- JOIN 1:1 com cmv_por_venda — cada venda conta uma única vez.
   SELECT
     DATE_TRUNC('month', s.sale_date)::DATE          AS mes,
     s.company_id,
     SUM(s.subtotal)                                 AS receita_bruta,
     SUM(s.discount_amount + COALESCE(s.cashback_used, 0))              AS descontos,
     SUM(s.subtotal - s.discount_amount - COALESCE(s.cashback_used, 0)) AS receita_liquida,
-    SUM(COALESCE(si.unit_cost, 0) * COALESCE(si.quantity, 0))          AS cmv
+    SUM(COALESCE(c.cmv, 0))                                            AS cmv
   FROM sales s
-  LEFT JOIN sale_items si ON si.sale_id = s.id
+  LEFT JOIN cmv_por_venda c ON c.sale_id = s.id
   WHERE s.status NOT IN ('cancelled', 'returned')
   GROUP BY DATE_TRUNC('month', s.sale_date), s.company_id
 ),
@@ -133,6 +148,7 @@ ORDER BY mes DESC;
 
 COMMENT ON VIEW vw_dre_mensal IS
   'DRE gerencial mensal por regime de competência. '
-  'CMV calculado de sale_items (custo real vendido). '
+  'CMV calculado de sale_items via CTE pré-agregada (sem fan-out). '
+  'receita_bruta/descontos/receita_liquida contam cada venda exatamente uma vez. '
   'stock_purchase exposto como saida_caixa_estoque — não impacta lucro_liquido_gerencial. '
-  'Criado em 20260701.';
+  'Atualizado em 20260701 (v2 — fix fan-out JOIN).';
