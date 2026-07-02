@@ -116,6 +116,7 @@ const schema = z.object({
 )
 
 export async function POST(request: Request) {
+  try {
   const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
@@ -240,6 +241,10 @@ export async function POST(request: Request) {
         customer_id: parsed.data.customer_id,
       },
     })
+    return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
+  }
+  } catch (err) {
+    logError({ route: 'POST /api/vendas', err, context: {} })
     return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
   }
 }

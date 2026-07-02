@@ -382,20 +382,33 @@ export default function NovaVendaPage() {
           responsible_seller_id:           responsibleSellerId,
         }),
       })
-      const json = await res.json()
+      const text = await res.text()
+      let json: Record<string, unknown>
+      try {
+        json = JSON.parse(text)
+      } catch {
+        submitting.current = false
+        toast.error('Erro ao registrar venda', {
+          description: res.status === 401 || res.status === 403
+            ? 'Sessão expirada. Faça login novamente.'
+            : 'Resposta inesperada do servidor. Tente novamente.',
+        })
+        return
+      }
       if (!res.ok) {
         submitting.current = false
         // json.error pode ser objeto Zod — serializar para evitar React error #31
         const errMsg = typeof json.error === 'string'
           ? json.error
-          : (json.error?.formErrors?.[0] ?? JSON.stringify(json.error) ?? 'Erro desconhecido')
+          : (json.error as any)?.formErrors?.[0] ?? JSON.stringify(json.error) ?? 'Erro desconhecido'
         toast.error('Erro ao registrar venda', { description: errMsg })
         return
       }
+      const sale = json.sale as { id: number; sale_number: string }
       toast.success('Venda registrada!', {
-        description: `Pedido ${json.sale.sale_number} criado com sucesso.`,
+        description: `Pedido ${sale.sale_number} criado com sucesso.`,
       })
-      router.push(`/vendas/${json.sale.id}`)
+      router.push(`/vendas/${sale.id}`)
     } catch (err) {
       submitting.current = false
       toast.error('Erro inesperado', {
