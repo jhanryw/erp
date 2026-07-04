@@ -149,12 +149,9 @@ export default function NovaVendaPage() {
     setValue('customer_id', customer.id)
     setCustomerSearch(customer.name ?? '')
 
-    const { data } = await supabase
-      .from('v_cashback_balance')
-      .select('available_balance')
-      .eq('customer_id', customer.id)
-      .maybeSingle() as unknown as { data: { available_balance: number } | null; error: any }
-    setCashbackBalance(data?.available_balance ?? 0)
+    const balRes = await fetch(`/api/cashback/balance?customer_id=${customer.id}`)
+    const balJson = balRes.ok ? await balRes.json() : { available_balance: 0 }
+    setCashbackBalance(balJson.available_balance ?? 0)
   }
 
   function selectAnonymous() {

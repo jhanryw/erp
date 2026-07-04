@@ -60,8 +60,8 @@ function daysUntilExpiry(expiresAt: string): number {
 }
 
 function isExpiringSoon(t: any): boolean {
-  if (t.status !== 'available' || !t.expires_at) return false
-  const days = daysUntilExpiry(t.expires_at)
+  if (t.status !== 'available' || !t.expiry_date) return false
+  const days = daysUntilExpiry(t.expiry_date)
   return days >= 0 && days <= EXPIRING_DAYS
 }
 
@@ -76,18 +76,18 @@ async function getCashbackData(companyId: number | null, filter: FilterKey = 'to
     .maybeSingle() as unknown as { data: any }
 
   const [totals, transactions] = await Promise.all([
-    admin.from('cashback_transactions').select('type, status, amount'),
-    admin
-      .from('cashback_transactions')
+    (admin.from('cashback_transactions') as any).select('type, status, amount').eq('company_id', companyId),
+    (admin.from('cashback_transactions') as any)
       .select(`
         id,
         type,
         status,
         amount,
         created_at,
-        expires_at,
+        expiry_date,
         customers:customer_id (id, name)
       `)
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .limit(200),
   ])
@@ -300,7 +300,7 @@ export default async function CashbackPage({
             <div className="md:hidden divide-y divide-border">
               {transactions.map((t) => {
                 const expiring   = isExpiringSoon(t)
-                const days       = t.expires_at ? daysUntilExpiry(t.expires_at) : null
+                const days       = t.expiry_date ? daysUntilExpiry(t.expiry_date) : null
                 const customer   = t.customers as any
                 const statusConf = STATUS_CONFIG[t.status as CashbackStatus]
 
@@ -336,9 +336,9 @@ export default async function CashbackPage({
                         )}
                       </div>
                     </div>
-                    {t.expires_at && !expiring && (
+                    {t.expiry_date && !expiring && (
                       <p className="text-xs text-text-muted mt-1.5">
-                        Expira: {formatDate(t.expires_at)}
+                        Expira: {formatDate(t.expiry_date)}
                       </p>
                     )}
                   </div>
@@ -362,7 +362,7 @@ export default async function CashbackPage({
                 <TableBody>
                   {transactions.map((t) => {
                     const expiring = isExpiringSoon(t)
-                    const days     = t.expires_at ? daysUntilExpiry(t.expires_at) : null
+                    const days     = t.expiry_date ? daysUntilExpiry(t.expiry_date) : null
                     return (
                       <TableRow key={t.id} className={expiring ? 'bg-warning/5' : undefined}>
                         <TableCell>
@@ -395,9 +395,9 @@ export default async function CashbackPage({
                           )}
                         </TableCell>
                         <TableCell muted>
-                          {t.expires_at ? (
+                          {t.expiry_date ? (
                             <span className={expiring ? 'text-warning font-medium' : ''}>
-                              {formatDate(t.expires_at)}
+                              {formatDate(t.expiry_date)}
                               {days !== null && days >= 0 && days <= EXPIRING_DAYS && (
                                 <span className="ml-1 text-warning font-semibold">
                                   ({days === 0 ? 'hoje' : `${days}d`})
