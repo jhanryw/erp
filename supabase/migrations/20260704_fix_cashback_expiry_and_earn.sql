@@ -26,9 +26,16 @@
 -- a) available_balance: filtra expiry_date e amount > 0
 -- b) GROUP BY inclui company_id para isolamento multi-tenant
 -- c) Expõe coluna company_id no resultado
+--
+-- DROP necessário porque CREATE OR REPLACE VIEW não permite alterar a ordem
+-- ou adicionar colunas antes das existentes (erro 42P16).
+-- CASCADE: a view não tem objetos dependentes; o RPC lê cashback_transactions
+-- diretamente, não via view.
 -- =============================================================================
 
-CREATE OR REPLACE VIEW public.v_cashback_balance AS
+DROP VIEW IF EXISTS public.v_cashback_balance CASCADE;
+
+CREATE VIEW public.v_cashback_balance AS
 SELECT
   customer_id,
   company_id,
