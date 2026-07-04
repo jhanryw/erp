@@ -63,12 +63,21 @@ O fluxo v1 continua rodando em paralelo para as sequências em andamento. O v2 u
 
   // Classificação
   "is_anonymous":   false,
-  "is_exchange":    false,           // true se cashback_transactions.type='use'
-                                     // com exchange_id NOT NULL nesta venda
+  "is_exchange":    false,           // true se EXISTS (
+                                     //   SELECT 1 FROM cashback_transactions
+                                     //   WHERE type = 'use'
+                                     //     AND used_in_sale_id = sale_id
+                                     //     AND exchange_id IS NOT NULL
+                                     // )
 
   // Comportamento do cliente
   "purchased_again_within_30_days": false,
-                                     // outra venda após sale_date dentro de 30 dias
+                                     // true se EXISTS outra venda com:
+                                     //   customer_id = mesmo cliente
+                                     //   id != sale_id (ignora a própria venda)
+                                     //   sale_date > sale_date original
+                                     //   sale_date <= sale_date original + 30 dias
+                                     //   status NOT IN ('cancelled', 'returned')
 
   // Cashback desta venda
   "cashback_generated_by_this_sale": 12.50,  // 0 se não gerou earn
@@ -109,14 +118,16 @@ O fluxo v1 continua rodando em paralelo para as sequências em andamento. O v2 u
 
 | Flag | `true` quando | `false` quando |
 |---|---|---|
-| `should_send_cashback_message` | não é troca, não é anônimo, tem telefone, `cashback_generated_by_this_sale > 0` | qualquer condição inversa |
-| `should_send_csat` | não é anônimo, tem telefone | anônimo ou sem telefone (recompra não bloqueia) |
+| `should_send_cashback_message` | não é troca, não é anônimo, tem telefone, `cashback_generated_by_this_sale > 0`, **sem evento `cashback_message_sent` já registrado para este `sale_id`** | qualquer condição inversa |
+| `should_send_csat` | não é anônimo, tem telefone, **sem evento `csat_sent` já registrado** | anônimo ou sem telefone (recompra não bloqueia) |
 | `should_schedule_expiry_reminder` | não é troca, não é anônimo, tem telefone, `nearest_cashback_expiry_date` não nulo, `current_cashback_available > 0` | qualquer condição inversa |
-| `should_send_expiry_reminder` | todos os de `should_schedule` + `hoje >= expiry_reminder_wait_until` + `hoje <= nearest_cashback_expiry_date` + `current_cashback_available > 0` + `purchased_again_within_30_days = false` | qualquer condição inversa |
+| `should_send_expiry_reminder` | todos os de `should_schedule` + `hoje >= expiry_reminder_wait_until` + `hoje <= nearest_cashback_expiry_date` + `current_cashback_available > 0` + `purchased_again_within_30_days = false` + **sem evento `expiry_reminder_sent` já registrado** | qualquer condição inversa |
+
+**Idempotência dos flags:** o contexto consulta `post_sale_automation_events` para verificar se cada tipo de mensagem já foi enviado para este `sale_id`. Se sim, o flag correspondente retorna `false` com `skip_reason = 'already_sent'` — evita duplicidade mesmo se o fluxo N8N for reprocessado.
 
 #### Valores possíveis de `skip_reason`
 
-`anonymous_sale`, `missing_phone`, `exchange_sale`, `no_cashback_generated`, `no_active_cashback`, `no_expiry_date`, `not_in_expiry_window`, `cashback_already_used`, `customer_repurchase_within_30_days`
+`anonymous_sale`, `missing_phone`, `exchange_sale`, `no_cashback_generated`, `no_active_cashback`, `no_expiry_date`, `not_in_expiry_window`, `cashback_already_used`, `customer_repurchase_within_30_days`, `already_sent`
 
 ---
 
@@ -179,10 +190,15 @@ CREATE TABLE public.post_sale_automation_events (
 
 CREATE INDEX ON public.post_sale_automation_events (sale_id, created_at DESC);
 CREATE INDEX ON public.post_sale_automation_events (company_id, created_at DESC);
+
+-- Idempotência: impede dois webhook_received para a mesma venda
+CREATE UNIQUE INDEX uq_post_sale_webhook_received
+  ON public.post_sale_automation_events (sale_id, event_type)
+  WHERE event_type = 'webhook_received';
 ```
 
 `created_at` — sempre preenchido.  
-`sent_at` — preenchido apenas quando o evento representa uma mensagem enviada.
+`sent_at` — preenchido automaticamente pelo endpoint quando `event_type IN ('cashback_message_sent', 'csat_sent', 'expiry_reminder_sent')`. O N8N não precisa enviar `sent_at`.
 
 ---
 
