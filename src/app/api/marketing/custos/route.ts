@@ -28,14 +28,35 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   const admin = createAdminClient()
-  const { error } = await admin.from('marketing_costs').insert({
-    ...parsed.data,
-    campaign_id: parsed.data.campaign_id ?? null,
-    created_by: user.id,
-    company_id: user.company_id,
-  } as any)
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  const { data: cost, error } = await (admin as any)
+    .from('marketing_costs')
+    .insert({
+      ...parsed.data,
+      campaign_id: parsed.data.campaign_id ?? null,
+      created_by: user.id,
+      company_id: user.company_id,
+    })
+    .select('id')
+    .single() as { data: { id: number } | null; error: { message: string } | null }
+
+  if (error || !cost) return NextResponse.json({ error: error?.message ?? 'Erro ao criar custo.' }, { status: 500 })
+
+  // Lançamento financeiro vinculado — mantém DRE e dashboard atualizados
+  const { error: feError } = await (admin as any)
+    .from('finance_entries')
+    .insert({
+      type:              'expense',
+      category:          'marketing',
+      description:       parsed.data.description,
+      amount:            parsed.data.amount,
+      reference_date:    parsed.data.cost_date,
+      company_id:        user.company_id,
+      marketing_cost_id: cost.id,
+      created_by:        user.id,
+    })
+
+  if (feError) return NextResponse.json({ error: feError.message }, { status: 500 })
 
   return NextResponse.json({ ok: true }, { status: 201 })
 }

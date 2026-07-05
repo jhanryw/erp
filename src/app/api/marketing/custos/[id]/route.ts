@@ -39,9 +39,52 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
+  const costId = Number(params.id)
   const admin = createAdminClient()
-  const { error } = (await (admin as any).from('marketing_costs').update({ ...parsed.data, campaign_id: parsed.data.campaign_id ?? null }).eq('id', Number(params.id)).eq('company_id', user.company_id)) as { error: any }
+
+  const { error } = (await (admin as any)
+    .from('marketing_costs')
+    .update({ ...parsed.data, campaign_id: parsed.data.campaign_id ?? null })
+    .eq('id', costId)
+    .eq('company_id', user.company_id)) as { error: { message: string } | null }
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Atualiza finance_entry vinculada; cria se não existir (garante consistência)
+  const { data: existing } = await (admin as any)
+    .from('finance_entries')
+    .select('id')
+    .eq('marketing_cost_id', costId)
+    .maybeSingle() as { data: { id: number } | null }
+
+  if (existing) {
+    const { error: feError } = await (admin as any)
+      .from('finance_entries')
+      .update({
+        description:    parsed.data.description,
+        amount:         parsed.data.amount,
+        reference_date: parsed.data.cost_date,
+      })
+      .eq('id', existing.id)
+
+    if (feError) return NextResponse.json({ error: feError.message }, { status: 500 })
+  } else {
+    const { error: feError } = await (admin as any)
+      .from('finance_entries')
+      .insert({
+        type:              'expense',
+        category:          'marketing',
+        description:       parsed.data.description,
+        amount:            parsed.data.amount,
+        reference_date:    parsed.data.cost_date,
+        company_id:        user.company_id,
+        marketing_cost_id: costId,
+        created_by:        user.id,
+      })
+
+    if (feError) return NextResponse.json({ error: feError.message }, { status: 500 })
+  }
+
   return NextResponse.json({ ok: true })
 }
 
@@ -53,8 +96,22 @@ export async function DELETE(_request: Request, { params }: { params: { id: stri
 
   const id = Number(params.id)
   if (!id) return NextResponse.json({ error: 'ID inválido' }, { status: 400 })
+
   const admin = createAdminClient()
-  const { error, count } = await (admin as any).from('marketing_costs').delete({ count: 'exact' }).eq('id', id).eq('company_id', user.company_id)
+
+  // Remove finance_entry vinculada antes de deletar marketing_cost
+  await (admin as any)
+    .from('finance_entries')
+    .delete()
+    .eq('marketing_cost_id', id)
+    .eq('company_id', user.company_id)
+
+  const { error, count } = await (admin as any)
+    .from('marketing_costs')
+    .delete({ count: 'exact' })
+    .eq('id', id)
+    .eq('company_id', user.company_id)
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if (!count) return NextResponse.json({ error: 'Custo não encontrado' }, { status: 404 })
   return NextResponse.json({ ok: true })
