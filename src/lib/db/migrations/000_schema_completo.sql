@@ -292,6 +292,16 @@ ALTER TABLE public.products
       ELSE NULL END
     ) STORED;
 
+-- Retroativo (ver supabase/migrations/20260706_document_tipo_modelo_ano.sql):
+-- colunas já existiam em produção sem migration rastreável. Obrigatórias em
+-- todo caminho de escrita (POST /api/produtos, POST /api/produtos/import) e
+-- usadas na geração de SKU. Auditoria de 2026-07-06 confirmou 0 produtos
+-- (de 370) com tipo/modelo/ano nulo ou vazio.
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS tipo   TEXT NOT NULL,
+  ADD COLUMN IF NOT EXISTS modelo TEXT NOT NULL,
+  ADD COLUMN IF NOT EXISTS ano    TEXT NOT NULL;
+
 -- =============================================================================
 -- 11. VARIAÇÕES DE PRODUTO
 -- =============================================================================
