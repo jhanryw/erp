@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Bell, BellOff } from 'lucide-react'
+import { Bell, BellOff, Loader2 } from 'lucide-react'
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4)
@@ -15,6 +15,7 @@ type PermissionState = 'default' | 'granted' | 'denied' | 'unsupported' | 'loadi
 export function PushPermissionButton() {
   const [state, setState] = useState<PermissionState>('loading')
   const [subscribed, setSubscribed] = useState(false)
+  const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -22,12 +23,26 @@ export function PushPermissionButton() {
       setState('unsupported')
       return
     }
-    setState(Notification.permission as PermissionState)
+
+    const perm = Notification.permission as PermissionState
+    setState(perm)
+
+    // Verifica se já tem assinatura ativa neste dispositivo
+    if (perm === 'granted') {
+      navigator.serviceWorker.ready.then((reg) =>
+        reg.pushManager.getSubscription().then((sub) => setSubscribed(!!sub))
+      )
+    }
   }, [])
 
   async function handleEnable() {
-    if (!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY) return
+    const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY
+    if (!vapidKey) {
+      console.error('[Push] NEXT_PUBLIC_VAPID_PUBLIC_KEY não configurada.')
+      return
+    }
 
+    setBusy(true)
     try {
       const permission = await Notification.requestPermission()
       setState(permission as PermissionState)
@@ -36,13 +51,13 @@ export function PushPermissionButton() {
       const reg = await navigator.serviceWorker.ready
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly:      true,
-        applicationServerKey: urlBase64ToUint8Array(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY).buffer as ArrayBuffer,
+        applicationServerKey: urlBase64ToUint8Array(vapidKey).buffer as ArrayBuffer,
       })
 
-      const key = sub.getKey('p256dh')
+      const key  = sub.getKey('p256dh')
       const auth = sub.getKey('auth')
 
-      await fetch('/api/push/subscribe', {
+      const res = await fetch('/api/push/subscribe', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -53,13 +68,16 @@ export function PushPermissionButton() {
         }),
       })
 
-      setSubscribed(true)
+      if (res.ok) setSubscribed(true)
     } catch (err) {
       console.error('[Push] Falha ao ativar notificações:', err)
+    } finally {
+      setBusy(false)
     }
   }
 
   async function handleDisable() {
+    setBusy(true)
     try {
       const reg = await navigator.serviceWorker.ready
       const sub = await reg.pushManager.getSubscription()
@@ -74,39 +92,69 @@ export function PushPermissionButton() {
       setSubscribed(false)
     } catch (err) {
       console.error('[Push] Falha ao desativar notificações:', err)
+    } finally {
+      setBusy(false)
     }
   }
 
-  if (state === 'loading' || state === 'unsupported') return null
+  // Não renderiza nada até saber o estado real
+  if (state === 'loading') return null
+  // Navegador não suporta push — silencioso
+  if (state === 'unsupported') return null
 
   if (state === 'denied') {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm text-text-muted">
-        <BellOff className="h-4 w-4" />
-        <span>Notificações bloqueadas no navegador</span>
+      <div className="card p-5 flex items-start gap-4">
+        <div className="p-2 rounded-lg bg-bg-overlay shrink-0">
+          <BellOff className="w-4 h-4 text-text-muted" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-text-primary mb-1">Notificações bloqueadas</p>
+          <p className="text-xs text-text-muted">
+            Você bloqueou as notificações no navegador. Para ativar, vá em Configurações do navegador
+            e permita notificações para este site.
+          </p>
+        </div>
       </div>
     )
   }
 
-  if (state === 'granted' && subscribed) {
-    return (
-      <button
-        onClick={handleDisable}
-        className="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover transition-colors"
-      >
-        <Bell className="h-4 w-4 text-brand" />
-        <span>Notificações ativas — desativar</span>
-      </button>
-    )
-  }
+  const isActive = state === 'granted' && subscribed
 
   return (
-    <button
-      onClick={handleEnable}
-      className="flex items-center gap-2 rounded-lg border border-border bg-bg-elevated px-3 py-2 text-sm text-text-secondary hover:bg-bg-hover transition-colors"
-    >
-      <Bell className="h-4 w-4" />
-      <span>Ativar notificações neste dispositivo</span>
-    </button>
+    <div className="card p-5 flex items-start gap-4">
+      <div className={`p-2 rounded-lg shrink-0 ${isActive ? 'bg-brand/10' : 'bg-bg-overlay'}`}>
+        <Bell className={`w-4 h-4 ${isActive ? 'text-brand' : 'text-text-secondary'}`} />
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold text-text-primary mb-1">
+          {isActive ? 'Notificações ativas neste dispositivo' : 'Ativar notificações neste dispositivo'}
+        </p>
+        <p className="text-xs text-text-muted mb-3">
+          Receba alertas de novas vendas no celular ou computador.
+        </p>
+
+        {isActive ? (
+          <button
+            onClick={handleDisable}
+            disabled={busy}
+            className="inline-flex items-center gap-2 text-xs text-text-secondary border border-border rounded-md px-3 py-1.5 hover:bg-bg-hover transition-colors disabled:opacity-50"
+          >
+            {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+            Desativar neste dispositivo
+          </button>
+        ) : (
+          <button
+            onClick={handleEnable}
+            disabled={busy}
+            className="inline-flex items-center gap-2 text-xs font-medium text-white bg-brand rounded-md px-3 py-1.5 hover:bg-brand-dark transition-colors disabled:opacity-50"
+          >
+            {busy && <Loader2 className="w-3 h-3 animate-spin" />}
+            Ativar notificações
+          </button>
+        )}
+      </div>
+    </div>
   )
 }

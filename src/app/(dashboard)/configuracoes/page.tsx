@@ -1,6 +1,7 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe } from 'lucide-react'
+import { PushPermissionButton } from '@/components/push/PushPermissionButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +29,12 @@ export default async function ConfiguracoesPage() {
           <h2 className="text-lg font-semibold text-text-primary">Configurações</h2>
           <p className="text-sm text-text-muted">Parâmetros e gestão do sistema</p>
         </div>
+      </div>
+
+      {/* Notificações push — visível apenas para admin (página já é admin-only) */}
+      <div>
+        <h3 className="text-sm font-medium text-text-secondary mb-3">Notificações</h3>
+        <PushPermissionButton />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
