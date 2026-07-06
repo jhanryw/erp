@@ -6,6 +6,7 @@ import { logError } from '@/lib/errors/log'
 import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { sendPushNotification } from '@/lib/push/send'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -60,6 +61,36 @@ async function sendSaleWebhookV2(
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(payload),
   }).catch((err) => console.error('[sendSaleWebhookV2] Erro ao disparar webhook:', err))
+}
+
+// ─── Push notification — nova venda para admins ───────────────────────────────
+async function sendNewSalePushNotification(
+  admin: SupabaseClient,
+  saleId: number,
+  total: number,
+  sellerId: number | null | undefined,
+  companyId: number,
+): Promise<void> {
+  // Busca nome do vendedor responsável
+  let sellerName = 'vendedor(a)'
+  if (sellerId) {
+    const { data: seller } = await (admin as any)
+      .from('sellers')
+      .select('name')
+      .eq('id', sellerId)
+      .maybeSingle() as { data: { name: string } | null }
+    if (seller?.name) sellerName = seller.name
+  }
+
+  const formatted = total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
+  await sendPushNotification({
+    companyId,
+    roles:  ['admin'],
+    title:  'Nova venda na Santtorini',
+    body:   `Venda de ${formatted} realizada por ${sellerName}`,
+    url:    `/vendas/${saleId}`,
+  })
 }
 
 // ─── Webhook v1 (legado) ─────────────────────────────────────────────────────
@@ -268,6 +299,15 @@ export async function POST(request: Request) {
     sendSaleWebhookV2(admin, sale.id, user.company_id).catch(
       (err) => console.error('[POST /api/vendas] Webhook n8n v2 error', err)
     )
+
+    // Push notification para admins da empresa (fire-and-forget — não bloqueia resposta)
+    sendNewSalePushNotification(
+      admin,
+      sale.id,
+      Number((sale as any).total ?? 0),
+      saleData.responsible_seller_id ?? null,
+      user.company_id,
+    ).catch((err) => console.error('[POST /api/vendas] Push notification error', err))
 
     // Criar envio automaticamente após a venda
     const { delivery_mode } = saleData
