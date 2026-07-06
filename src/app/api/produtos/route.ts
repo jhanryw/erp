@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { ncmFieldSchema, cestFieldSchema, origemFieldSchema } from '@/lib/validators'
 
 import { generateParentSKU, generateSKUFromCodes } from '@/lib/sku/sku-map'
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
@@ -31,18 +32,9 @@ const schema = z.object({
   base_price: z.coerce.number().positive(),
   active: z.boolean().default(true),
   variants: z.array(variantSchema).optional(),
-  ncm: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{8}$/).nullable().optional(),
-  ),
-  cest: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/).nullable().optional(),
-  ),
-  origem: z.preprocess(
-    (v) => (v === '' || v == null ? null : Number(v)),
-    z.number().int().min(0).max(8).nullable().optional(),
-  ),
+  ncm: ncmFieldSchema(),
+  cest: cestFieldSchema(),
+  origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN').optional(),
 })
 

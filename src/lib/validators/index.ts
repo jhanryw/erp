@@ -1,6 +1,32 @@
 import { z } from 'zod'
 import { validateCPF } from '@/lib/utils/cpf'
 
+// ─── Campos fiscais de Produto (compartilhados) ───────────────────────────────
+// Fonte única da regra de NCM/CEST/Origem — consumida aqui e pelos schemas
+// server-side de criação/edição (src/app/api/produtos/route.ts e [id]/route.ts).
+// Mensagem de erro é parametrizável para preservar o texto que cada consumidor
+// já exibia antes desta extração (nenhum comportamento observável muda).
+export function ncmFieldSchema(message?: string) {
+  return z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{8}$/, message).nullable().optional(),
+  )
+}
+
+export function cestFieldSchema(message?: string) {
+  return z.preprocess(
+    (v) => (v === '' || v == null ? null : String(v).trim()),
+    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/, message).nullable().optional(),
+  )
+}
+
+export function origemFieldSchema() {
+  return z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().int().min(0).max(8).nullable().optional(),
+  )
+}
+
 // ─── Produto ─────────────────────────────────────────────────────────────────
 export const productSchema = z.object({
   name: z.string().min(2, 'Nome muito curto'),
@@ -14,34 +40,10 @@ export const productSchema = z.object({
   base_price: z.coerce.number().positive('Preço deve ser > 0'),
   photo_url: z.string().url().nullable().optional(),
   active: z.boolean().default(true),
-  ncm: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{8}$/, 'NCM deve ter exatamente 8 dígitos').nullable().optional(),
-  ),
-  cest: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/, 'Formato CEST: 00.000.00').nullable().optional(),
-  ),
-  origem: z.preprocess(
-    (v) => (v === '' || v == null ? null : Number(v)),
-    z.number().int().min(0).max(8).nullable().optional(),
-  ),
+  ncm: ncmFieldSchema('NCM deve ter exatamente 8 dígitos'),
+  cest: cestFieldSchema('Formato CEST: 00.000.00'),
+  origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN'),
-})
-
-// ─── Variação de Produto ──────────────────────────────────────────────────────
-// Cada variação combina até 4 dimensões: cor × tamanho × modelo × tecido
-export const productVariationSchema = z.object({
-  product_id: z.number().positive(),
-  sku_variation: z.string().min(2, 'SKU da variação obrigatório').max(80),
-  color: z.string().max(50).nullable().optional(),
-  size: z.string().max(20).nullable().optional(),
-  model: z.string().max(50).nullable().optional(),
-  fabric: z.string().max(50).nullable().optional(),
-  cost_override: z.coerce.number().min(0).nullable().optional(),
-  price_override: z.coerce.number().min(0).nullable().optional(),
-  photo_url: z.string().url().nullable().optional(),
-  active: z.boolean().default(true),
 })
 
 // ─── Fornecedor ───────────────────────────────────────────────────────────────
@@ -158,7 +160,6 @@ export const productEditSchema = productSchema.partial()
 
 export type ProductFormData = z.infer<typeof productSchema>
 export type ProductEditFormData = z.infer<typeof productEditSchema>
-export type ProductVariationFormData = z.infer<typeof productVariationSchema>
 export type SupplierFormData = z.infer<typeof supplierSchema>
 export type CustomerFormData = z.infer<typeof customerSchema>
 export type SaleFormData = z.infer<typeof saleSchema>

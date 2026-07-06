@@ -10,6 +10,7 @@ import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
+import { ncmFieldSchema, cestFieldSchema, origemFieldSchema } from '@/lib/validators'
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -36,18 +37,9 @@ const putSchema = z.object({
   active: z.boolean().optional(),
   variations_to_delete: z.array(z.number().int().positive()).optional(),
   variations_to_add: z.array(variantToAddSchema).optional(),
-  ncm: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{8}$/).nullable().optional(),
-  ),
-  cest: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/).nullable().optional(),
-  ),
-  origem: z.preprocess(
-    (v) => (v === '' || v == null ? null : Number(v)),
-    z.number().int().min(0).max(8).nullable().optional(),
-  ),
+  ncm: ncmFieldSchema(),
+  cest: cestFieldSchema(),
+  origem: origemFieldSchema(),
   unidade_med: z.string().max(10).optional(),
 })
 
