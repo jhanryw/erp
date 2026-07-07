@@ -34,6 +34,7 @@ type ProductRow = {
   created_at: string
   categories?: { id: number; name: string } | null
   suppliers?: { id: number; name: string } | null
+  brands?: { id: number; name: string } | null
 }
 
 type AttributeRow = {
@@ -70,7 +71,8 @@ async function getProduct(id: string) {
       origin,
       created_at,
       categories:category_id (id, name),
-      suppliers:supplier_id (id, name)
+      suppliers:supplier_id (id, name),
+      brands:brand_id (id, name)
     `)
     .eq('id', productId)
     .single()
@@ -132,6 +134,7 @@ export default async function ProdutoDetalhePage({
               <code>{product.sku}</code>
               {product.categories?.name && <span>{product.categories.name}</span>}
               {product.suppliers?.name && <span>· {product.suppliers.name}</span>}
+              {product.brands?.name && <span>· {product.brands.name}</span>}
               <Badge variant={product.active ? 'default' : 'outline'}>
                 {product.active ? 'Ativo' : 'Inativo'}
               </Badge>

@@ -28,6 +28,7 @@ export const dynamic = 'force-dynamic'
 
 type ProductCategory = { id: number; name: string }
 type ProductSupplier  = { id: number; name: string }
+type ProductBrand     = { id: number; name: string }
 
 type ProductRowFull = {
   id:         number
@@ -40,6 +41,7 @@ type ProductRowFull = {
   active:     boolean
   categories: ProductCategory | ProductCategory[] | null
   suppliers:  ProductSupplier | ProductSupplier[] | null
+  brands:     ProductBrand | ProductBrand[] | null
 }
 
 type ProductRowLite = {
@@ -57,7 +59,8 @@ async function getProductsFull(search?: string): Promise<ProductRowFull[]> {
   let query = supabase
     .from('products')
     .select(`id, name, sku, base_cost, base_price, margin_pct, photo_url, active,
-             categories:category_id (id, name), suppliers:supplier_id (id, name)`)
+             categories:category_id (id, name), suppliers:supplier_id (id, name),
+             brands:brand_id (id, name)`)
     .order('name', { ascending: true })
 
   if (search) query = (query as any).or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
@@ -147,6 +150,7 @@ function ProdutosFullView({ products, search }: { products: ProductRowFull[]; se
                   <TableHead>SKU</TableHead>
                   <TableHead>Categoria</TableHead>
                   <TableHead>Fornecedor</TableHead>
+                  <TableHead>Marca</TableHead>
                   <TableHead>Custo</TableHead>
                   <TableHead>Preço</TableHead>
                   <TableHead>Margem</TableHead>
@@ -158,6 +162,7 @@ function ProdutosFullView({ products, search }: { products: ProductRowFull[]; se
                 {products.map((product) => {
                   const category = Array.isArray(product.categories) ? product.categories[0] ?? null : product.categories ?? null
                   const supplier = Array.isArray(product.suppliers)  ? product.suppliers[0]  ?? null : product.suppliers  ?? null
+                  const brand    = Array.isArray(product.brands)     ? product.brands[0]     ?? null : product.brands     ?? null
                   return (
                     <TableRow key={product.id}>
                       <TableCell>
@@ -169,6 +174,7 @@ function ProdutosFullView({ products, search }: { products: ProductRowFull[]; se
                       <TableCell><code>{product.sku}</code></TableCell>
                       <TableCell>{category?.name ?? '—'}</TableCell>
                       <TableCell>{supplier?.name ?? '—'}</TableCell>
+                      <TableCell>{brand?.name ?? '—'}</TableCell>
                       <TableCell>{formatCurrency(product.base_cost)}</TableCell>
                       <TableCell>{formatCurrency(product.base_price)}</TableCell>
                       <TableCell>
