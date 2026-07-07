@@ -69,6 +69,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const [loading, setLoading] = useState(true)
   const [categories, setCategories] = useState<any[]>([])
   const [suppliers, setSuppliers] = useState<any[]>([])
+  const [brands, setBrands] = useState<any[]>([])
 
   // Variation state
   const [variations, setVariations] = useState<VariationRow[]>([])
@@ -104,11 +105,13 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     Promise.all([
       fetch('/api/categorias').then(r => r.json()),
       fetch('/api/fornecedores').then(r => r.json()),
+      fetch('/api/marcas?active=true').then(r => r.json()),
       fetch(`/api/produtos/${params.id}`).then(r => r.json()),
       fetch('/api/variacoes').then(r => r.json()),
-    ]).then(([catsJson, supsJson, prodJson, varJson]) => {
+    ]).then(([catsJson, supsJson, brandsJson, prodJson, varJson]) => {
       setCategories(catsJson.categories ?? [])
       setSuppliers(supsJson.suppliers ?? [])
+      setBrands(brandsJson.brands ?? [])
       setVariationTypes(varJson.types ?? [])
 
       const { product, error } = prodJson
@@ -125,6 +128,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
         sku: product.sku ?? '',
         category_id: product.category_id,
         supplier_id: product.supplier_id ?? undefined,
+        brand_id: (product as any).brand_id ?? undefined,
         origin: product.origin ?? 'third_party',
         base_cost: product.base_cost ?? 0,
         base_price: product.base_price ?? 0,
@@ -198,6 +202,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     if (data.base_price  !== undefined) payload.base_price  = Number(data.base_price)
     if (data.active      !== undefined) payload.active      = data.active
     if ('supplier_id' in data) payload.supplier_id = data.supplier_id ? Number(data.supplier_id) : null
+    if ('brand_id' in data) payload.brand_id = data.brand_id ? Number(data.brand_id) : null
     if (data.ncm         !== undefined) payload.ncm         = data.ncm
     if (data.cest        !== undefined) payload.cest        = data.cest
     if (data.origem      !== undefined) payload.origem      = data.origem
@@ -275,8 +280,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
             />
           </div>
 
-          {/* Categoria + Fornecedor */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Categoria + Fornecedor + Marca */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Select
               label="Categoria"
               error={errors.category_id?.message}
@@ -291,6 +296,12 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
               <option value="">Sem fornecedor</option>
               {suppliers.map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </Select>
+            <Select label="Marca" {...register('brand_id')}>
+              <option value="">Sem marca</option>
+              {brands.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
               ))}
             </Select>
           </div>

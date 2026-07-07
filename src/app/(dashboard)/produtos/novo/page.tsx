@@ -35,6 +35,7 @@ const formSchema = z.object({
   ano:         z.string().min(4, 'Ano obrigatório'),
   category_id: z.coerce.number({ invalid_type_error: 'Selecione uma categoria' }).int().positive('Selecione uma categoria'),
   supplier_id: z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().int().positive().nullable().optional()),
+  brand_id:    z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().int().positive().nullable().optional()),
   origin:      z.enum(['own_brand', 'third_party']),
   base_cost:   z.coerce.number().min(0),
   base_price:  z.coerce.number().positive('Preço obrigatório'),
@@ -72,6 +73,7 @@ export default function NovoProdutoPage() {
 
   const [categories,  setCategories]  = useState<{ id: number; name: string }[]>([])
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
+  const [brands,      setBrands]      = useState<{ id: number; name: string }[]>([])
   const [varTypes,    setVarTypes]    = useState<VariationType[]>([])
   const [selColors,     setSelColors]     = useState<VariationValue[]>([])
   const [selSizes,      setSelSizes]      = useState<VariationValue[]>([])
@@ -100,6 +102,7 @@ export default function NovoProdutoPage() {
   useEffect(() => {
     fetch('/api/categorias').then(r => r.json()).then(({ categories }) => setCategories(categories ?? []))
     fetch('/api/fornecedores').then(r => r.json()).then(({ suppliers }) => setSuppliers(suppliers ?? []))
+    fetch('/api/marcas?active=true').then(r => r.json()).then(({ brands }) => setBrands(brands ?? []))
     fetch('/api/variacoes').then(r => r.json()).then(({ types }) => setVarTypes(types ?? []))
   }, [])
 
@@ -277,6 +280,7 @@ export default function NovoProdutoPage() {
           ...data,
           category_id: Number(data.category_id),
           supplier_id: data.supplier_id ? Number(data.supplier_id) : null,
+          brand_id:    data.brand_id ? Number(data.brand_id) : null,
           base_cost:   Number(data.base_cost),
           base_price:  Number(data.base_price),
         }),
@@ -360,7 +364,7 @@ export default function NovoProdutoPage() {
             </Select>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Select label="Categoria" required error={errors.category_id?.message} {...register('category_id')}>
               <option value="">Selecione a categoria</option>
               {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -368,6 +372,10 @@ export default function NovoProdutoPage() {
             <Select label="Fornecedor" {...register('supplier_id')}>
               <option value="">Sem fornecedor</option>
               {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+            <Select label="Marca" {...register('brand_id')}>
+              <option value="">Sem marca</option>
+              {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
             </Select>
           </div>
 

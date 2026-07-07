@@ -35,6 +35,7 @@ export const productSchema = z.object({
   subcategory_id: z.coerce.number().nullable().optional(),
   collection_id: z.coerce.number().nullable().optional(),
   supplier_id: z.coerce.number().nullable().optional(),
+  brand_id: z.coerce.number().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']),
   base_cost: z.coerce.number().min(0, 'Custo deve ser ≥ 0'),
   base_price: z.coerce.number().positive('Preço deve ser > 0'),

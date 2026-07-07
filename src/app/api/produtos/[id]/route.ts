@@ -31,6 +31,7 @@ const putSchema = z.object({
   sku: z.string().regex(/^\d{10}$/, 'SKU deve conter exatamente 10 dígitos numéricos').optional(),
   category_id: z.coerce.number().int().positive().optional(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
+  brand_id: z.coerce.number().int().positive().nullable().optional(),
   origin: z.enum(['own_brand', 'third_party']).optional(),
   base_cost: z.coerce.number().min(0).optional(),
   base_price: z.coerce.number().positive().optional(),
@@ -69,7 +70,7 @@ export async function GET(
 
   const { data: product, error: productError } = await (admin as any)
     .from('products')
-    .select('id, name, sku, category_id, supplier_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med')
+    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med')
     .eq('id', productId)
     .eq('company_id', user.company_id)
     .single()
@@ -140,7 +141,7 @@ export async function PUT(
   // Campos ausentes no payload herdam o valor atual do produto.
   // Isso permite PUT parcial: { name: "Novo nome" } sem enviar todos os campos.
   type ProductSnap = {
-    name: string; sku: string; category_id: number; supplier_id: number | null
+    name: string; sku: string; category_id: number; supplier_id: number | null; brand_id: number | null
     origin: 'own_brand' | 'third_party'; base_cost: number; base_price: number; active: boolean
     ncm: string | null; cest: string | null; origem: number | null; unidade_med: string
   }
@@ -149,9 +150,10 @@ export async function PUT(
     name:        patch.name        ?? snap.name,
     sku:         patch.sku         ?? snap.sku,
     category_id: patch.category_id ?? snap.category_id,
-    // supplier_id pode ser null intencionalmente (remover fornecedor);
+    // supplier_id/brand_id podem ser null intencionalmente (remover vínculo);
     // distinguir "não enviado" (undefined) de "enviado como null"
     supplier_id: patch.supplier_id !== undefined ? (patch.supplier_id ?? null) : (snap.supplier_id ?? null),
+    brand_id:    patch.brand_id    !== undefined ? (patch.brand_id    ?? null) : (snap.brand_id    ?? null),
     origin:      patch.origin      ?? snap.origin,
     base_cost:   patch.base_cost   ?? snap.base_cost,
     base_price:  patch.base_price  ?? snap.base_price,
@@ -186,6 +188,7 @@ export async function PUT(
       sku: productFields.sku,
       category_id: productFields.category_id,
       supplier_id: productFields.supplier_id ?? null,
+      brand_id: productFields.brand_id ?? null,
       origin: productFields.origin,
       base_cost: productFields.base_cost,
       base_price: productFields.base_price,
