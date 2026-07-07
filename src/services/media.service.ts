@@ -76,6 +76,9 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
   'application/pdf': 'pdf',
 }
 
+/** TTL de signed URL para mídia privada — ver docs/media-hub-storage.md. */
+const PRIVATE_URL_TTL_SECONDS = 300
+
 /** Nunca aceitar bucket vindo do cliente — só esta função decide. */
 export function bucketForVisibility(visibility: MediaVisibility): string {
   return BUCKET_RULES[visibility].bucket
@@ -157,4 +160,60 @@ export async function createMediaFromUpload(
   }
 
   return success(data!)
+}
+
+// ─── Leitura por public_id ─────────────────────────────────────────────────────
+
+/**
+ * Busca uma mídia pelo identificador público, escopada à empresa do
+ * usuário. Retorna `null` se não existir ou pertencer a outra empresa —
+ * as duas situações são indistinguíveis de propósito (evita vazar a
+ * existência de um recurso de outra empresa).
+ */
+export async function getMediaByPublicId(publicId: string, companyId: number): Promise<Media | null> {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('media')
+    .select('*')
+    .eq('public_id', publicId)
+    .eq('company_id', companyId)
+    .maybeSingle() as unknown as { data: Media | null }
+  return data
+}
+
+/**
+ * Resolve uma mídia para uma URL utilizável:
+ *   - `external_url` presente → retorna direto, já é uma URL completa
+ *   - `visibility='public'` → URL pública estável (sem expiração)
+ *   - `visibility='private'` → signed URL de curta duração
+ */
+export async function resolveMediaUrl(
+  media: Media,
+): Promise<ServiceOutcome<{ url: string; expiresAt: string | null }>> {
+  if (media.external_url) {
+    return success({ url: media.external_url, expiresAt: null })
+  }
+
+  if (!media.storage_key) {
+    return failure('Mídia sem storage_key nem external_url — dado inconsistente.', 500)
+  }
+
+  const admin = createAdminClient()
+  const bucket = bucketForVisibility(media.visibility)
+
+  if (media.visibility === 'public') {
+    const { data } = admin.storage.from(bucket).getPublicUrl(media.storage_key)
+    return success({ url: data.publicUrl, expiresAt: null })
+  }
+
+  const { data, error } = await admin.storage
+    .from(bucket)
+    .createSignedUrl(media.storage_key, PRIVATE_URL_TTL_SECONDS)
+
+  if (error || !data) {
+    return failure(`Falha ao gerar URL assinada: ${error?.message ?? 'objeto não encontrado no Storage'}`, 502)
+  }
+
+  const expiresAt = new Date(Date.now() + PRIVATE_URL_TTL_SECONDS * 1000).toISOString()
+  return success({ url: data.signedUrl, expiresAt })
 }
