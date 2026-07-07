@@ -233,6 +233,37 @@ CREATE TABLE IF NOT EXISTS public.variation_values (
   UNIQUE (variation_type_id, slug)
 );
 
+-- Retroativo (ver supabase/migrations/20260707_category_attributes.sql):
+-- distingue atributo de variação (gera SKU — cor/tamanho hoje) de atributo
+-- descritivo (não gera SKU). Default 'variant' preserva o comportamento
+-- atual de cor/tamanho sem alterar nenhuma linha existente.
+ALTER TABLE public.variation_types
+  ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'variant'
+    CHECK (kind IN ('variant', 'descriptive'));
+
+CREATE INDEX IF NOT EXISTS idx_variation_types_kind
+  ON public.variation_types(kind);
+
+-- Governança de atributos por categoria: quais variation_types se aplicam
+-- (e quais são obrigatórios) para produtos de uma categoria. Sem
+-- consumidor de código ainda — cadastro/edição/importação continuam
+-- inalterados até uma entrega futura ler esta tabela.
+CREATE TABLE IF NOT EXISTS public.category_attributes (
+  id                 SERIAL      PRIMARY KEY,
+  category_id        INT         NOT NULL REFERENCES public.categories(id),
+  variation_type_id  INT         NOT NULL REFERENCES public.variation_types(id),
+  required           BOOLEAN     NOT NULL DEFAULT FALSE,
+  active             BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_category_attributes UNIQUE (category_id, variation_type_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_category_attributes_category_id
+  ON public.category_attributes(category_id);
+
+CREATE INDEX IF NOT EXISTS idx_category_attributes_variation_type_id
+  ON public.category_attributes(variation_type_id);
+
 -- =============================================================================
 -- 9. FORNECEDORES
 -- =============================================================================
