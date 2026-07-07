@@ -48,6 +48,8 @@ type NewVariation = {
   cost_override: number | null
 }
 
+type CategoryAttributeLink = { required: boolean; active: boolean; variation_type: { slug: string } }
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function attrLabel(v: VariationRow): string {
@@ -76,6 +78,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const [toDelete, setToDelete] = useState<number[]>([])
   const [toAdd, setToAdd] = useState<NewVariation[]>([])
   const [variationTypes, setVariationTypes] = useState<VariationType[]>([])
+  const [categoryAttributes, setCategoryAttributes] = useState<CategoryAttributeLink[]>([])
 
   // Controls whether the "add variation" form is visible
   const [showAddVariation, setShowAddVariation] = useState(false)
@@ -100,6 +103,19 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const baseCost = Number(watch('base_cost')) || 0
   const basePrice = Number(watch('base_price')) || 0
   const margin = basePrice > 0 ? ((basePrice - baseCost) / basePrice) * 100 : 0
+  const categoryId = watch('category_id')
+
+  // Atributos obrigatórios da categoria atual do formulário (cor/tamanho
+  // apenas — únicos variation_types com UI de seleção hoje). Sem
+  // categoria, sem configuração, ou em falha de rede, fica em [] —
+  // nunca bloqueia por causa disso (fail-open).
+  useEffect(() => {
+    if (!categoryId) { setCategoryAttributes([]); return }
+    fetch(`/api/category-attributes?category_id=${categoryId}&active=true`)
+      .then(r => r.json())
+      .then(json => setCategoryAttributes(json.category_attributes ?? []))
+      .catch(() => setCategoryAttributes([]))
+  }, [categoryId])
 
   useEffect(() => {
     Promise.all([
@@ -153,6 +169,15 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   function addVariation() {
     if (!newSku.trim()) {
       toast.error('Informe o SKU da variação')
+      return
+    }
+
+    if (corRequired && newColorId === '') {
+      toast.error('Cor é obrigatória para esta categoria', { description: 'Selecione uma cor antes de adicionar a variação.' })
+      return
+    }
+    if (tamanhoRequired && newSizeId === '') {
+      toast.error('Tamanho é obrigatório para esta categoria', { description: 'Selecione um tamanho antes de adicionar a variação.' })
       return
     }
 
@@ -234,6 +259,9 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
 
   const colorType = variationTypes.find(t => t.slug === 'cor')
   const sizeType = variationTypes.find(t => t.slug === 'tamanho')
+
+  const corRequired     = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'cor')
+  const tamanhoRequired = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'tamanho')
 
   // ── Render ───────────────────────────────────────────────────────────────────
 
@@ -486,7 +514,9 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
 
                 {colorType && (
                   <div>
-                    <label className="label-base">Cor</label>
+                    <label className="label-base">
+                      Cor{corRequired && <span className="text-error"> *</span>}
+                    </label>
                     <select
                       className="input-base"
                       value={newColorId}
@@ -497,12 +527,15 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                         <option key={vv.id} value={vv.id}>{vv.value}</option>
                       ))}
                     </select>
+                    {corRequired && <p className="text-xs text-error mt-1">Obrigatório para esta categoria</p>}
                   </div>
                 )}
 
                 {sizeType && (
                   <div>
-                    <label className="label-base">Tamanho</label>
+                    <label className="label-base">
+                      Tamanho{tamanhoRequired && <span className="text-error"> *</span>}
+                    </label>
                     <select
                       className="input-base"
                       value={newSizeId}
@@ -513,6 +546,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                         <option key={vv.id} value={vv.id}>{vv.value}</option>
                       ))}
                     </select>
+                    {tamanhoRequired && <p className="text-xs text-error mt-1">Obrigatório para esta categoria</p>}
                   </div>
                 )}
 
