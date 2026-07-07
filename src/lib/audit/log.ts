@@ -24,7 +24,7 @@ export type AuditAction =
   | 'add_movement' | 'cancel_movement'
 
 export type AuditResource =
-  | 'product' | 'product_variation'
+  | 'product' | 'product_variation' | 'brand'
   | 'sale' | 'sale_item'
   | 'stock' | 'stock_entry' | 'stock_adjustment' | 'stock_transfer'
   | 'finance_entry'
