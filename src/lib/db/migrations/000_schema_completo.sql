@@ -252,6 +252,25 @@ CREATE TABLE IF NOT EXISTS public.suppliers (
 );
 
 -- =============================================================================
+-- 9b. MARCAS
+-- =============================================================================
+-- Ver supabase/migrations/20260707_create_brands.sql. Entidade própria,
+-- distinta de Fornecedor (vínculo comercial) e de products.origin
+-- (fabricação própria vs. terceiro). Nasce opcional — products.brand_id
+-- é nullable, sem preenchimento retroativo de produtos existentes.
+
+CREATE TABLE IF NOT EXISTS public.brands (
+  id          SERIAL      PRIMARY KEY,
+  company_id  INT         NOT NULL REFERENCES public.companies(id),
+  name        TEXT        NOT NULL,
+  slug        TEXT        NOT NULL,
+  active      BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_brands_company_slug UNIQUE (company_id, slug)
+);
+
+-- =============================================================================
 -- 10. PRODUTOS
 -- =============================================================================
 
@@ -301,6 +320,14 @@ ALTER TABLE public.products
   ADD COLUMN IF NOT EXISTS tipo   TEXT NOT NULL,
   ADD COLUMN IF NOT EXISTS modelo TEXT NOT NULL,
   ADD COLUMN IF NOT EXISTS ano    TEXT NOT NULL;
+
+-- Retroativo (ver supabase/migrations/20260707_create_brands.sql): Marca,
+-- nullable, sem preenchimento de produtos existentes.
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS brand_id INT REFERENCES public.brands(id);
+
+CREATE INDEX IF NOT EXISTS idx_products_brand_id
+  ON public.products(brand_id);
 
 -- =============================================================================
 -- 11. VARIAÇÕES DE PRODUTO
