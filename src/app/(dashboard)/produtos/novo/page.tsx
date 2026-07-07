@@ -14,7 +14,7 @@ import { Button } from '@/components/ui/button'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-type VariationValue = { id: number; value: string; slug: string }
+type VariationValue = { id: number; value: string; slug: string; sku_code: string | null }
 type VariationType  = { id: number; name: string; slug: string; variation_values: VariationValue[] }
 
 const variantRowSchema = z.object({
@@ -57,15 +57,9 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>
 
-import { SKU_TIPO, SKU_MODELO, SKU_COR, SKU_TAMANHO, generateSKU, normalizeKey } from '@/lib/sku/sku-map'
+import { SKU_TIPO, SKU_MODELO, generateSKUFromCodes, normalizeKey } from '@/lib/sku/sku-map'
 import { hasMinRole } from '@/types/roles'
 import { useUserContext } from '@/components/layout/user-context'
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function keyToLabel(key: string) {
-  return key.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')
-}
 
 // ─── Componente ───────────────────────────────────────────────────────────────
 
@@ -128,56 +122,62 @@ export default function NovoProdutoPage() {
       return
     }
 
+    // Prévia de SKU — usa o sku_code já resolvido pelo banco (via /api/variacoes).
+    // Se ainda não houver código atribuído para o valor, mostra um placeholder:
+    // o SKU real é sempre calculado pelo servidor no momento do submit, nunca
+    // a partir deste campo (a prévia não é enviada ao backend).
+    function previewSku(corCode: string | null | undefined, tamanhoCode: string | null | undefined): string {
+      if (corCode === null || tamanhoCode === null) return '(gerado ao salvar)'
+      try {
+        return generateSKUFromCodes({ tipo, modelo, corCode: corCode ?? undefined, tamanhoCode: tamanhoCode ?? undefined, ano })
+      } catch {
+        return '(gerado ao salvar)'
+      }
+    }
+
     const rows: FormData['variants'] = []
 
-    try {
-      if (hasColors && hasSizes) {
-        selColors.forEach(color => {
-          selSizes.forEach(size => {
-            rows.push({
-              sku_variation:  generateSKU({ tipo, modelo, cor: color.value, tamanho: size.value, ano }),
-              color_value_id: color.id,
-              size_value_id:  size.id,
-              color_label:    color.value,
-              size_label:     size.value,
-              price_override: null,
-              cost_override:  null,
-              initial_stock:  0,
-            })
-          })
-        })
-      } else if (hasColors) {
-        selColors.forEach(color => {
-          rows.push({
-            sku_variation:  generateSKU({ tipo, modelo, cor: color.value, ano }),
-            color_value_id: color.id,
-            size_value_id:  null,
-            color_label:    color.value,
-            size_label:     undefined,
-            price_override: null,
-            cost_override:  null,
-            initial_stock:  0,
-          })
-        })
-      } else {
+    if (hasColors && hasSizes) {
+      selColors.forEach(color => {
         selSizes.forEach(size => {
           rows.push({
-            sku_variation:  generateSKU({ tipo, modelo, tamanho: size.value, ano }),
-            color_value_id: null,
+            sku_variation:  previewSku(color.sku_code, size.sku_code),
+            color_value_id: color.id,
             size_value_id:  size.id,
-            color_label:    undefined,
+            color_label:    color.value,
             size_label:     size.value,
             price_override: null,
             cost_override:  null,
             initial_stock:  0,
           })
         })
-      }
-    } catch (err) {
-      toast.error('Não foi possível gerar a matriz de variantes', {
-        description: err instanceof Error ? err.message : 'Verifique se os valores de cor/tamanho estão no mapa de SKUs.',
       })
-      return
+    } else if (hasColors) {
+      selColors.forEach(color => {
+        rows.push({
+          sku_variation:  previewSku(color.sku_code, undefined),
+          color_value_id: color.id,
+          size_value_id:  null,
+          color_label:    color.value,
+          size_label:     undefined,
+          price_override: null,
+          cost_override:  null,
+          initial_stock:  0,
+        })
+      })
+    } else {
+      selSizes.forEach(size => {
+        rows.push({
+          sku_variation:  previewSku(undefined, size.sku_code),
+          color_value_id: null,
+          size_value_id:  size.id,
+          color_label:    undefined,
+          size_label:     size.value,
+          price_override: null,
+          cost_override:  null,
+          initial_stock:  0,
+        })
+      })
     }
 
     replace(rows)
@@ -197,7 +197,6 @@ export default function NovoProdutoPage() {
 
   async function addNewVariationValue(
     rawValue: string,
-    map: Record<string, string>,
     typeId: number | undefined,
     existing: VariationValue[],
     onAdd: (v: VariationValue) => void,
@@ -208,12 +207,6 @@ export default function NovoProdutoPage() {
     if (!trimmed || !typeId) return
 
     const key = normalizeKey(trimmed)
-    if (!map[key]) {
-      toast.error(`"${trimmed}" não está no mapa de SKUs`, {
-        description: `Valores válidos: ${Object.keys(map).map(keyToLabel).join(', ')}`,
-      })
-      return
-    }
 
     // Se já está nos variation_values do banco, apenas seleciona
     const found = existing.find(v => normalizeKey(v.value) === key)
@@ -250,7 +243,7 @@ export default function NovoProdutoPage() {
 
   function handleAddColor() {
     addNewVariationValue(
-      newColorInput, SKU_COR, colorType?.id,
+      newColorInput, colorType?.id,
       colorType?.variation_values ?? [],
       v => { setSelColors(prev => prev.some(c => c.id === v.id) ? prev : [...prev, v]); setGenerated(false) },
       setNewColorInput, setAddingColor,
@@ -259,7 +252,7 @@ export default function NovoProdutoPage() {
 
   function handleAddSize() {
     addNewVariationValue(
-      newSizeInput, SKU_TAMANHO, sizeType?.id,
+      newSizeInput, sizeType?.id,
       sizeType?.variation_values ?? [],
       v => { setSelSizes(prev => prev.some(s => s.id === v.id) ? prev : [...prev, v]); setGenerated(false) },
       setNewSizeInput, setAddingSize,
@@ -475,7 +468,7 @@ export default function NovoProdutoPage() {
                 {selColors.length > 0 && <p className="text-xs text-text-muted mt-2">{selColors.length} cor{selColors.length > 1 ? 'es' : ''} selecionada{selColors.length > 1 ? 's' : ''}</p>}
                 {/* Adicionar nova cor */}
                 <datalist id="cores-validas">
-                  {Object.keys(SKU_COR).map(k => <option key={k} value={keyToLabel(k)} />)}
+                  {(colorType?.variation_values ?? []).map(v => <option key={v.id} value={v.value} />)}
                 </datalist>
                 <div className="flex gap-2 mt-3">
                   <input
@@ -512,7 +505,7 @@ export default function NovoProdutoPage() {
                 {selSizes.length > 0 && <p className="text-xs text-text-muted mt-2">{selSizes.length} tamanho{selSizes.length > 1 ? 's' : ''} selecionado{selSizes.length > 1 ? 's' : ''}</p>}
                 {/* Adicionar novo tamanho */}
                 <datalist id="tamanhos-validos">
-                  {Object.keys(SKU_TAMANHO).map(k => <option key={k} value={k.toUpperCase()} />)}
+                  {(sizeType?.variation_values ?? []).map(v => <option key={v.id} value={v.value} />)}
                 </datalist>
                 <div className="flex gap-2 mt-3">
                   <input
