@@ -1,18 +1,25 @@
 // =============================================================================
-// sku-map.ts — Mapa oficial de SKUs Santtorini
+// sku-map.ts — Mapa oficial de tipo/modelo de produto (Santtorini)
 //
 // Padrão: TTMMCCTTAA (10 dígitos numéricos)
-//   TT = tipo de produto   (2 dígitos)
-//   MM = modelo            (2 dígitos)
-//   CC = cor               (2 dígitos, '00' = sem cor)
-//   TT = tamanho           (2 dígitos, '00' = único tamanho)
+//   TT = tipo de produto   (2 dígitos) — resolvido aqui, via SKU_TIPO
+//   MM = modelo            (2 dígitos) — resolvido aqui, via SKU_MODELO
+//   CC = cor               (2 dígitos, '00' = sem cor) — resolvido
+//                            externamente (variation_values.sku_code)
+//   TT = tamanho           (2 dígitos, '00' = único tamanho) — idem
 //   AA = ano de coleção    (2 dígitos, ex: '26' para 2026)
 //
+// Este arquivo é responsável apenas por tipo/modelo (estáticos, sem tabela
+// dinâmica equivalente) e pela composição final do SKU a partir de códigos
+// de cor/tamanho já resolvidos externamente (ver generateSKUFromCodes).
+// Cor e tamanho não têm mais mapa estático aqui — são 100% dinâmicos,
+// resolvidos via variation_values.sku_code (src/lib/sku/sku-dynamic.ts).
+//
 // REGRAS:
-//   1. generateSKU() lança Error para qualquer valor não mapeado — sem fallback.
-//   2. SKU pai (produto) usa '0000' para CC+TT → TTMM0000AA.
-//   3. SKU de variação usa os códigos reais de cor e tamanho.
-//   4. Todo tipo em SKU_TIPO DEVE ter uma entrada em SKU_MODELO.
+//   1. generateSKUFromCodes() lança Error para tipo/modelo não mapeado —
+//      sem fallback.
+//   2. SKU pai (produto) usa '00' para CC e TT → TTMM0000AA.
+//   3. Todo tipo em SKU_TIPO DEVE ter uma entrada em SKU_MODELO.
 // =============================================================================
 
 // ─── Tipos de produto ─────────────────────────────────────────────────────────
@@ -147,97 +154,6 @@ export const SKU_MODELO: Record<string, Record<string, string>> = {
 
 }
 
-// ─── Cores ───────────────────────────────────────────────────────────────────
-// Cada cor deve ter um código único de 2 dígitos.
-// Proibido: dois nomes de cor com o mesmo código (causa colisão de SKU).
-
-export const SKU_COR: Record<string, string> = {
-  preto:           '01',
-  branco:          '02',
-  nude:            '03',
-  vermelho:        '04',
-  rosa:            '05',
-  vinho:           '06',
-  azul:            '07',
-  verde:           '08',
-  amarelo:         '09',
-  roxo:            '10',
-  bege:            '11',
-  marrom:          '12',
-  lilas:           '13',
-  bege_com_preto:  '14',
-  cinza:           '15',
-  laranja:         '16',
-  dourado:         '17',
-  prateado:        '18',
-  azul_marinho:    '19',
-  rosa_bebe:       '20',
-  pink:            '21',
-  coral:           '22',
-  off_white:       '23',
-  caramelo:        '24',
-  verde_oliva:     '25',
-  azul_claro:      '26',
-  terracota:       '27',
-  bordo:           '28',
-  champagne:       '29',
-  creme:           '30',
-  salmao:          '31',
-  lavanda:         '32',
-  menta:           '33',
-  cinza_mescla:    '34',
-  nude_escuro:     '35',
-  azul_escuro:     '36',
-  verde_esmeralda: '37',
-  preto_com_rosa:  '38',
-  branco_com_preto:'39',
-  cinza_com_preto: '40',
-  rosa_com_preto:  '41',
-  rose:            '42',
-  chumbo:          '43',
-  verde_militar:   '44',
-  azul_petroleo:      '45',
-  caqui:              '46',
-  // Adicionados via migration dinâmica
-  verde_agua:         '47',
-  purple:             '48',
-  malva:              '49',
-  preto_com_vermelho: '50',
-  branco_com_rosa:    '51',
-  estampado:          '52',
-  preto_com_branco:   '53',
-  preto_com_verde:    '54',
-  rosa_seco:          '55',
-  // Novos
-  rosa_claro:         '56',
-}
-
-// ─── Tamanhos ─────────────────────────────────────────────────────────────────
-
-export const SKU_TAMANHO: Record<string, string> = {
-  // Tamanhos base
-  unico:      '00',
-  pp:         '05',
-  p:          '01',
-  p_m:        '07',
-  m:          '02',
-  g:          '03',
-  g_gg:       '08',
-  gg:         '04',
-  xg:         '06',  // alias de xgg para compatibilidade
-  xgg:        '06',
-  // Tamanhos estendidos
-  g1:         '09',
-  g2:         '10',
-  g3:         '11',
-  m_infantil: '12',
-  g_infantil: '13',
-  // Numeração europeia (lingerie/fitness)
-  '48':       '14',
-  '50':       '15',
-  '52':       '16',
-}
-
 // ─── Anos de coleção ──────────────────────────────────────────────────────────
 // Aceita tanto o ano completo ('2026') quanto o sufixo curto ('26').
 // Expandido até 2035 para evitar quebra automática em virada de ano.
@@ -271,83 +187,6 @@ export function normalizeKey(value: string | undefined | null): string {
     .replace(/^_|_$/g, '')
 }
 
-// ─── Interface pública ────────────────────────────────────────────────────────
-
-export interface GenerateSKUParams {
-  tipo:     string
-  modelo:   string
-  cor?:     string    // undefined → '00' (sem cor definida / produto pai)
-  tamanho?: string    // undefined → '00' (tamanho único / produto pai)
-  ano?:     string    // undefined → ano corrente; deve estar em SKU_ANO
-}
-
-// ─── Geração de SKU ───────────────────────────────────────────────────────────
-
-/**
- * Gera o SKU de 10 dígitos seguindo o padrão Santtorini: TTMMCCTTAA.
- *
- * Lança Error explícito para qualquer valor não mapeado.
- * Nunca produz um SKU silenciosamente incorreto.
- *
- * @example
- * generateSKU({ tipo: 'calcinha', modelo: 'sem_costura', cor: 'bege', tamanho: 'm', ano: '2026' })
- * // → '0204110226'
- */
-export function generateSKU(params: GenerateSKUParams): string {
-  if (!params.tipo)   throw new Error('Tipo é obrigatório para gerar SKU')
-  if (!params.modelo) throw new Error('Modelo é obrigatório para gerar SKU')
-
-  // TT — tipo de produto
-  const normTipo = normalizeKey(params.tipo)
-  const TT = SKU_TIPO[normTipo as keyof typeof SKU_TIPO]
-  if (!TT) {
-    throw new Error(`Tipo de produto '${params.tipo}' não encontrado no mapa oficial. Tipos válidos: ${Object.keys(SKU_TIPO).join(', ')}`)
-  }
-
-  // MM — modelo
-  const modelMap = SKU_MODELO[TT]
-  if (!modelMap) {
-    throw new Error(`Tipo '${params.tipo}' não possui modelos definidos no mapa oficial`)
-  }
-  const normModelo = normalizeKey(params.modelo)
-  const MM = modelMap[normModelo]
-  if (!MM) {
-    throw new Error(`Modelo '${params.modelo}' não encontrado para o tipo '${params.tipo}'. Modelos válidos: ${Object.keys(modelMap).join(', ')}`)
-  }
-
-  // CC — cor ('00' quando omitida = produto pai)
-  const normCor = params.cor ? normalizeKey(params.cor) : ''
-  const CC = params.cor === undefined ? '00' : SKU_COR[normCor]
-  if (params.cor !== undefined && !CC) {
-    throw new Error(`Cor '${params.cor}' não encontrada no mapa oficial. Cores válidas: ${Object.keys(SKU_COR).join(', ')}`)
-  }
-
-  // TT (tamanho) — ('00' quando omitido = produto pai)
-  const normTamanho = params.tamanho ? normalizeKey(params.tamanho) : ''
-  const TS = params.tamanho === undefined ? '00' : SKU_TAMANHO[normTamanho]
-  if (params.tamanho !== undefined && !TS) {
-    throw new Error(`Tamanho '${params.tamanho}' não encontrado no mapa oficial. Tamanhos válidos: ${Object.keys(SKU_TAMANHO).join(', ')}`)
-  }
-
-  // AA — ano de coleção (fallback: ano corrente; lança se não mapeado)
-  const normAno = params.ano ? String(params.ano).trim() : new Date().getFullYear().toString()
-  const AA = SKU_ANO[normAno]
-  if (!AA) {
-    const anosValidos = Object.keys(SKU_ANO).filter(k => k.length === 4).join(', ')
-    throw new Error(`Ano '${normAno}' não suportado no mapa oficial. Anos válidos: ${anosValidos}`)
-  }
-
-  // Composição final: TTMMCCTSAA
-  const sku = `${TT}${MM}${CC}${TS}${AA}`
-
-  if (sku.length !== 10) {
-    // Salvaguarda de desenvolvimento — nunca deve ocorrer com mapas corretos
-    throw new Error(`Falha interna na geração do SKU: comprimento incorreto (${sku.length}). Gerado: '${sku}'`)
-  }
-
-  return sku
-}
-
 // ─── SKU pai (produto base) ───────────────────────────────────────────────────
 
 /**
@@ -359,7 +198,7 @@ export function generateSKU(params: GenerateSKUParams): string {
  * // → '1403000026'
  */
 export function generateParentSKU(tipo: string, modelo: string, ano: string): string {
-  return generateSKU({ tipo, modelo, cor: undefined, tamanho: undefined, ano })
+  return generateSKUFromCodes({ tipo, modelo, corCode: undefined, tamanhoCode: undefined, ano })
 }
 
 // ─── Geração de SKU a partir de códigos diretos ───────────────────────────────

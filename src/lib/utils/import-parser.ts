@@ -1,5 +1,3 @@
-import { generateSKU, generateParentSKU } from './../sku/sku-map'
-
 export type ImportRow = {
   nome_produto?: string
   nome?: string
