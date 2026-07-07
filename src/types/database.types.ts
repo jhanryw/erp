@@ -23,6 +23,8 @@ export type ReturnType = 'return' | 'exchange'
 export type ReturnStatus = 'pending' | 'processed' | 'rejected'
 export type AbcCurve = 'A' | 'B' | 'C'
 export type RfmSegment = 'champions' | 'loyal' | 'potential_loyal' | 'new_customers' | 'promising' | 'at_risk' | 'cant_lose' | 'hibernating' | 'lost'
+export type MediaStatus = 'processing' | 'ready' | 'failed'
+export type MediaVisibility = 'public' | 'private'
 
 export interface Database {
   public: {
@@ -516,6 +518,58 @@ export interface Database {
           value?: string
           description?: string | null
           updated_by?: string | null
+        }
+      }
+      media: {
+        Row: {
+          id: number
+          public_id: string
+          company_id: number
+          storage_key: string | null
+          external_url: string | null
+          visibility: MediaVisibility
+          original_filename: string | null
+          extension: string | null
+          mime_type: string
+          file_size: number
+          width: number | null
+          height: number | null
+          checksum_sha256: string | null
+          status: MediaStatus
+          created_source: string
+          metadata: Json
+          uploaded_by: string | null
+          alt_text: string | null
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          public_id?: string
+          company_id: number
+          storage_key?: string | null
+          external_url?: string | null
+          visibility?: MediaVisibility
+          original_filename?: string | null
+          extension?: string | null
+          mime_type: string
+          file_size: number
+          width?: number | null
+          height?: number | null
+          checksum_sha256?: string | null
+          status?: MediaStatus
+          created_source: string
+          metadata?: Json
+          uploaded_by?: string | null
+          alt_text?: string | null
+          active?: boolean
+        }
+        Update: {
+          visibility?: MediaVisibility
+          original_filename?: string | null
+          alt_text?: string | null
+          active?: boolean
+          updated_at?: string
         }
       }
     }

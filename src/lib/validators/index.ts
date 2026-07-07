@@ -166,3 +166,14 @@ export type CustomerFormData = z.infer<typeof customerSchema>
 export type SaleFormData = z.infer<typeof saleSchema>
 export type StockLotFormData = z.infer<typeof stockLotSchema>
 export type MarketingCostFormData = z.infer<typeof marketingCostSchema>
+
+// ─── Media Hub — metadado de upload (POST /api/media) ─────────────────────────
+// Valida apenas os campos texto do multipart/form-data. O arquivo em si
+// (mime/tamanho) é validado no service, não aqui — allowlist depende do
+// bucket-alvo, que só é decidido depois que `visibility` já foi validada.
+export const mediaUploadMetaSchema = z.object({
+  visibility: z.enum(['public', 'private']).default('private'),
+  alt_text: z.string().max(500).nullable().optional(),
+})
+
+export type MediaUploadMetaFormData = z.infer<typeof mediaUploadMetaSchema>

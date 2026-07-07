@@ -33,6 +33,7 @@ export type AuditResource =
   | 'shipping_config'
   | 'monthly_sales_goals'
   | 'cash_session' | 'cash_movement'
+  | 'media'
 
 export interface AuditPayload {
   action:         AuditAction
