@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 
 type VariationValue = { id: number; value: string; slug: string; sku_code: string | null }
 type VariationType  = { id: number; name: string; slug: string; variation_values: VariationValue[] }
+type CategoryAttributeLink = { required: boolean; active: boolean; variation_type: { slug: string } }
 
 const variantRowSchema = z.object({
   sku_variation:   z.string().min(1, 'SKU obrigatório'),
@@ -75,6 +76,7 @@ export default function NovoProdutoPage() {
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
   const [brands,      setBrands]      = useState<{ id: number; name: string }[]>([])
   const [varTypes,    setVarTypes]    = useState<VariationType[]>([])
+  const [categoryAttributes, setCategoryAttributes] = useState<CategoryAttributeLink[]>([])
   const [selColors,     setSelColors]     = useState<VariationValue[]>([])
   const [selSizes,      setSelSizes]      = useState<VariationValue[]>([])
   const [generated,     setGenerated]     = useState(false)
@@ -97,6 +99,7 @@ export default function NovoProdutoPage() {
   const tipo = watch('tipo')
   const modelo = watch('modelo')
   const ano = watch('ano')
+  const categoryId = watch('category_id')
 
   // Carregar dados iniciais
   useEffect(() => {
@@ -106,9 +109,24 @@ export default function NovoProdutoPage() {
     fetch('/api/variacoes').then(r => r.json()).then(({ types }) => setVarTypes(types ?? []))
   }, [])
 
+  // Atributos obrigatórios da categoria selecionada (cor/tamanho apenas —
+  // únicos variation_types com UI de seleção hoje). Sem categoria
+  // selecionada, sem configuração para ela, ou em caso de falha de rede,
+  // fica em [] — mantém o comportamento atual (nada obrigatório).
+  useEffect(() => {
+    if (!categoryId) { setCategoryAttributes([]); return }
+    fetch(`/api/category-attributes?category_id=${categoryId}&active=true`)
+      .then(r => r.json())
+      .then(json => setCategoryAttributes(json.category_attributes ?? []))
+      .catch(() => setCategoryAttributes([]))
+  }, [categoryId])
+
   const colorType  = varTypes.find(t => t.slug === 'cor')
   const sizeType   = varTypes.find(t => t.slug === 'tamanho')
   const otherTypes = varTypes.filter(t => t.slug !== 'cor' && t.slug !== 'tamanho')
+
+  const corRequired     = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'cor')
+  const tamanhoRequired = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'tamanho')
 
   // Gerar matriz de variantes
   const generateVariants = useCallback(() => {
@@ -122,6 +140,15 @@ export default function NovoProdutoPage() {
 
     if (!tipo || !modelo) {
       toast.error('Preencha o Tipo e o Modelo do produto antes de gerar SKUs')
+      return
+    }
+
+    if (corRequired && !hasColors) {
+      toast.error('Cor é obrigatória para esta categoria', { description: 'Selecione ao menos uma cor antes de gerar a matriz.' })
+      return
+    }
+    if (tamanhoRequired && !hasSizes) {
+      toast.error('Tamanho é obrigatório para esta categoria', { description: 'Selecione ao menos um tamanho antes de gerar a matriz.' })
       return
     }
 
@@ -186,7 +213,7 @@ export default function NovoProdutoPage() {
     replace(rows)
     setGenerated(true)
     toast.success(`${rows.length} variante${rows.length > 1 ? 's' : ''} gerada${rows.length > 1 ? 's' : ''}`)
-  }, [selColors, selSizes, tipo, modelo, ano, replace])
+  }, [selColors, selSizes, tipo, modelo, ano, replace, corRequired, tamanhoRequired])
 
   function toggleColor(v: VariationValue) {
     setSelColors(prev => prev.find(c => c.id === v.id) ? prev.filter(c => c.id !== v.id) : [...prev, v])
@@ -461,7 +488,10 @@ export default function NovoProdutoPage() {
             {/* Cores */}
             {colorType && (
               <div>
-                <label className="label-base mb-2 block">Cores <span className="text-text-muted font-normal">(clique para selecionar)</span></label>
+                <label className="label-base mb-2 block">
+                  Cores{corRequired && <span className="text-error"> *</span>} <span className="text-text-muted font-normal">(clique para selecionar)</span>
+                </label>
+                {corRequired && <p className="text-xs text-error -mt-1 mb-2">Obrigatório para esta categoria</p>}
                 <div className="flex flex-wrap gap-2">
                   {colorType.variation_values.map(v => {
                     const active = selColors.some(c => c.id === v.id)
@@ -498,7 +528,10 @@ export default function NovoProdutoPage() {
             {/* Tamanhos */}
             {sizeType && (
               <div>
-                <label className="label-base mb-2 block">Tamanhos <span className="text-text-muted font-normal">(clique para selecionar)</span></label>
+                <label className="label-base mb-2 block">
+                  Tamanhos{tamanhoRequired && <span className="text-error"> *</span>} <span className="text-text-muted font-normal">(clique para selecionar)</span>
+                </label>
+                {tamanhoRequired && <p className="text-xs text-error -mt-1 mb-2">Obrigatório para esta categoria</p>}
                 <div className="flex flex-wrap gap-2">
                   {sizeType.variation_values.map(v => {
                     const active = selSizes.some(s => s.id === v.id)
