@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe, ListChecks } from 'lucide-react'
 import { PushPermissionButton } from '@/components/push/PushPermissionButton'
 
 export const dynamic = 'force-dynamic'
@@ -9,6 +9,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/usuarios', icon: Users, title: 'Usuários', description: 'Gerenciar acesso e perfis da equipe interna.' },
   { href: '/configuracoes/categorias', icon: Tag, title: 'Categorias', description: 'Categorias e subcategorias de produtos.' },
   { href: '/configuracoes/variacoes', icon: Grid3X3, title: 'Variações', description: 'Tipos e valores: cor, tamanho, modelo, tecido.' },
+  { href: '/configuracoes/atributos-categoria', icon: ListChecks, title: 'Atributos por Categoria', description: 'Quais atributos se aplicam e são obrigatórios em cada categoria.' },
   { href: '/configuracoes/colecoes', icon: BookOpen, title: 'Coleções', description: 'Coleções e estações do catálogo.' },
   { href: '/cashback/configuracao', icon: Gift, title: 'Regra de Cashback', description: 'Taxa, prazo de liberação, expiração e valor mínimo.' },
   { href: '/configuracoes/frete', icon: Truck, title: 'Configuração de Frete', description: 'Origem logística, zonas de entrega, preços e regras de frete grátis.' },

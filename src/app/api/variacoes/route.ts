@@ -9,10 +9,10 @@ export async function GET() {
   // Query 1: tipos ativos
   const { data: types, error: typesError } = (await admin
     .from('variation_types')
-    .select('id, name, slug')
+    .select('id, name, slug, kind')
     .eq('active', true)
     .order('name')) as unknown as {
-    data: { id: number; name: string; slug: string }[] | null
+    data: { id: number; name: string; slug: string; kind: string }[] | null
     error: any
   }
 
