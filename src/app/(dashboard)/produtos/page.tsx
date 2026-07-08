@@ -6,6 +6,7 @@ import { Plus, Package } from 'lucide-react'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
+import { listPrimaryMediaByEntities } from '@/services/media.service'
 import { hasMinRole } from '@/types/roles'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -85,6 +86,31 @@ async function getProductsLite(search?: string): Promise<ProductRowLite[]> {
   return (data ?? []) as unknown as ProductRowLite[]
 }
 
+// Resolve a imagem principal do Media Hub em lote (1 query, independente do
+// tamanho da lista) e monta o fallback pra photo_url por produto. Falha na
+// busca de mídia nunca quebra a página — mantém o fallback pra todos.
+async function resolveDisplayUrls<T extends { id: number; photo_url: string | null }>(
+  products: T[],
+  companyId: number | null,
+): Promise<(T & { displayUrl: string | null })[]> {
+  if (!companyId || products.length === 0) {
+    return products.map((p) => ({ ...p, displayUrl: p.photo_url }))
+  }
+
+  let mediaMap = new Map<string, string>()
+  try {
+    const ids = products.map((p) => String(p.id))
+    const result = await listPrimaryMediaByEntities('product', ids, companyId)
+    if (result.ok) {
+      mediaMap = new Map(result.data.map((m) => [m.entity_id, m.url]))
+    }
+  } catch {
+    // mantém mediaMap vazio — cada produto cai no fallback de photo_url
+  }
+
+  return products.map((p) => ({ ...p, displayUrl: mediaMap.get(String(p.id)) ?? p.photo_url }))
+}
+
 export default async function ProdutosPage({
   searchParams,
 }: {
@@ -100,16 +126,24 @@ export default async function ProdutosPage({
 
   if (isManager) {
     const products = await getProductsFull(search)
-    return <ProdutosFullView products={products} search={search} />
+    const withImages = await resolveDisplayUrls(products, profile?.company_id ?? null)
+    return <ProdutosFullView products={withImages} search={search} />
   }
 
   const products = await getProductsLite(search)
-  return <ProdutosLiteView products={products} search={search} />
+  const withImages = await resolveDisplayUrls(products, profile?.company_id ?? null)
+  return <ProdutosLiteView products={withImages} search={search} />
 }
 
 // ─── Visão completa (admin/gerente) ────────────────────────────────────────────
 
-function ProdutosFullView({ products, search }: { products: ProductRowFull[]; search?: string }) {
+function ProdutosFullView({
+  products,
+  search,
+}: {
+  products: (ProductRowFull & { displayUrl: string | null })[]
+  search?: string
+}) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -167,7 +201,7 @@ function ProdutosFullView({ products, search }: { products: ProductRowFull[]; se
                     <TableRow key={product.id}>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <ProductThumb url={product.photo_url} name={product.name} />
+                          <ProductThumb url={product.displayUrl} name={product.name} />
                           <div className="font-medium">{product.name}</div>
                         </div>
                       </TableCell>
@@ -207,7 +241,13 @@ function ProdutosFullView({ products, search }: { products: ProductRowFull[]; se
 
 // ─── Visão reduzida (usuario/vendedor) ─────────────────────────────────────────
 
-function ProdutosLiteView({ products, search }: { products: ProductRowLite[]; search?: string }) {
+function ProdutosLiteView({
+  products,
+  search,
+}: {
+  products: (ProductRowLite & { displayUrl: string | null })[]
+  search?: string
+}) {
   return (
     <div className="space-y-6">
       <div>
@@ -247,7 +287,7 @@ function ProdutosLiteView({ products, search }: { products: ProductRowLite[]; se
                     <TableRow key={product.id}>
                       <TableCell>
                         <div className="flex items-center gap-3">
-                          <ProductThumb url={product.photo_url} name={product.name} />
+                          <ProductThumb url={product.displayUrl} name={product.name} />
                           <div className="font-medium">{product.name}</div>
                         </div>
                       </TableCell>

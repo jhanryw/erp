@@ -459,3 +459,47 @@ export async function listMediaByEntity(
 
   return success(items)
 }
+
+// ─── Listagem em lote (evita N+1 em telas de listagem) ─────────────────────────
+
+export interface EntityPrimaryMedia {
+  entity_id: string
+  url: string
+}
+
+/**
+ * Busca a mídia `role='primary'` de várias entidades numa única query —
+ * usado por telas de listagem (evita 1 query por linha). Retorna só
+ * `entity_id`/`url`: nunca `media.id` nem `storage_key`.
+ */
+export async function listPrimaryMediaByEntities(
+  entityType: MediaUsageEntityType,
+  entityIds: string[],
+  companyId: number,
+): Promise<ServiceOutcome<EntityPrimaryMedia[]>> {
+  if (entityIds.length === 0) return success([])
+
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('media_usages')
+    .select('entity_id, media:media_id (*)')
+    .eq('entity_type', entityType)
+    .in('entity_id', entityIds)
+    .eq('role', 'primary')
+    .eq('company_id', companyId) as unknown as {
+      data: Array<{ entity_id: string; media: Media }> | null
+      error: { message: string } | null
+    }
+
+  if (error) return failure(error.message)
+
+  const items: EntityPrimaryMedia[] = []
+  for (const row of data ?? []) {
+    const resolved = await resolveMediaUrl(row.media)
+    if (!resolved.ok) continue
+    items.push({ entity_id: row.entity_id, url: resolved.data.url })
+  }
+
+  return success(items)
+}
