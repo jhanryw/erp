@@ -387,3 +387,75 @@ export async function deleteMediaUsage(usageId: number, companyId: number): Prom
 
   return success(undefined)
 }
+
+// ─── Listagem de mídia por entidade ────────────────────────────────────────────
+
+export interface ResolvedMediaUsage {
+  usage_id: number
+  public_id: string
+  role: MediaUsageRole
+  position: number
+  mime_type: string
+  extension: string | null
+  file_size: number
+  visibility: MediaVisibility
+  url: string
+  url_expires_at: string | null
+  alt_text: string | null
+  active: boolean
+  created_at: string
+}
+
+/**
+ * Lista as mídias vinculadas a uma entidade, já resolvidas para URL
+ * utilizável. Ordena por role, position, created_at (ordem alfabética de
+ * role — não há ordenação semântica tipo "primary primeiro").
+ * Item cuja URL não resolve (ex: objeto sumiu do bucket privado) é
+ * omitido da lista em vez de derrubar a listagem inteira.
+ */
+export async function listMediaByEntity(
+  entityType: MediaUsageEntityType,
+  entityId: string,
+  companyId: number,
+): Promise<ServiceOutcome<ResolvedMediaUsage[]>> {
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('media_usages')
+    .select('id, role, position, media:media_id (*)')
+    .eq('entity_type', entityType)
+    .eq('entity_id', entityId)
+    .eq('company_id', companyId)
+    .order('role', { ascending: true })
+    .order('position', { ascending: true })
+    .order('created_at', { ascending: true }) as unknown as {
+      data: Array<{ id: number; role: MediaUsageRole; position: number; media: Media }> | null
+      error: { message: string } | null
+    }
+
+  if (error) return failure(error.message)
+
+  const items: ResolvedMediaUsage[] = []
+  for (const row of data ?? []) {
+    const resolved = await resolveMediaUrl(row.media)
+    if (!resolved.ok) continue
+
+    items.push({
+      usage_id: row.id,
+      public_id: row.media.public_id,
+      role: row.role,
+      position: row.position,
+      mime_type: row.media.mime_type,
+      extension: row.media.extension,
+      file_size: row.media.file_size,
+      visibility: row.media.visibility,
+      url: resolved.data.url,
+      url_expires_at: resolved.data.expiresAt,
+      alt_text: row.media.alt_text,
+      active: row.media.active,
+      created_at: row.media.created_at,
+    })
+  }
+
+  return success(items)
+}

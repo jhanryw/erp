@@ -2,9 +2,45 @@ export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
-import { createMediaFromUpload } from '@/services/media.service'
+import { createMediaFromUpload, listMediaByEntity } from '@/services/media.service'
 import { mediaUploadMetaSchema } from '@/lib/validators'
+import type { MediaUsageEntityType } from '@/types/database.types'
 import { ok, err, forbidden, validationError } from '@/lib/api/response'
+
+function isValidEntityType(value: string): value is MediaUsageEntityType {
+  return value === 'product' || value === 'product_variation' || value === 'shipment'
+}
+
+// ─── GET /api/media?entity_type=&entity_id= ────────────────────────────────────
+// Lista mídias vinculadas a uma entidade, já resolvidas para URL utilizável.
+// Não audita (leitura pura, mesmo padrão do resto do Media Hub).
+
+export async function GET(request: Request) {
+  const { user, response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+  if (!user.company_id) return forbidden()
+
+  const { searchParams } = new URL(request.url)
+  const entityType = searchParams.get('entity_type')
+  const entityId = searchParams.get('entity_id')
+
+  if (!entityType || !entityId) {
+    return err('entity_type e entity_id são obrigatórios.', 400)
+  }
+
+  if (!isValidEntityType(entityType)) {
+    return err('entity_type inválido.', 400)
+  }
+
+  if (!/^\d+$/.test(entityId)) {
+    return err('entity_id deve ser um inteiro positivo.', 400)
+  }
+
+  const result = await listMediaByEntity(entityType, entityId, user.company_id)
+  if (!result.ok) return err(result.error, result.status)
+
+  return ok({ media: result.data })
+}
 
 // ─── POST /api/media ──────────────────────────────────────────────────────────
 // Upload real: Storage + insert em `media`. Escopo desta entrega é só
