@@ -176,9 +176,15 @@ export async function findMessageByExternalId(
 }
 
 /**
- * Progressão de status (ex.: 'pending' → 'sent'/'failed' quando o N8N
- * confirma o envio real). Sem consumidor ainda — endpoint de callback fica
- * para a Entrega 3.
+ * Progressão de status SEM checagem de ordem — primitivo incondicional para
+ * uso interno controlado, onde quem chama já sabe que a escrita é segura
+ * (ex.: outbound futuro criando a mensagem e avançando 'pending'→'sent' na
+ * mesma sequência que ele mesmo controla, sem ambiguidade de origem).
+ *
+ * NUNCA usar para eventos vindos de fora (provider/N8N) — esses podem
+ * chegar fora de ordem ou repetidos; para esse caso use
+ * applyProviderStatusUpdate() (Entrega 5), que passa pela RPC com
+ * checagem atômica de regressão.
  */
 export async function updateMessageStatus(
   messageId: number,
@@ -202,4 +208,47 @@ export async function updateMessageStatus(
     return failure(message, status)
   }
   return success(undefined)
+}
+
+// ─── Sincronização de status vindo do provider (Entrega 5) ────────────────────
+
+export type ProviderMessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
+
+export interface ApplyProviderStatusResult {
+  applied: boolean
+  currentStatus: CrmMessageStatus
+}
+
+/**
+ * Aplica um evento de status vindo do provider (via N8N) de forma atômica —
+ * a RPC reavalia a condição de aceitação no momento do lock da linha
+ * (sem janela entre leitura e escrita). Idempotente por construção: evento
+ * repetido ou fora de ordem simplesmente não aplica (`applied: false`),
+ * nunca é tratado como erro. `direction='outbound'` é reforçado dentro da
+ * RPC como defesa em profundidade — o chamador já deveria ter confirmado
+ * isso antes (ver message-status-sync.service.ts).
+ */
+export async function applyProviderStatusUpdate(
+  messageId: number,
+  companyId: number,
+  newStatus: ProviderMessageStatus,
+  occurredAt?: string | null,
+  failureReason?: string | null,
+): Promise<ServiceOutcome<ApplyProviderStatusResult>> {
+  const admin = createAdminClient()
+  const { data, error } = await (admin as any).rpc('rpc_apply_crm_message_status', {
+    p_company_id: companyId,
+    p_message_id: messageId,
+    p_new_status: newStatus,
+    p_occurred_at: occurredAt ?? null,
+    p_failure_reason: failureReason ?? null,
+  }) as unknown as {
+    data: { applied: boolean; current_status: CrmMessageStatus } | null
+    error: { message: string } | null
+  }
+
+  if (error) return failure(error.message)
+  if (!data) return failure('Falha ao aplicar status da mensagem.')
+
+  return success({ applied: data.applied, currentStatus: data.current_status })
 }

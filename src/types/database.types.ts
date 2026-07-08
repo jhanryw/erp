@@ -860,6 +860,10 @@ export interface Database {
           created_by: string | null
           created_at: string
           metadata: Json | null
+          sent_at: string | null
+          delivered_at: string | null
+          read_at: string | null
+          failed_at: string | null
         }
         Insert: {
           company_id: number

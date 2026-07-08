@@ -3009,5 +3009,83 @@ ALTER TABLE public.media_usages ADD CONSTRAINT media_usages_entity_type_check
   CHECK (entity_type IN ('product', 'product_variation', 'shipment', 'crm_message'));
 
 -- =============================================================================
+-- 36. CRM — SINCRONIZAÇÃO DE STATUS DE MENSAGEM (Fase 3, Entrega 5)
+--     (Ver supabase/migrations/20260712_crm_message_status_sync.sql)
+--
+--     crm_messages ganha sent_at/delivered_at/read_at/failed_at (aditivo).
+--     rpc_apply_crm_message_status faz UPDATE condicional atômico —
+--     condição de aceitação reavaliada no momento do lock da linha, sem
+--     janela entre leitura e escrita. 'failed' só aceito antes de
+--     delivered/read. Existência/direction='outbound' já confirmados pelo
+--     chamador antes de invocar (findMessageByExternalId), RPC reforça
+--     direction na WHERE como defesa em profundidade.
+-- =============================================================================
+
+ALTER TABLE public.crm_messages
+  ADD COLUMN IF NOT EXISTS sent_at      TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS read_at      TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS failed_at    TIMESTAMPTZ;
+
+CREATE OR REPLACE FUNCTION public.rpc_apply_crm_message_status(
+  p_company_id     int,
+  p_message_id     bigint,
+  p_new_status     text,
+  p_occurred_at    timestamptz,
+  p_failure_reason text
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_ts             timestamptz;
+  v_row_count      int;
+  v_current_status text;
+BEGIN
+  IF p_new_status NOT IN ('sent', 'delivered', 'read', 'failed') THEN
+    RAISE EXCEPTION 'status inválido para sincronização de provider: %.', p_new_status USING ERRCODE = 'P0001';
+  END IF;
+
+  v_ts := COALESCE(p_occurred_at, NOW());
+
+  UPDATE crm_messages
+  SET
+    status = p_new_status,
+    status_updated_at = NOW(),
+    sent_at        = CASE WHEN p_new_status = 'sent'      AND sent_at      IS NULL THEN v_ts ELSE sent_at      END,
+    delivered_at   = CASE WHEN p_new_status = 'delivered' AND delivered_at IS NULL THEN v_ts ELSE delivered_at END,
+    read_at        = CASE WHEN p_new_status = 'read'      AND read_at      IS NULL THEN v_ts ELSE read_at      END,
+    failed_at      = CASE WHEN p_new_status = 'failed'    AND failed_at    IS NULL THEN v_ts ELSE failed_at    END,
+    failure_reason = CASE WHEN p_new_status = 'failed' THEN p_failure_reason ELSE failure_reason END
+  WHERE id = p_message_id
+    AND company_id = p_company_id
+    AND direction = 'outbound'
+    AND (
+      CASE p_new_status
+        WHEN 'sent'      THEN status = 'pending'
+        WHEN 'delivered' THEN status IN ('pending', 'sent')
+        WHEN 'read'      THEN status IN ('pending', 'sent', 'delivered')
+        WHEN 'failed'    THEN status IN ('pending', 'sent')
+        ELSE false
+      END
+    );
+
+  GET DIAGNOSTICS v_row_count = ROW_COUNT;
+
+  SELECT status INTO v_current_status
+  FROM crm_messages
+  WHERE id = p_message_id AND company_id = p_company_id;
+
+  RETURN jsonb_build_object(
+    'applied', v_row_count > 0,
+    'current_status', v_current_status
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.rpc_apply_crm_message_status
+  TO service_role, authenticated;
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================
