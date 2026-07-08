@@ -15,12 +15,13 @@
 
 import { randomUUID } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
-import type { Database, MediaVisibility } from '@/types/database.types'
+import type { Database, MediaVisibility, MediaUsageEntityType, MediaUsageRole } from '@/types/database.types'
 import type { ServiceOutcome } from './produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
 export type Media = Database['public']['Tables']['media']['Row']
+export type MediaUsage = Database['public']['Tables']['media_usages']['Row']
 
 export interface MediaUploadInput {
   buffer: Buffer
@@ -28,6 +29,14 @@ export interface MediaUploadInput {
   fileName: string
   visibility: MediaVisibility
   altText?: string | null
+}
+
+export interface MediaUsageInput {
+  mediaId: number
+  entityType: MediaUsageEntityType
+  entityId: string
+  role: MediaUsageRole
+  position?: number
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -38,6 +47,19 @@ function success<T>(data: T): { ok: true; data: T; error?: never; status?: never
 
 function failure(error: string, status = 500): { ok: false; error: string; status: number; data?: never } {
   return { ok: false, error, status }
+}
+
+function uniqueViolation(error: { code: string; message: string }): { message: string; status: number } {
+  if (error.code === '23505') {
+    if (error.message.includes('uq_media_usages_singular_role')) {
+      return {
+        message: 'Esta entidade já possui uma mídia com este role (primary/logo/banner/avatar). Desvincule a atual antes de criar outra.',
+        status: 409,
+      }
+    }
+    return { message: 'Já existe um vínculo de mídia com este entity_type/entity_id/role/position.', status: 409 }
+  }
+  return { message: error.message, status: 500 }
 }
 
 /** Remove caracteres de controle e limita tamanho — nunca usado para montar path real. */
@@ -216,4 +238,119 @@ export async function resolveMediaUrl(
 
   const expiresAt = new Date(Date.now() + PRIVATE_URL_TTL_SECONDS * 1000).toISOString()
   return success({ url: data.signedUrl, expiresAt })
+}
+
+// ─── Vínculo de mídia com entidade (media_usages) ──────────────────────────────
+// O CHECK do banco aceita 8 roles — o subconjunto realmente permitido por
+// entity_type é governança de app, não de schema (mesmo espírito de
+// entity_type em si: banco é o teto amplo, service é o subconjunto contextual).
+
+const ALLOWED_ROLES_BY_ENTITY: Record<MediaUsageEntityType, MediaUsageRole[]> = {
+  product: ['primary', 'gallery'],
+  product_variation: ['primary', 'gallery'],
+  shipment: ['proof'],
+}
+
+/**
+ * Confirma que a entidade (product/product_variation/shipment) pertence à
+ * empresa do usuário. product tem company_id próprio; product_variation e
+ * shipment não têm — checam via join (mesmo padrão de categoryBelongsToCompany
+ * em category-attributes.service.ts). Fail-closed: entity_type desconhecido
+ * ou entity_id não numérico sempre retornam false.
+ */
+export async function entityBelongsToCompany(
+  entityType: MediaUsageEntityType,
+  entityId: string,
+  companyId: number,
+): Promise<boolean> {
+  const numericId = Number(entityId)
+  if (!Number.isFinite(numericId) || numericId <= 0) return false
+
+  const admin = createAdminClient()
+
+  switch (entityType) {
+    case 'product': {
+      const { data } = await admin
+        .from('products')
+        .select('id')
+        .eq('id', numericId)
+        .eq('company_id', companyId)
+        .maybeSingle() as unknown as { data: { id: number } | null }
+      return !!data
+    }
+    case 'product_variation': {
+      const { data } = await admin
+        .from('product_variations')
+        .select('id, products!inner(company_id)')
+        .eq('id', numericId)
+        .eq('products.company_id', companyId)
+        .maybeSingle() as unknown as { data: { id: number } | null }
+      return !!data
+    }
+    case 'shipment': {
+      const { data } = await admin
+        .from('shipments')
+        .select('id, sales!inner(company_id)')
+        .eq('id', numericId)
+        .eq('sales.company_id', companyId)
+        .maybeSingle() as unknown as { data: { id: number } | null }
+      return !!data
+    }
+    default:
+      return false
+  }
+}
+
+/**
+ * Cria o vínculo media↔entidade. Chamado só depois de confirmar (na rota):
+ * mídia existe/pertence à empresa, mídia está ativa, entidade pertence à
+ * empresa. `position`, se omitido, é auto-calculado como o próximo da fila
+ * para (entity_type, entity_id, role) — sob concorrência rara no mesmo slot,
+ * a constraint UNIQUE do banco protege (vira 409, nunca corrupção).
+ */
+export async function createMediaUsage(
+  input: MediaUsageInput,
+  companyId: number,
+  createdBy: string,
+): Promise<ServiceOutcome<MediaUsage>> {
+  if (!ALLOWED_ROLES_BY_ENTITY[input.entityType].includes(input.role)) {
+    return failure(`Role "${input.role}" não é permitido para entity_type "${input.entityType}".`, 422)
+  }
+
+  const admin = createAdminClient()
+
+  let position = input.position
+  if (position === undefined) {
+    const { data: lastUsage } = await admin
+      .from('media_usages')
+      .select('position')
+      .eq('entity_type', input.entityType)
+      .eq('entity_id', input.entityId)
+      .eq('role', input.role)
+      .order('position', { ascending: false })
+      .limit(1)
+      .maybeSingle() as unknown as { data: { position: number } | null }
+    position = lastUsage ? lastUsage.position + 1 : 0
+  }
+
+  const { data, error } = await admin
+    .from('media_usages')
+    .insert({
+      media_id: input.mediaId,
+      entity_type: input.entityType,
+      entity_id: input.entityId,
+      role: input.role,
+      position,
+      company_id: companyId,
+      created_by: createdBy,
+    } as any)
+    .select('*')
+    .single() as unknown as { data: MediaUsage | null; error: { code: string; message: string } | null }
+
+  if (error) {
+    const { message, status } = uniqueViolation(error)
+    return failure(message, status)
+  }
+
+  return success(data!)
 }

@@ -177,3 +177,17 @@ export const mediaUploadMetaSchema = z.object({
 })
 
 export type MediaUploadMetaFormData = z.infer<typeof mediaUploadMetaSchema>
+
+// ─── Media Hub — vínculo de mídia com entidade (POST /api/media/[publicId]/usages) ───
+// `role` aceita aqui todo o vocabulário do banco (CHECK amplo); o subconjunto
+// permitido por entity_type (ex: shipment só aceita 'proof') é regra de
+// negócio contextual, validada no service — não faz sentido travar no Zod
+// porque depende de outro campo do mesmo payload.
+export const mediaUsageSchema = z.object({
+  entity_type: z.enum(['product', 'product_variation', 'shipment']),
+  entity_id: z.coerce.string().regex(/^\d+$/, 'entity_id deve ser um inteiro positivo'),
+  role: z.enum(['primary', 'gallery', 'logo', 'banner', 'avatar', 'proof', 'attachment', 'document']).default('gallery'),
+  position: z.coerce.number().int().min(0).optional(),
+})
+
+export type MediaUsageFormData = z.infer<typeof mediaUsageSchema>

@@ -25,6 +25,8 @@ export type AbcCurve = 'A' | 'B' | 'C'
 export type RfmSegment = 'champions' | 'loyal' | 'potential_loyal' | 'new_customers' | 'promising' | 'at_risk' | 'cant_lose' | 'hibernating' | 'lost'
 export type MediaStatus = 'processing' | 'ready' | 'failed'
 export type MediaVisibility = 'public' | 'private'
+export type MediaUsageEntityType = 'product' | 'product_variation' | 'shipment'
+export type MediaUsageRole = 'primary' | 'gallery' | 'logo' | 'banner' | 'avatar' | 'proof' | 'attachment' | 'document'
 
 export interface Database {
   public: {
@@ -570,6 +572,32 @@ export interface Database {
           alt_text?: string | null
           active?: boolean
           updated_at?: string
+        }
+      }
+      media_usages: {
+        Row: {
+          id: number
+          media_id: number
+          entity_type: MediaUsageEntityType
+          entity_id: string
+          role: MediaUsageRole
+          position: number
+          company_id: number
+          created_at: string
+          created_by: string | null
+        }
+        Insert: {
+          media_id: number
+          entity_type: MediaUsageEntityType
+          entity_id: string
+          role?: MediaUsageRole
+          position?: number
+          company_id: number
+          created_by?: string | null
+        }
+        Update: {
+          role?: MediaUsageRole
+          position?: number
         }
       }
     }
