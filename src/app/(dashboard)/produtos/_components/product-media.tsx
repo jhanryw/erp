@@ -65,9 +65,53 @@ export function ProductMediaManager({ productId }: { productId: number }) {
   const primary = items.find((m) => m.role === 'primary') ?? null
   const gallery = items.filter((m) => m.role === 'gallery')
 
-  async function uploadAndLink(file: File, role: 'primary' | 'gallery') {
-    const setUploading = role === 'primary' ? setUploadingPrimary : setUploadingGallery
-    setUploading(true)
+  // Upload da foto principal: sempre usa a troca atômica (POST .../primary),
+  // funciona igual tanto para "enviar a primeira" quanto para "substituir a
+  // atual" — remove a antiga e cria a nova na mesma transação no backend.
+  async function uploadPrimary(file: File) {
+    setUploadingPrimary(true)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('visibility', 'public')
+
+      const uploadRes = await fetch('/api/media', { method: 'POST', body: formData })
+      const uploadJson = await uploadRes.json()
+
+      if (!uploadRes.ok) {
+        toast.error('Erro ao enviar imagem', { description: uploadJson.error })
+        return
+      }
+
+      const primaryRes = await fetch(`/api/media/${uploadJson.media.public_id}/primary`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          entity_type: 'product',
+          entity_id: String(productId),
+        }),
+      })
+      const primaryJson = await primaryRes.json()
+
+      if (!primaryRes.ok) {
+        toast.error('Imagem enviada, mas não foi possível defini-la como principal', {
+          description: primaryJson.error,
+        })
+        return
+      }
+
+      toast.success('Foto principal atualizada!')
+      await loadMedia()
+    } catch {
+      toast.error('Erro de rede ao enviar imagem')
+    } finally {
+      setUploadingPrimary(false)
+    }
+  }
+
+  async function uploadGallery(file: File) {
+    setUploadingGallery(true)
 
     try {
       const formData = new FormData()
@@ -88,7 +132,7 @@ export function ProductMediaManager({ productId }: { productId: number }) {
         body: JSON.stringify({
           entity_type: 'product',
           entity_id: String(productId),
-          role,
+          role: 'gallery',
         }),
       })
       const linkJson = await linkRes.json()
@@ -100,12 +144,12 @@ export function ProductMediaManager({ productId }: { productId: number }) {
         return
       }
 
-      toast.success(role === 'primary' ? 'Foto principal atualizada!' : 'Imagem adicionada à galeria!')
+      toast.success('Imagem adicionada à galeria!')
       await loadMedia()
     } catch {
       toast.error('Erro de rede ao enviar imagem')
     } finally {
-      setUploading(false)
+      setUploadingGallery(false)
     }
   }
 
@@ -131,11 +175,18 @@ export function ProductMediaManager({ productId }: { productId: number }) {
     }
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>, role: 'primary' | 'gallery') {
+  function handlePrimaryFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     e.target.value = ''
     if (!file) return
-    uploadAndLink(file, role)
+    uploadPrimary(file)
+  }
+
+  function handleGalleryFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    uploadGallery(file)
   }
 
   if (loading) {
@@ -158,27 +209,20 @@ export function ProductMediaManager({ productId }: { productId: number }) {
           type="file"
           accept={ACCEPTED_MIME}
           className="hidden"
-          onChange={(e) => handleFileChange(e, 'primary')}
+          onChange={handlePrimaryFileChange}
         />
 
-        {primary ? (
-          <div className="flex items-center gap-4">
-            <div className="relative h-24 w-24 overflow-hidden rounded-lg border border-border">
+        <div className="flex items-center gap-4">
+          <div className="relative flex h-24 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-bg-overlay">
+            {primary ? (
               <Image src={primary.url} alt="Foto principal" fill sizes="96px" className="object-cover" />
-            </div>
-            {canManage && (
-              <Button type="button" variant="danger" size="sm" onClick={() => handleRemove(primary)}>
-                <Trash2 className="h-3.5 w-3.5 mr-1" />
-                Remover
-              </Button>
+            ) : (
+              <ImageOff className="h-6 w-6 text-text-muted" />
             )}
           </div>
-        ) : (
-          <div className="flex items-center gap-3">
-            <div className="flex h-24 w-24 items-center justify-center rounded-lg border border-dashed border-border text-text-muted">
-              <ImageOff className="h-6 w-6" />
-            </div>
-            {canManage && (
+
+          {canManage && (
+            <div className="flex flex-col items-start gap-2">
               <Button
                 type="button"
                 variant="outline"
@@ -187,11 +231,17 @@ export function ProductMediaManager({ productId }: { productId: number }) {
                 onClick={() => primaryInputRef.current?.click()}
               >
                 <ImagePlus className="h-4 w-4 mr-1" />
-                Enviar foto principal
+                {primary ? 'Trocar foto principal' : 'Enviar foto principal'}
               </Button>
-            )}
-          </div>
-        )}
+              {primary && (
+                <Button type="button" variant="danger" size="sm" onClick={() => handleRemove(primary)}>
+                  <Trash2 className="h-3.5 w-3.5 mr-1" />
+                  Remover
+                </Button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* ── Galeria ── */}
@@ -202,7 +252,7 @@ export function ProductMediaManager({ productId }: { productId: number }) {
           type="file"
           accept={ACCEPTED_MIME}
           className="hidden"
-          onChange={(e) => handleFileChange(e, 'gallery')}
+          onChange={handleGalleryFileChange}
         />
 
         <div className="flex flex-wrap items-center gap-3">

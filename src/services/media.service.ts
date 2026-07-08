@@ -503,3 +503,51 @@ export async function listPrimaryMediaByEntities(
 
   return success(items)
 }
+
+// ─── Troca atômica de primary ───────────────────────────────────────────────
+
+export interface SetPrimaryMediaResult {
+  usage_id: number
+  media_id: number
+  entity_type: MediaUsageEntityType
+  entity_id: string
+  position: number
+  created_at: string
+  previous_usage_id: number | null
+  previous_media_id: number | null
+}
+
+/**
+ * Troca a mídia `primary` de uma entidade numa única transação (RPC
+ * rpc_set_primary_media) — remove o vínculo antigo e insere o novo sem
+ * deixar a entidade sem primary nenhuma em nenhum momento observável.
+ *
+ * Posse da entidade é confirmada aqui via entityBelongsToCompany() antes
+ * de chamar o RPC — o RPC só valida posse/estado da mídia (company_id,
+ * active), não da entidade polimórfica.
+ */
+export async function setPrimaryMedia(
+  mediaId: number,
+  entityType: MediaUsageEntityType,
+  entityId: string,
+  companyId: number,
+  userId: string,
+): Promise<ServiceOutcome<SetPrimaryMediaResult>> {
+  const belongs = await entityBelongsToCompany(entityType, entityId, companyId)
+  if (!belongs) return failure('Entidade não encontrada.', 404)
+
+  const admin = createAdminClient()
+
+  const { data, error } = await (admin as any).rpc('rpc_set_primary_media', {
+    p_user_id: userId,
+    p_media_id: mediaId,
+    p_entity_type: entityType,
+    p_entity_id: entityId,
+  }) as unknown as { data: SetPrimaryMediaResult | null; error: { code: string; message: string } | null }
+
+  if (error) {
+    return failure(error.message, error.code === 'P0001' ? 400 : 500)
+  }
+
+  return success(data!)
+}
