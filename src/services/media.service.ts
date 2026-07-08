@@ -354,3 +354,36 @@ export async function createMediaUsage(
 
   return success(data!)
 }
+
+/**
+ * Busca um vínculo pelo id, escopado à empresa do usuário. Retorna `null`
+ * se não existir ou pertencer a outra empresa (mesmo anti-oráculo de
+ * getMediaByPublicId).
+ */
+export async function getMediaUsageById(usageId: number, companyId: number): Promise<MediaUsage | null> {
+  const admin = createAdminClient()
+  const { data } = await admin
+    .from('media_usages')
+    .select('*')
+    .eq('id', usageId)
+    .eq('company_id', companyId)
+    .maybeSingle() as unknown as { data: MediaUsage | null }
+  return data
+}
+
+/**
+ * Remove fisicamente o vínculo (media_usages é só a referência, não o
+ * arquivo) — nunca toca `media` nem o objeto no Storage.
+ */
+export async function deleteMediaUsage(usageId: number, companyId: number): Promise<ServiceOutcome> {
+  const admin = createAdminClient()
+  const { error } = await admin
+    .from('media_usages')
+    .delete()
+    .eq('id', usageId)
+    .eq('company_id', companyId) as { error: { message: string } | null }
+
+  if (error) return failure(error.message)
+
+  return success(undefined)
+}
