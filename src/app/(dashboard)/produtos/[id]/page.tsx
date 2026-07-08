@@ -1,8 +1,10 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { notFound } from 'next/navigation'
 import { ArrowLeft, Package, Edit } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { listMediaByEntity } from '@/services/media.service'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { StatCard } from '@/components/ui/stat-card'
@@ -32,6 +34,7 @@ type ProductRow = {
   active: boolean
   origin: string | null
   created_at: string
+  company_id: number
   categories?: { id: number; name: string } | null
   suppliers?: { id: number; name: string } | null
   brands?: { id: number; name: string } | null
@@ -70,6 +73,7 @@ async function getProduct(id: string) {
       active,
       origin,
       created_at,
+      company_id,
       categories:category_id (id, name),
       suppliers:supplier_id (id, name),
       brands:brand_id (id, name)
@@ -78,6 +82,21 @@ async function getProduct(id: string) {
     .single()
 
   if (productError || !product) return null
+
+  const row = product as unknown as ProductRow
+
+  // Media Hub é a fonte preferida; products.photo_url é o fallback legado.
+  // Falha na busca de mídia nunca quebra a página — só mantém o fallback.
+  let displayUrl: string | null = row.photo_url
+  try {
+    const mediaResult = await listMediaByEntity('product', String(row.id), row.company_id)
+    if (mediaResult.ok) {
+      const primary = mediaResult.data.find((m) => m.role === 'primary')
+      if (primary) displayUrl = primary.url
+    }
+  } catch {
+    // mantém displayUrl = row.photo_url
+  }
 
   const { data: variations } = await supabase
     .from('product_variations')
@@ -96,8 +115,9 @@ async function getProduct(id: string) {
     .order('sku_variation', { ascending: true })
 
   return {
-    product: product as unknown as ProductRow,
+    product: row,
     variations: (variations ?? []) as VariationRow[],
+    displayUrl,
   }
 }
 
@@ -115,7 +135,7 @@ export default async function ProdutoDetalhePage({
 
   if (!result) notFound()
 
-  const { product, variations } = result
+  const { product, variations, displayUrl } = result
 
   return (
     <div className="space-y-6">
@@ -128,16 +148,27 @@ export default async function ProdutoDetalhePage({
             </Button>
           </Link>
 
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">{product.name}</h1>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <code>{product.sku}</code>
-              {product.categories?.name && <span>{product.categories.name}</span>}
-              {product.suppliers?.name && <span>· {product.suppliers.name}</span>}
-              {product.brands?.name && <span>· {product.brands.name}</span>}
-              <Badge variant={product.active ? 'default' : 'outline'}>
-                {product.active ? 'Ativo' : 'Inativo'}
-              </Badge>
+          <div className="flex items-center gap-3">
+            <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-border bg-bg-overlay">
+              {displayUrl ? (
+                <Image src={displayUrl} alt={product.name} fill sizes="64px" className="object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-text-muted">
+                  <Package className="h-6 w-6" />
+                </div>
+              )}
+            </div>
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight">{product.name}</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <code>{product.sku}</code>
+                {product.categories?.name && <span>{product.categories.name}</span>}
+                {product.suppliers?.name && <span>· {product.suppliers.name}</span>}
+                {product.brands?.name && <span>· {product.brands.name}</span>}
+                <Badge variant={product.active ? 'default' : 'outline'}>
+                  {product.active ? 'Ativo' : 'Inativo'}
+                </Badge>
+              </div>
             </div>
           </div>
         </div>
