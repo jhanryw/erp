@@ -8,11 +8,19 @@
  *
  * status combina os dois sentidos numa única coluna: inbound nasce
  * 'received' (sem ciclo de envio), outbound nasce 'pending' e evolui via
- * updateMessageStatus(). Sem colunas sent_at/delivered_at/read_at nesta
- * entrega — status_updated_at cobre a última transição.
+ * applyProviderStatusUpdate() — mesma função pros dois lados do ciclo
+ * (Entrega 6: a transição inicial 'pending'→'sent' do outbound é, na
+ * prática, "status reportado pelo provider", só que chega de forma síncrona
+ * em vez de por webhook assíncrono; passa pela mesma RPC da Entrega 5,
+ * ganhando checagem de ordem + sent_at/failed_at + idempotência de graça).
  *
- * Entrega 2 (Fase 3): create/get/list/updateStatus + findByExternalId
- * (lookup de idempotência). Sem consumidor ainda.
+ * client_dedupe_key é a idempotência de CRIAÇÃO do lado outbound (clique
+ * duplo/retry de frontend) — existe ANTES de qualquer resposta do provider,
+ * por isso é uma chave separada de external_message_id (que só existe
+ * depois do envio).
+ *
+ * Entregas 2–6 (Fase 3): create/get/list/findByExternalId/findByDedupeKey +
+ * applyProviderStatusUpdate.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -43,6 +51,10 @@ export interface CreateCrmMessageInput {
   createdBy?: string | null
   /** Payload estruturado sem arquivo — localização, vCard, tipo futuro não mapeado (Entrega 4). */
   metadata?: Json | null
+  /** Idempotência de criação outbound (Entrega 6) — nunca usado por inbound. */
+  clientDedupeKey?: string | null
+  /** Responder uma mensagem específica (Entrega 6). */
+  replyToMessageId?: number | null
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -57,6 +69,9 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
 
 function uniqueViolation(error: { code?: string; message: string }): { message: string; status: number } {
   if (error.code === '23505') {
+    if (error.message.includes('uq_crm_messages_client_dedupe_key')) {
+      return { message: 'Mensagem já criada para esta client_dedupe_key nesta conversa.', status: 409 }
+    }
     return { message: 'Mensagem já registrada (external_message_id ou n8n_execution_id duplicado).', status: 409 }
   }
   return { message: error.message, status: 500 }
@@ -112,6 +127,8 @@ export async function createMessage(input: CreateCrmMessageInput): Promise<Servi
       created_source: input.createdSource,
       created_by: input.createdBy ?? null,
       metadata: input.metadata ?? null,
+      client_dedupe_key: input.clientDedupeKey ?? null,
+      reply_to_message_id: input.replyToMessageId ?? null,
     } as any)
     .select('*')
     .single() as unknown as { data: CrmMessage | null; error: { code?: string; message: string } | null }
@@ -176,41 +193,30 @@ export async function findMessageByExternalId(
 }
 
 /**
- * Progressão de status SEM checagem de ordem — primitivo incondicional para
- * uso interno controlado, onde quem chama já sabe que a escrita é segura
- * (ex.: outbound futuro criando a mensagem e avançando 'pending'→'sent' na
- * mesma sequência que ele mesmo controla, sem ambiguidade de origem).
- *
- * NUNCA usar para eventos vindos de fora (provider/N8N) — esses podem
- * chegar fora de ordem ou repetidos; para esse caso use
- * applyProviderStatusUpdate() (Entrega 5), que passa pela RPC com
- * checagem atômica de regressão.
+ * Lookup de idempotência de CRIAÇÃO outbound (Entrega 6) — confirma se já
+ * existe mensagem para esta client_dedupe_key nesta conversa, antes de
+ * inserir (e antes de acionar o provider) ou como rede de segurança depois
+ * de uma corrida perdida contra o índice único.
  */
-export async function updateMessageStatus(
-  messageId: number,
+export async function findMessageByDedupeKey(
+  conversationId: number,
+  clientDedupeKey: string,
   companyId: number,
-  patch: { status: CrmMessageStatus; failureReason?: string | null; externalMessageId?: string | null },
-): Promise<ServiceOutcome<void>> {
+): Promise<ServiceOutcome<CrmMessage | null>> {
   const admin = createAdminClient()
-  const { error } = await (admin as any)
+  const { data, error } = await admin
     .from('crm_messages')
-    .update({
-      status: patch.status,
-      status_updated_at: new Date().toISOString(),
-      failure_reason: patch.failureReason ?? null,
-      ...(patch.externalMessageId !== undefined ? { external_message_id: patch.externalMessageId } : {}),
-    })
-    .eq('id', messageId)
-    .eq('company_id', companyId) as { error: { code?: string; message: string } | null }
+    .select('*')
+    .eq('conversation_id', conversationId)
+    .eq('client_dedupe_key', clientDedupeKey)
+    .eq('company_id', companyId)
+    .maybeSingle() as unknown as { data: CrmMessage | null; error: { message: string } | null }
 
-  if (error) {
-    const { message, status } = uniqueViolation(error)
-    return failure(message, status)
-  }
-  return success(undefined)
+  if (error) return failure(error.message)
+  return success(data)
 }
 
-// ─── Sincronização de status vindo do provider (Entrega 5) ────────────────────
+// ─── Sincronização de status vindo do provider (Entregas 5-6) ─────────────────
 
 export type ProviderMessageStatus = 'sent' | 'delivered' | 'read' | 'failed'
 
@@ -220,13 +226,20 @@ export interface ApplyProviderStatusResult {
 }
 
 /**
- * Aplica um evento de status vindo do provider (via N8N) de forma atômica —
- * a RPC reavalia a condição de aceitação no momento do lock da linha
- * (sem janela entre leitura e escrita). Idempotente por construção: evento
- * repetido ou fora de ordem simplesmente não aplica (`applied: false`),
- * nunca é tratado como erro. `direction='outbound'` é reforçado dentro da
- * RPC como defesa em profundidade — o chamador já deveria ter confirmado
- * isso antes (ver message-status-sync.service.ts).
+ * Aplica um evento de status vindo do provider de forma atômica — a RPC
+ * reavalia a condição de aceitação no momento do lock da linha (sem janela
+ * entre leitura e escrita). Idempotente por construção: evento repetido ou
+ * fora de ordem simplesmente não aplica (`applied: false`), nunca é tratado
+ * como erro. `direction='outbound'` é reforçado dentro da RPC como defesa
+ * em profundidade.
+ *
+ * Único ponto de escrita de status de todo o ciclo outbound — usada tanto
+ * pelo webhook assíncrono de status (Entrega 5, message-status-sync.service.ts)
+ * quanto pela confirmação síncrona do envio inicial (Entrega 6,
+ * outbound-message.service.ts, que passa `externalMessageId` na transição
+ * 'pending'→'sent'). Não existe um segundo caminho de escrita de status —
+ * `updateMessageStatus()` (Entrega 2) foi removida por ficar sem uso real
+ * depois que essa unificação ficou clara.
  */
 export async function applyProviderStatusUpdate(
   messageId: number,
@@ -234,6 +247,7 @@ export async function applyProviderStatusUpdate(
   newStatus: ProviderMessageStatus,
   occurredAt?: string | null,
   failureReason?: string | null,
+  externalMessageId?: string | null,
 ): Promise<ServiceOutcome<ApplyProviderStatusResult>> {
   const admin = createAdminClient()
   const { data, error } = await (admin as any).rpc('rpc_apply_crm_message_status', {
@@ -242,6 +256,7 @@ export async function applyProviderStatusUpdate(
     p_new_status: newStatus,
     p_occurred_at: occurredAt ?? null,
     p_failure_reason: failureReason ?? null,
+    p_external_message_id: externalMessageId ?? null,
   }) as unknown as {
     data: { applied: boolean; current_status: CrmMessageStatus } | null
     error: { message: string } | null

@@ -3087,5 +3087,89 @@ GRANT EXECUTE ON FUNCTION public.rpc_apply_crm_message_status
   TO service_role, authenticated;
 
 -- =============================================================================
+-- 37. CRM — ENVIO OUTBOUND DE MENSAGEM (Fase 3, Entrega 6)
+--     (Ver supabase/migrations/20260713_crm_outbound_send.sql)
+--
+--     crm_messages ganha client_dedupe_key (idempotência de criação —
+--     clique duplo/retry de frontend, ANTES de existir resposta do
+--     provider) e reply_to_message_id (responder mensagem específica).
+--     rpc_apply_crm_message_status ganha p_external_message_id — a
+--     transição inicial 'pending'→'sent' do outbound passa pela MESMA RPC
+--     da Entrega 5. ERP nunca chama Evolution direto — aciona um webhook
+--     N8N síncrono (camada src/services/crm/providers/).
+-- =============================================================================
+
+ALTER TABLE public.crm_messages
+  ADD COLUMN IF NOT EXISTS client_dedupe_key   TEXT,
+  ADD COLUMN IF NOT EXISTS reply_to_message_id BIGINT REFERENCES public.crm_messages(id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_messages_client_dedupe_key
+  ON public.crm_messages(conversation_id, client_dedupe_key)
+  WHERE direction = 'outbound' AND client_dedupe_key IS NOT NULL;
+
+DROP FUNCTION IF EXISTS public.rpc_apply_crm_message_status(int, bigint, text, timestamptz, text);
+
+CREATE OR REPLACE FUNCTION public.rpc_apply_crm_message_status(
+  p_company_id           int,
+  p_message_id           bigint,
+  p_new_status           text,
+  p_occurred_at          timestamptz,
+  p_failure_reason       text,
+  p_external_message_id  text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_ts             timestamptz;
+  v_row_count      int;
+  v_current_status text;
+BEGIN
+  IF p_new_status NOT IN ('sent', 'delivered', 'read', 'failed') THEN
+    RAISE EXCEPTION 'status inválido para sincronização de provider: %.', p_new_status USING ERRCODE = 'P0001';
+  END IF;
+
+  v_ts := COALESCE(p_occurred_at, NOW());
+
+  UPDATE crm_messages
+  SET
+    status               = p_new_status,
+    status_updated_at    = NOW(),
+    external_message_id  = COALESCE(p_external_message_id, external_message_id),
+    sent_at        = CASE WHEN p_new_status = 'sent'      AND sent_at      IS NULL THEN v_ts ELSE sent_at      END,
+    delivered_at   = CASE WHEN p_new_status = 'delivered' AND delivered_at IS NULL THEN v_ts ELSE delivered_at END,
+    read_at        = CASE WHEN p_new_status = 'read'      AND read_at      IS NULL THEN v_ts ELSE read_at      END,
+    failed_at      = CASE WHEN p_new_status = 'failed'    AND failed_at    IS NULL THEN v_ts ELSE failed_at    END,
+    failure_reason = CASE WHEN p_new_status = 'failed' THEN p_failure_reason ELSE failure_reason END
+  WHERE id = p_message_id
+    AND company_id = p_company_id
+    AND direction = 'outbound'
+    AND (
+      CASE p_new_status
+        WHEN 'sent'      THEN status = 'pending'
+        WHEN 'delivered' THEN status IN ('pending', 'sent')
+        WHEN 'read'      THEN status IN ('pending', 'sent', 'delivered')
+        WHEN 'failed'    THEN status IN ('pending', 'sent')
+        ELSE false
+      END
+    );
+
+  GET DIAGNOSTICS v_row_count = ROW_COUNT;
+
+  SELECT status INTO v_current_status
+  FROM crm_messages
+  WHERE id = p_message_id AND company_id = p_company_id;
+
+  RETURN jsonb_build_object(
+    'applied', v_row_count > 0,
+    'current_status', v_current_status
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.rpc_apply_crm_message_status(int, bigint, text, timestamptz, text, text)
+  TO service_role, authenticated;
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================

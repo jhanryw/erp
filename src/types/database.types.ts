@@ -864,6 +864,8 @@ export interface Database {
           delivered_at: string | null
           read_at: string | null
           failed_at: string | null
+          client_dedupe_key: string | null
+          reply_to_message_id: number | null
         }
         Insert: {
           company_id: number
@@ -880,6 +882,8 @@ export interface Database {
           created_source: CrmMessageCreatedSource
           created_by?: string | null
           metadata?: Json | null
+          client_dedupe_key?: string | null
+          reply_to_message_id?: number | null
         }
         Update: {
           status?: CrmMessageStatus
