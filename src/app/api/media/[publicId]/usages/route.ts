@@ -18,10 +18,19 @@ function isValidPublicId(publicId: string): boolean {
 // Role mínima exigida por entity_type — product/product_variation tocam
 // conteúdo de catálogo (mesmo nível de POST /api/marcas); shipment é ação
 // operacional (comprovante de entrega).
+//
+// crm_message: valor nunca alcançado de fato — mediaUsageSchema (src/lib/
+// validators/index.ts) deliberadamente NÃO lista 'crm_message' no enum de
+// entity_type, então o parse falha antes de chegar aqui. Bloqueio explícito
+// e documentado (Entrega 4, decisão do usuário): anexo de mensagem só é
+// criado pela service layer interna do CRM (chamada direta de função,
+// nunca por esta rota humana). Entrada abaixo existe só para o TypeScript
+// (Record exaustivo sobre MediaUsageEntityType).
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product: 'gerente',
   product_variation: 'gerente',
   shipment: 'usuario',
+  crm_message: 'admin',
 }
 
 // ─── POST /api/media/[publicId]/usages ─────────────────────────────────────────

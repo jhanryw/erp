@@ -27,11 +27,13 @@ schema do banco.
 | | |
 |---|---|
 | Nome | `media-private` |
-| Finalidade | Comprovantes, documentos, CRM, financeiro e anexos internos |
+| Finalidade | Comprovantes, documentos, CRM (anexos de mensagem), financeiro e anexos internos |
 | Visibilidade | Privado (`public: false`) — sem leitura anônima |
-| MIME types permitidos | `image/jpeg`, `image/png`, `image/webp`, `application/pdf` |
-| Tamanho máximo | 15 MB por arquivo |
+| MIME types permitidos | `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/heic`, `image/heif`, `audio/ogg`, `audio/mpeg`, `audio/aac`, `audio/wav`, `audio/mp4`, `video/mp4`, `video/webm`, `video/quicktime`, `application/pdf`, `application/msword`, `.docx`, `application/vnd.ms-excel`, `.xlsx`, `application/vnd.ms-powerpoint`, `.pptx`, `text/plain` |
+| Tamanho máximo | 25 MB por arquivo |
 | Padrão de path | `{company_id}/{public_id}.{extension}` |
+
+**Atualizado na Fase 3, Entrega 4** (CRM ↔ Evolution ↔ Media Hub): limite subiu de 15MB→25MB e o allowlist de MIME saiu de "imagem+PDF" para cobertura corporativa geral (áudio/vídeo/documentos comuns) — decisão explícita de tratar `media-private` como serviço compartilhado do ERP, não como algo desenhado só para anexo de WhatsApp. `BUCKET_RULES` em `media.service.ts` é a fonte de verdade em código; esta tabela precisa ser mantida em sincronia manualmente com a configuração real do bucket no painel do Supabase (`file_size_limit`/`allowed_mime_types`, se configurados lá).
 
 Em ambos os buckets, `public_id` é o `UUID` gerado em código (não o `id`
 sequencial de `media`) — é o mesmo valor usado como identificador externo

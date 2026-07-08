@@ -16,10 +16,19 @@ function isValidPublicId(publicId: string): boolean {
 
 // Mesmo mapa usado em POST /api/media/[publicId]/usages — role mínima
 // exigida depende do entity_type do vínculo, não do método HTTP.
+//
+// crm_message: entrada existe só para o TypeScript — esta rota lê
+// entity_type de um registro JÁ EXISTENTE no banco (não de body de
+// requisição), então diferente das rotas POST, um vínculo crm_message
+// PODE aparecer aqui de verdade (criado pela ingestão interna do CRM). Por
+// isso o bloqueio é um guard explícito logo abaixo, não a ausência de um
+// valor em schema — ver decisão da Entrega 4 (usuário: bloqueio explícito
+// na fronteira humana, liberação só pela service layer interna do CRM).
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product: 'gerente',
   product_variation: 'gerente',
   shipment: 'usuario',
+  crm_message: 'admin',
 }
 
 // ─── DELETE /api/media/[publicId]/usages/[usageId] ─────────────────────────────
@@ -48,6 +57,14 @@ export async function DELETE(
 
   const usage = await getMediaUsageById(usageId, user.company_id)
   if (!usage || usage.media_id !== media.id) return notFound('Vínculo')
+
+  // Bloqueio explícito (Entrega 4, decisão do usuário) — anexo de mensagem
+  // do CRM só é gerenciável pela service layer interna, nunca pela API
+  // pública/humana, nem para desvincular. Guard dedicado em vez de depender
+  // de ROLE_BY_ENTITY['crm_message'] sozinho, pra fronteira ficar explícita.
+  if (usage.entity_type === 'crm_message') {
+    return forbidden()
+  }
 
   if (!hasMinRole(user.role, ROLE_BY_ENTITY[usage.entity_type])) {
     return forbidden()

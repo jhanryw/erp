@@ -1,30 +1,55 @@
 /**
- * Service de CRM — Orquestração da ingestão inbound de mensagem (Entrega 3).
+ * Service de CRM — Orquestração da ingestão inbound de mensagem
+ * (Entrega 3: texto/idempotência; Entrega 4: mídia via Media Hub).
  *
  * Ponto único que a rota POST /api/automations/crm/inbound-message chama.
- * Reaproveita quase tudo das Entregas 1/2 (findOrCreateConversation,
- * createMessage, findMessageByExternalId) — o que é novo aqui é só a
- * resolução de canal por instância e a atomicidade pessoa+identidade.
+ * Reaproveita quase tudo das entregas anteriores (findOrCreateConversation,
+ * createMessage, findMessageByExternalId, createMediaFromUpload,
+ * createMediaUsage) — nunca a rota humana do Media Hub, sempre chamada
+ * direta de função (service_role), mesmo padrão já usado em
+ * produtos/[id]/page.tsx chamando listMediaByEntity() direto.
  *
  * company_id nunca é aceito como input — é sempre derivado do canal
- * resolvido (channel.company_id), a partir daí é a única fonte de verdade
- * para todo o resto da cadeia.
+ * resolvido (channel.company_id).
  *
- * Canal não encontrado ou inativo é erro PERMANENTE de configuração — a
- * rota HTTP responde 422 (não 404) para não induzir retry-loop em
- * N8N/Evolution, decisão do usuário. Este service só sinaliza via
- * ServiceOutcome; a tradução pra status HTTP específico é responsabilidade
- * da rota (mas já retorna 422 aqui, então a rota só repassa).
+ * Anexo de mídia é degradação graciosa, não erro de request: se o MIME não
+ * é permitido ou o arquivo excede o limite, a mensagem ainda é criada
+ * (histórico não se perde), só sem anexo — `media: null` + `mediaError`
+ * no retorno avisam o motivo.
+ *
+ * Idempotência de mensagem (external_message_id) foi estendida na Entrega 4:
+ * se o webhook reenviar e a mensagem já existir MAS ainda não tiver mídia
+ * anexada (falha parcial anterior), tenta anexar agora em vez de só
+ * retornar deduplicated=true sem mais nada — decisão do usuário.
  */
 
-import type { CrmChannelType, CrmMessageContentType, CrmPersonCreatedSource } from '@/types/database.types'
+import type {
+  CrmChannelType,
+  CrmMessageContentType,
+  CrmPersonCreatedSource,
+  Json,
+} from '@/types/database.types'
 import type { ServiceOutcome } from '../produtos.service'
 import { findChannelByProviderInstance } from './channels.service'
 import { normalizeChannelIdentityValue, findOrCreateChannelIdentity } from './channel-identities.service'
 import { findOrCreateConversation } from './conversations.service'
 import { findMessageByExternalId, createMessage } from './messages.service'
+import {
+  computeChecksumSha256,
+  findActiveMediaByChecksum,
+  createMediaFromUpload,
+  createMediaUsage,
+  listMediaByEntity,
+} from '@/services/media.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
+
+export interface IngestInboundMediaInput {
+  mimeType: string
+  fileSize: number
+  base64Content: string
+  fileName?: string | null
+}
 
 export interface IngestInboundMessageInput {
   providerInstanceIdentifier: string
@@ -34,6 +59,12 @@ export interface IngestInboundMessageInput {
   content?: string | null
   contentType: CrmMessageContentType
   n8nExecutionId?: string | null
+  metadata?: Json | null
+  media?: IngestInboundMediaInput | null
+}
+
+export interface IngestedMediaRef {
+  publicId: string
 }
 
 export interface IngestInboundMessageResult {
@@ -43,6 +74,8 @@ export interface IngestInboundMessageResult {
   channelId: number
   companyId: number
   deduplicated: boolean
+  media: IngestedMediaRef | null
+  mediaError: string | null
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -73,6 +106,85 @@ function personCreatedSourceForChannel(channelType: CrmChannelType): CrmPersonCr
     default:
       return 'other'
   }
+}
+
+/**
+ * Sobe (ou reusa por checksum) a mídia e vincula à mensagem via
+ * media_usages(entity_type='crm_message', role='attachment'). Nunca lança —
+ * qualquer falha vira { mediaError } para o chamador decidir a resposta
+ * (degradação graciosa, mensagem já existe independente do resultado aqui).
+ */
+async function attachMediaToMessage(
+  companyId: number,
+  messageId: number,
+  media: IngestInboundMediaInput,
+): Promise<{ media: IngestedMediaRef | null; mediaError: string | null }> {
+  let buffer: Buffer
+  try {
+    buffer = Buffer.from(media.base64Content, 'base64')
+  } catch {
+    return { media: null, mediaError: 'invalid_base64' }
+  }
+  if (buffer.byteLength === 0) {
+    return { media: null, mediaError: 'empty_file' }
+  }
+
+  const checksum = computeChecksumSha256(buffer)
+  const reuse = await findActiveMediaByChecksum(companyId, checksum, 'private')
+
+  let mediaRow = reuse.ok ? reuse.data : null
+
+  if (!mediaRow) {
+    const uploadResult = await createMediaFromUpload(
+      {
+        buffer,
+        mimeType: media.mimeType,
+        fileName: media.fileName?.trim() || 'anexo-inbound',
+        visibility: 'private',
+        createdSource: 'channel_inbound',
+      },
+      companyId,
+      null,
+    )
+    if (!uploadResult.ok) {
+      // 422 = MIME/tamanho não permitido pelo Media Hub, 502 = falha de
+      // Storage — nos dois casos é degradação graciosa, não erro de request.
+      return { media: null, mediaError: uploadResult.status === 422 ? 'unsupported_media' : 'upload_failed' }
+    }
+    mediaRow = uploadResult.data
+  }
+
+  const usageResult = await createMediaUsage(
+    { mediaId: mediaRow.id, entityType: 'crm_message', entityId: String(messageId), role: 'attachment' },
+    companyId,
+    null,
+  )
+  if (!usageResult.ok) {
+    return { media: null, mediaError: 'attach_failed' }
+  }
+
+  return { media: { publicId: mediaRow.public_id }, mediaError: null }
+}
+
+/**
+ * Mensagem já existe (idempotência) — resolve o retorno considerando se já
+ * tem mídia (deduplicado de verdade) ou se precisa retomar um anexo que
+ * ficou pendente numa tentativa anterior.
+ */
+async function resolveExistingMessage(
+  existingMessageId: number,
+  companyId: number,
+  mediaInput: IngestInboundMediaInput | null | undefined,
+): Promise<{ media: IngestedMediaRef | null; mediaError: string | null }> {
+  if (!mediaInput) return { media: null, mediaError: null }
+
+  const already = await listMediaByEntity('crm_message', String(existingMessageId), companyId)
+  if (already.ok && already.data.length > 0) {
+    const first = already.data[0]
+    return { media: { publicId: first.public_id }, mediaError: null }
+  }
+
+  return attachMediaToMessage(companyId, existingMessageId, mediaInput)
 }
 
 // ─── Operação ──────────────────────────────────────────────────────────────────
@@ -128,6 +240,7 @@ export async function ingestInboundMessage(
   const existing = await findMessageByExternalId(channel.id, input.externalMessageId, channel.company_id)
   if (!existing.ok) return failure(existing.error)
   if (existing.data) {
+    const { media, mediaError } = await resolveExistingMessage(existing.data.id, channel.company_id, input.media)
     return success({
       messageId: existing.data.id,
       conversationId: conversation.id,
@@ -135,6 +248,8 @@ export async function ingestInboundMessage(
       channelId: channel.id,
       companyId: channel.company_id,
       deduplicated: true,
+      media,
+      mediaError,
     })
   }
 
@@ -150,6 +265,7 @@ export async function ingestInboundMessage(
     externalMessageId: input.externalMessageId,
     n8nExecutionId: input.n8nExecutionId ?? null,
     createdSource: 'inbound_webhook',
+    metadata: input.metadata ?? null,
   })
 
   if (!messageResult.ok) {
@@ -158,6 +274,7 @@ export async function ingestInboundMessage(
     if (messageResult.status === 409) {
       const retried = await findMessageByExternalId(channel.id, input.externalMessageId, channel.company_id)
       if (retried.ok && retried.data) {
+        const { media, mediaError } = await resolveExistingMessage(retried.data.id, channel.company_id, input.media)
         return success({
           messageId: retried.data.id,
           conversationId: conversation.id,
@@ -165,10 +282,20 @@ export async function ingestInboundMessage(
           channelId: channel.id,
           companyId: channel.company_id,
           deduplicated: true,
+          media,
+          mediaError,
         })
       }
     }
     return failure(messageResult.error, messageResult.status)
+  }
+
+  let media: IngestedMediaRef | null = null
+  let mediaError: string | null = null
+  if (input.media) {
+    const attached = await attachMediaToMessage(channel.company_id, messageResult.data.id, input.media)
+    media = attached.media
+    mediaError = attached.mediaError
   }
 
   return success({
@@ -178,5 +305,7 @@ export async function ingestInboundMessage(
     channelId: channel.id,
     companyId: channel.company_id,
     deduplicated: false,
+    media,
+    mediaError,
   })
 }

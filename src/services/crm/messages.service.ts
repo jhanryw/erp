@@ -22,6 +22,7 @@ import type {
   CrmMessageStatus,
   CrmMessageContentType,
   CrmMessageCreatedSource,
+  Json,
 } from '@/types/database.types'
 import type { ServiceOutcome } from '../produtos.service'
 
@@ -40,6 +41,8 @@ export interface CreateCrmMessageInput {
   n8nExecutionId?: string | null
   createdSource: CrmMessageCreatedSource
   createdBy?: string | null
+  /** Payload estruturado sem arquivo — localização, vCard, tipo futuro não mapeado (Entrega 4). */
+  metadata?: Json | null
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -108,6 +111,7 @@ export async function createMessage(input: CreateCrmMessageInput): Promise<Servi
       n8n_execution_id: input.n8nExecutionId ?? null,
       created_source: input.createdSource,
       created_by: input.createdBy ?? null,
+      metadata: input.metadata ?? null,
     } as any)
     .select('*')
     .single() as unknown as { data: CrmMessage | null; error: { code?: string; message: string } | null }

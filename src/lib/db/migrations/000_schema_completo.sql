@@ -2983,5 +2983,31 @@ GRANT EXECUTE ON FUNCTION public.rpc_find_or_create_crm_person_by_identity
   TO service_role, authenticated;
 
 -- =============================================================================
+-- 35. CRM — ANEXOS DE MENSAGEM VIA MEDIA HUB (Fase 3, Entrega 4)
+--     (Ver supabase/migrations/20260711_crm_media_attachments.sql)
+--
+--     crm_messages ganha metadata JSONB + content_type 'contact'. media
+--     ganha created_source 'channel_inbound'. media_usages.entity_type
+--     ganha 'crm_message' — decisão de autorização real vive em código
+--     (media.service.ts + 3 rotas humanas do Media Hub), não em migration:
+--     ingestão interna do CRM usa ALLOWED_ROLES_BY_ENTITY['crm_message'],
+--     rotas humanas bloqueiam 'crm_message' explicitamente.
+-- =============================================================================
+
+ALTER TABLE public.crm_messages ADD COLUMN IF NOT EXISTS metadata JSONB;
+
+ALTER TABLE public.crm_messages DROP CONSTRAINT IF EXISTS crm_messages_content_type_check;
+ALTER TABLE public.crm_messages ADD CONSTRAINT crm_messages_content_type_check
+  CHECK (content_type IN ('text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'other'));
+
+ALTER TABLE public.media DROP CONSTRAINT IF EXISTS media_created_source_check;
+ALTER TABLE public.media ADD CONSTRAINT media_created_source_check
+  CHECK (created_source IN ('upload', 'migration', 'marketplace', 'import', 'camera', 'api', 'channel_inbound'));
+
+ALTER TABLE public.media_usages DROP CONSTRAINT IF EXISTS media_usages_entity_type_check;
+ALTER TABLE public.media_usages ADD CONSTRAINT media_usages_entity_type_check
+  CHECK (entity_type IN ('product', 'product_variation', 'shipment', 'crm_message'));
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================

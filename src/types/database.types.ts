@@ -25,7 +25,7 @@ export type AbcCurve = 'A' | 'B' | 'C'
 export type RfmSegment = 'champions' | 'loyal' | 'potential_loyal' | 'new_customers' | 'promising' | 'at_risk' | 'cant_lose' | 'hibernating' | 'lost'
 export type MediaStatus = 'processing' | 'ready' | 'failed'
 export type MediaVisibility = 'public' | 'private'
-export type MediaUsageEntityType = 'product' | 'product_variation' | 'shipment'
+export type MediaUsageEntityType = 'product' | 'product_variation' | 'shipment' | 'crm_message'
 export type MediaUsageRole = 'primary' | 'gallery' | 'logo' | 'banner' | 'avatar' | 'proof' | 'attachment' | 'document'
 export type CrmChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'email' | 'mercado_livre' | 'shopee' | 'site_chat' | 'telegram' | 'other'
 export type CrmPersonCreatedSource = 'manual' | 'import' | 'whatsapp_inbound' | 'instagram_inbound' | 'marketplace_sync' | 'sale_checkout' | 'website_form' | 'other'
@@ -39,7 +39,7 @@ export type CrmConsentSource = 'whatsapp_message' | 'web_form' | 'manual' | 'sal
 export type CrmConversationStatus = 'open' | 'pending' | 'closed'
 export type CrmMessageDirection = 'inbound' | 'outbound'
 export type CrmMessageStatus = 'received' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
-export type CrmMessageContentType = 'text' | 'image' | 'audio' | 'video' | 'document' | 'location' | 'other'
+export type CrmMessageContentType = 'text' | 'image' | 'audio' | 'video' | 'document' | 'location' | 'contact' | 'other'
 export type CrmMessageCreatedSource = 'manual' | 'automation' | 'inbound_webhook' | 'other'
 
 export interface Database {
@@ -859,6 +859,7 @@ export interface Database {
           created_source: CrmMessageCreatedSource
           created_by: string | null
           created_at: string
+          metadata: Json | null
         }
         Insert: {
           company_id: number
@@ -874,6 +875,7 @@ export interface Database {
           n8n_execution_id?: string | null
           created_source: CrmMessageCreatedSource
           created_by?: string | null
+          metadata?: Json | null
         }
         Update: {
           status?: CrmMessageStatus

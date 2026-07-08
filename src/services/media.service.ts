@@ -9,11 +9,19 @@
  * Regras que este arquivo aplica (não repetir na rota):
  *   - bucket nunca vem do cliente — é sempre derivado de `visibility`
  *   - company_id nunca vem do cliente — é sempre parâmetro explícito
- *   - created_source é sempre 'upload' — não é aceito como input
+ *   - created_source nunca vem do CLIENTE HTTP — a rota humana POST /api/media
+ *     nunca aceita nem repassa esse campo do corpo da requisição, então na
+ *     prática sempre resulta em 'upload' por ali. `createMediaFromUpload()`
+ *     em si aceita `createdSource` como parâmetro explícito (Entrega 4) para
+ *     permitir chamadores internos de confiança (ex.: ingestão do CRM,
+ *     service layer chamando função direto, nunca via HTTP) declararem
+ *     'channel_inbound' — a fronteira protegida é sempre "o que a rota HTTP
+ *     aceita do cliente", não "o que uma função interna pode receber de
+ *     outro código do próprio ERP".
  *   - extension é sempre derivada do mime_type — nunca do nome do arquivo
  */
 
-import { randomUUID } from 'crypto'
+import { randomUUID, createHash } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Database, MediaVisibility, MediaUsageEntityType, MediaUsageRole } from '@/types/database.types'
 import type { ServiceOutcome } from './produtos.service'
@@ -29,6 +37,8 @@ export interface MediaUploadInput {
   fileName: string
   visibility: MediaVisibility
   altText?: string | null
+  /** Default 'upload' — só chamadores internos de confiança (nunca a rota HTTP) devem passar outro valor. */
+  createdSource?: string
 }
 
 export interface MediaUsageInput {
@@ -78,6 +88,13 @@ interface BucketRule {
   maxFileSize: number
 }
 
+// Entrega 4 (Fase 3, CRM): media-private ampliado de "imagem+pdf/15MB" para
+// cobertura corporativa geral (áudio/vídeo/documento comuns/25MB) — decisão
+// explícita do usuário de não desenhar isso "só para WhatsApp", já que o
+// Media Hub é serviço compartilhado por todo o ERP. Ação externa necessária
+// em paralelo: o bucket media-private no Supabase Storage precisa ter seu
+// próprio limite/allowlist (se configurado no painel) atualizado do mesmo
+// jeito — ver docs/media-hub-storage.md.
 const BUCKET_RULES: Record<MediaVisibility, BucketRule> = {
   public: {
     bucket: 'media-public',
@@ -86,8 +103,19 @@ const BUCKET_RULES: Record<MediaVisibility, BucketRule> = {
   },
   private: {
     bucket: 'media-private',
-    allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
-    maxFileSize: 15 * 1024 * 1024,
+    allowedMimeTypes: [
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif',
+      'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/wav', 'audio/mp4',
+      'video/mp4', 'video/webm', 'video/quicktime',
+      'application/pdf', 'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain',
+    ],
+    maxFileSize: 25 * 1024 * 1024,
   },
 }
 
@@ -95,7 +123,30 @@ const MIME_EXTENSION_MAP: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/heic': 'heic',
+  'image/heif': 'heif',
+  'audio/ogg': 'ogg',
+  'audio/mpeg': 'mp3',
+  'audio/aac': 'aac',
+  'audio/wav': 'wav',
+  'audio/mp4': 'm4a',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+  'video/quicktime': 'mov',
   'application/pdf': 'pdf',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'text/plain': 'txt',
+}
+
+/** SHA-256 em hex — usado para dedup de mídia idêntica (ver findActiveMediaByChecksum). */
+export function computeChecksumSha256(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex')
 }
 
 /** TTL de signed URL para mídia privada — ver docs/media-hub-storage.md. */
@@ -122,7 +173,7 @@ export function extensionForMime(mimeType: string): string | null {
 export async function createMediaFromUpload(
   input: MediaUploadInput,
   companyId: number,
-  uploadedBy: string,
+  uploadedBy: string | null,
 ): Promise<ServiceOutcome<Media>> {
   const rules = BUCKET_RULES[input.visibility]
 
@@ -168,7 +219,8 @@ export async function createMediaFromUpload(
       extension,
       mime_type: input.mimeType,
       file_size: input.buffer.byteLength,
-      created_source: 'upload',
+      checksum_sha256: computeChecksumSha256(input.buffer),
+      created_source: input.createdSource ?? 'upload',
       uploaded_by: uploadedBy,
       alt_text: input.altText ?? null,
     } as any)
@@ -182,6 +234,34 @@ export async function createMediaFromUpload(
   }
 
   return success(data!)
+}
+
+/**
+ * Dedup por conteúdo idêntico (Entrega 4) — evita subir bytes repetidos
+ * (ex.: cliente reenvia a mesma imagem em mensagens diferentes). Escopado
+ * por company_id + visibility: nunca reusa mídia de outra empresa, nem
+ * mídia pública para um anexo que precisa ser privado (ou vice-versa),
+ * mesmo que o checksum bata. Sem constraint UNIQUE no banco — mesma decisão
+ * já tomada na Fase 2 (índice não-único de propósito), resolvida aqui na
+ * service layer em vez de reabrir o schema.
+ */
+export async function findActiveMediaByChecksum(
+  companyId: number,
+  checksumSha256: string,
+  visibility: MediaVisibility,
+): Promise<ServiceOutcome<Media | null>> {
+  const admin = createAdminClient()
+  const { data, error } = await admin
+    .from('media')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('checksum_sha256', checksumSha256)
+    .eq('visibility', visibility)
+    .eq('active', true)
+    .maybeSingle() as unknown as { data: Media | null; error: { message: string } | null }
+
+  if (error) return failure(error.message)
+  return success(data)
 }
 
 // ─── Leitura por public_id ─────────────────────────────────────────────────────
@@ -249,6 +329,10 @@ const ALLOWED_ROLES_BY_ENTITY: Record<MediaUsageEntityType, MediaUsageRole[]> = 
   product: ['primary', 'gallery'],
   product_variation: ['primary', 'gallery'],
   shipment: ['proof'],
+  // Real — consumida pela ingestão interna do CRM (chamada direta de função,
+  // nunca pela rota HTTP humana, que bloqueia 'crm_message' explicitamente
+  // antes de chegar aqui — ver as 3 rotas em app/api/media/[publicId]/*).
+  crm_message: ['attachment'],
 }
 
 /**
@@ -311,7 +395,7 @@ export async function entityBelongsToCompany(
 export async function createMediaUsage(
   input: MediaUsageInput,
   companyId: number,
-  createdBy: string,
+  createdBy: string | null,
 ): Promise<ServiceOutcome<MediaUsage>> {
   if (!ALLOWED_ROLES_BY_ENTITY[input.entityType].includes(input.role)) {
     return failure(`Role "${input.role}" não é permitido para entity_type "${input.entityType}".`, 422)

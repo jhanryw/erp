@@ -17,10 +17,15 @@ function isValidPublicId(publicId: string): boolean {
 
 // Mesmo mapa usado em POST/DELETE de usages — role mínima exigida depende
 // do entity_type, não do método HTTP.
+//
+// crm_message: nunca alcançado — bodySchema abaixo não lista 'crm_message'.
+// Mensagem não tem conceito de "primary" (é role='attachment', não
+// singular) — mesmo bloqueio explícito da Entrega 4, ver usages/route.ts.
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product: 'gerente',
   product_variation: 'gerente',
   shipment: 'usuario',
+  crm_message: 'admin',
 }
 
 const bodySchema = z.object({
