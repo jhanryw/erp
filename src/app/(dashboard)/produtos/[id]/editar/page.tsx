@@ -11,6 +11,7 @@ import { productEditSchema, type ProductEditFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
+import { ProductMediaManager } from '../../_components/product-media'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -286,6 +287,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           <p className="text-sm text-text-muted">Altere as informações do produto</p>
         </div>
       </div>
+
+      <ProductMediaManager productId={Number(params.id)} />
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
         {/* ── Dados base ── */}
