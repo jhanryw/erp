@@ -34,6 +34,10 @@ export type AuditResource =
   | 'monthly_sales_goals'
   | 'cash_session' | 'cash_movement'
   | 'media' | 'media_usage'
+  | 'crm_person' | 'crm_organization' | 'crm_company_contact'
+  | 'crm_channel' | 'crm_channel_identity'
+  | 'crm_person_customer_link' | 'crm_consent_event'
+  | 'crm_conversation' | 'crm_message'
 
 export interface AuditPayload {
   action:         AuditAction

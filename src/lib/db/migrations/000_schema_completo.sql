@@ -2537,5 +2537,451 @@ END;
 $$;
 
 -- =============================================================================
+-- 32. CRM — CAMADA DE IDENTIDADE (Fase 3, Entrega 1)
+--     (Ver supabase/migrations/20260708_crm_identity_layer.sql)
+--
+--     Domínio CRM independente de customers/sales — customers continua
+--     pertencendo a Vendas/OMS/Fiscal/Checkout/Cashback, o CRM referencia
+--     via crm_person_customer_links (M:N, nunca 1:1), nunca duplica.
+--     Núcleo estrutural usa FK explícita (não entity_type/entity_id).
+--     crm_consent_events é ledger imutável, reforçado por trigger.
+--     Escopo: só identidade. Sem conversa/mensagem/pipeline/inbox/automação.
+-- =============================================================================
+
+DO $$ BEGIN
+  CREATE TYPE crm_channel_type AS ENUM (
+    'whatsapp', 'instagram', 'messenger', 'email',
+    'mercado_livre', 'shopee', 'site_chat', 'telegram', 'other'
+  );
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS public.crm_persons (
+  id             BIGSERIAL    PRIMARY KEY,
+  company_id     INT          NOT NULL REFERENCES public.companies(id),
+  display_name   TEXT         NOT NULL,
+  notes          TEXT,
+  created_source TEXT         NOT NULL
+                   CHECK (created_source IN (
+                     'manual', 'import', 'whatsapp_inbound', 'instagram_inbound',
+                     'marketplace_sync', 'sale_checkout', 'website_form', 'other'
+                   )),
+  active         BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_by     UUID         REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_crm_persons_company ON public.crm_persons(company_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_organizations (
+  id             BIGSERIAL    PRIMARY KEY,
+  company_id     INT          NOT NULL REFERENCES public.companies(id),
+  name           TEXT         NOT NULL,
+  tax_id         TEXT,
+  segment        TEXT,
+  notes          TEXT,
+  created_source TEXT         NOT NULL
+                   CHECK (created_source IN (
+                     'manual', 'import', 'whatsapp_inbound', 'instagram_inbound',
+                     'marketplace_sync', 'sale_checkout', 'website_form', 'other'
+                   )),
+  active         BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_by     UUID         REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_crm_organizations_company ON public.crm_organizations(company_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_company_contacts (
+  id              BIGSERIAL    PRIMARY KEY,
+  company_id      INT          NOT NULL REFERENCES public.companies(id),
+  organization_id BIGINT       NOT NULL REFERENCES public.crm_organizations(id) ON DELETE CASCADE,
+  person_id       BIGINT       NOT NULL REFERENCES public.crm_persons(id) ON DELETE CASCADE,
+  role            TEXT,
+  is_primary      BOOLEAN      NOT NULL DEFAULT FALSE,
+  active          BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_by      UUID         REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_company_contacts_active
+  ON public.crm_company_contacts(organization_id, person_id) WHERE active;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_company_contacts_primary
+  ON public.crm_company_contacts(organization_id) WHERE is_primary AND active;
+CREATE INDEX IF NOT EXISTS idx_crm_company_contacts_company ON public.crm_company_contacts(company_id);
+CREATE INDEX IF NOT EXISTS idx_crm_company_contacts_person  ON public.crm_company_contacts(person_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_channels (
+  id                          BIGSERIAL         PRIMARY KEY,
+  company_id                  INT               NOT NULL REFERENCES public.companies(id),
+  name                        TEXT              NOT NULL,
+  channel_type                crm_channel_type  NOT NULL,
+  provider                    TEXT              NOT NULL
+                                CHECK (provider IN (
+                                  'evolution', 'meta_cloud_api', 'gmail', 'microsoft365',
+                                  'smtp', 'mercado_livre', 'shopee', 'custom', 'other'
+                                )),
+  provider_instance_identifier TEXT,
+  external_config             JSONB             NOT NULL DEFAULT '{}'::jsonb,
+  status                      TEXT              NOT NULL DEFAULT 'active'
+                                CHECK (status IN ('active', 'inactive', 'error')),
+  active                      BOOLEAN           NOT NULL DEFAULT TRUE,
+  created_at                  TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  updated_at                  TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  created_by                  UUID              REFERENCES auth.users(id) ON DELETE SET NULL,
+
+  CONSTRAINT uq_crm_channels_company_name UNIQUE (company_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_crm_channels_company ON public.crm_channels(company_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_channel_identities (
+  id             BIGSERIAL         PRIMARY KEY,
+  company_id     INT               NOT NULL REFERENCES public.companies(id),
+  person_id      BIGINT            NOT NULL REFERENCES public.crm_persons(id) ON DELETE CASCADE,
+  channel_type   crm_channel_type  NOT NULL,
+  value          TEXT              NOT NULL,
+  verified       BOOLEAN           NOT NULL DEFAULT FALSE,
+  created_source TEXT              NOT NULL
+                   CHECK (created_source IN (
+                     'manual', 'inbound_message', 'import', 'sale_checkout', 'marketplace_sync', 'other'
+                   )),
+  active         BOOLEAN           NOT NULL DEFAULT TRUE,
+  created_at     TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  updated_at     TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_channel_identities_active
+  ON public.crm_channel_identities(company_id, channel_type, value) WHERE active;
+CREATE INDEX IF NOT EXISTS idx_crm_channel_identities_person  ON public.crm_channel_identities(person_id);
+CREATE INDEX IF NOT EXISTS idx_crm_channel_identities_company ON public.crm_channel_identities(company_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_person_customer_links (
+  id           BIGSERIAL    PRIMARY KEY,
+  company_id   INT          NOT NULL REFERENCES public.companies(id),
+  person_id    BIGINT       NOT NULL REFERENCES public.crm_persons(id) ON DELETE CASCADE,
+  customer_id  INT          NOT NULL REFERENCES public.customers(id),
+  match_source TEXT         NOT NULL
+                 CHECK (match_source IN (
+                   'manual', 'cpf_match', 'phone_match', 'email_match', 'import', 'sale_checkout', 'merge'
+                 )),
+  is_primary   BOOLEAN      NOT NULL DEFAULT FALSE,
+  active       BOOLEAN      NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  created_by   UUID         REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_person_customer_links_active
+  ON public.crm_person_customer_links(person_id, customer_id) WHERE active;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_person_customer_links_primary
+  ON public.crm_person_customer_links(person_id) WHERE is_primary AND active;
+CREATE INDEX IF NOT EXISTS idx_crm_person_customer_links_customer ON public.crm_person_customer_links(customer_id);
+CREATE INDEX IF NOT EXISTS idx_crm_person_customer_links_company  ON public.crm_person_customer_links(company_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_consent_events (
+  id           BIGSERIAL         PRIMARY KEY,
+  company_id   INT               NOT NULL REFERENCES public.companies(id),
+  person_id    BIGINT            NOT NULL REFERENCES public.crm_persons(id) ON DELETE RESTRICT,
+  purpose      TEXT              NOT NULL CHECK (purpose IN ('transactional', 'marketing', 'other')),
+  channel_type crm_channel_type,
+  event_type   TEXT              NOT NULL CHECK (event_type IN ('granted', 'revoked')),
+  source       TEXT              NOT NULL
+                 CHECK (source IN (
+                   'whatsapp_message', 'web_form', 'manual', 'sale_checkout', 'import', 'verbal_pos', 'other'
+                 )),
+  evidence     JSONB,
+  occurred_at  TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  created_by   UUID              REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at   TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_crm_consent_events_person
+  ON public.crm_consent_events(person_id, purpose, channel_type, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crm_consent_events_company ON public.crm_consent_events(company_id);
+
+CREATE OR REPLACE VIEW public.v_crm_consent_status AS
+SELECT DISTINCT ON (person_id, purpose, channel_type)
+  person_id,
+  company_id,
+  purpose,
+  channel_type,
+  event_type   AS status,
+  source       AS last_source,
+  occurred_at  AS last_occurred_at
+FROM public.crm_consent_events
+ORDER BY person_id, purpose, channel_type, occurred_at DESC, id DESC;
+
+CREATE OR REPLACE FUNCTION public.crm_consent_events_block_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RAISE EXCEPTION 'crm_consent_events é um ledger imutável — UPDATE/DELETE não são permitidos. Registre um novo evento em vez de alterar um existente.'
+    USING ERRCODE = 'P0001';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_crm_consent_events_block_update ON public.crm_consent_events;
+CREATE TRIGGER trg_crm_consent_events_block_update
+  BEFORE UPDATE ON public.crm_consent_events
+  FOR EACH ROW EXECUTE FUNCTION public.crm_consent_events_block_mutation();
+
+DROP TRIGGER IF EXISTS trg_crm_consent_events_block_delete ON public.crm_consent_events;
+CREATE TRIGGER trg_crm_consent_events_block_delete
+  BEFORE DELETE ON public.crm_consent_events
+  FOR EACH ROW EXECUTE FUNCTION public.crm_consent_events_block_mutation();
+
+ALTER TABLE public.crm_persons               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_organizations         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_company_contacts      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_channels              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_channel_identities    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_person_customer_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_consent_events        ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "crm_persons_company" ON public.crm_persons;
+CREATE POLICY "crm_persons_company" ON public.crm_persons FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_organizations_company" ON public.crm_organizations;
+CREATE POLICY "crm_organizations_company" ON public.crm_organizations FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_company_contacts_company" ON public.crm_company_contacts;
+CREATE POLICY "crm_company_contacts_company" ON public.crm_company_contacts FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_channels_company" ON public.crm_channels;
+CREATE POLICY "crm_channels_company" ON public.crm_channels FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_channel_identities_company" ON public.crm_channel_identities;
+CREATE POLICY "crm_channel_identities_company" ON public.crm_channel_identities FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_person_customer_links_company" ON public.crm_person_customer_links;
+CREATE POLICY "crm_person_customer_links_company" ON public.crm_person_customer_links FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_consent_events_company" ON public.crm_consent_events;
+CREATE POLICY "crm_consent_events_company" ON public.crm_consent_events FOR SELECT TO authenticated
+  USING (company_id = public.current_company_id());
+
+GRANT SELECT, INSERT, UPDATE ON public.crm_persons               TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.crm_organizations         TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.crm_company_contacts      TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.crm_channels              TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.crm_channel_identities    TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.crm_person_customer_links TO authenticated;
+GRANT SELECT                 ON public.crm_consent_events        TO authenticated;
+GRANT SELECT                 ON public.v_crm_consent_status      TO authenticated, service_role;
+
+GRANT ALL ON public.crm_persons               TO service_role;
+GRANT ALL ON public.crm_organizations         TO service_role;
+GRANT ALL ON public.crm_company_contacts      TO service_role;
+GRANT ALL ON public.crm_channels              TO service_role;
+GRANT ALL ON public.crm_channel_identities    TO service_role;
+GRANT ALL ON public.crm_person_customer_links TO service_role;
+GRANT SELECT, INSERT ON public.crm_consent_events TO service_role;
+
+GRANT USAGE, SELECT ON SEQUENCE public.crm_persons_id_seq               TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_organizations_id_seq         TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_company_contacts_id_seq      TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_channels_id_seq              TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_channel_identities_id_seq    TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_person_customer_links_id_seq TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_consent_events_id_seq        TO service_role;
+
+-- =============================================================================
+-- 33. CRM — CAMADA DE CONVERSAS (Fase 3, Entrega 2)
+--     (Ver supabase/migrations/20260709_crm_conversations_layer.sql)
+--
+--     crm_conversations + crm_messages sobre a camada de identidade da
+--     Entrega 1. FK explícita (channel_id, channel_identity_id, person_id),
+--     nunca entity_type/entity_id. Nenhuma tabela pré-existente é tocada —
+--     anexo de mensagem via Media Hub fica para a Entrega 3 (decisão em
+--     revisão: alterar media_usages.entity_type quebraria o type-check de
+--     ALLOWED_ROLES_BY_ENTITY/ROLE_BY_ENTITY do Media Hub, e política de
+--     autorização de anexo merece entrega própria, não correção de tipo).
+--     Idempotência em dois níveis (conversa e mensagem), last_message_at
+--     mantido por trigger. Sem API/UI/N8N real ainda.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS public.crm_conversations (
+  id                   BIGSERIAL         PRIMARY KEY,
+  company_id           INT               NOT NULL REFERENCES public.companies(id),
+  channel_id           BIGINT            NOT NULL REFERENCES public.crm_channels(id),
+  channel_identity_id  BIGINT            NOT NULL REFERENCES public.crm_channel_identities(id),
+  person_id            BIGINT            NOT NULL REFERENCES public.crm_persons(id),
+  status               TEXT              NOT NULL DEFAULT 'open'
+                          CHECK (status IN ('open', 'pending', 'closed')),
+  last_message_at      TIMESTAMPTZ,
+  created_at           TIMESTAMPTZ       NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ       NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_conversations_open_per_identity
+  ON public.crm_conversations(channel_id, channel_identity_id) WHERE status IN ('open', 'pending');
+
+CREATE INDEX IF NOT EXISTS idx_crm_conversations_company ON public.crm_conversations(company_id);
+CREATE INDEX IF NOT EXISTS idx_crm_conversations_person  ON public.crm_conversations(person_id);
+CREATE INDEX IF NOT EXISTS idx_crm_conversations_channel ON public.crm_conversations(channel_id);
+
+CREATE TABLE IF NOT EXISTS public.crm_messages (
+  id                  BIGSERIAL    PRIMARY KEY,
+  company_id          INT          NOT NULL REFERENCES public.companies(id),
+  conversation_id     BIGINT       NOT NULL REFERENCES public.crm_conversations(id),
+  channel_id          BIGINT       NOT NULL REFERENCES public.crm_channels(id),
+  person_id           BIGINT       NOT NULL REFERENCES public.crm_persons(id),
+  direction           TEXT         NOT NULL CHECK (direction IN ('inbound', 'outbound')),
+  status              TEXT         NOT NULL
+                         CHECK (status IN ('received', 'pending', 'sent', 'delivered', 'read', 'failed')),
+  status_updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  content              TEXT,
+  content_type         TEXT        NOT NULL
+                         CHECK (content_type IN ('text', 'image', 'audio', 'video', 'document', 'location', 'other')),
+  failure_reason       TEXT,
+  external_message_id  TEXT,
+  n8n_execution_id     TEXT,
+  created_source       TEXT    NOT NULL
+                         CHECK (created_source IN ('manual', 'automation', 'inbound_webhook', 'other')),
+  created_by           UUID    REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_messages_external_id
+  ON public.crm_messages(channel_id, external_message_id) WHERE external_message_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_messages_n8n_execution
+  ON public.crm_messages(conversation_id, n8n_execution_id) WHERE n8n_execution_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_crm_messages_conversation
+  ON public.crm_messages(conversation_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_crm_messages_company ON public.crm_messages(company_id);
+CREATE INDEX IF NOT EXISTS idx_crm_messages_person  ON public.crm_messages(person_id);
+CREATE INDEX IF NOT EXISTS idx_crm_messages_channel ON public.crm_messages(channel_id);
+
+CREATE OR REPLACE FUNCTION public.crm_conversations_bump_last_message()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  UPDATE public.crm_conversations
+  SET last_message_at = NEW.created_at,
+      updated_at      = NOW()
+  WHERE id = NEW.conversation_id;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_crm_messages_bump_conversation ON public.crm_messages;
+CREATE TRIGGER trg_crm_messages_bump_conversation
+  AFTER INSERT ON public.crm_messages
+  FOR EACH ROW EXECUTE FUNCTION public.crm_conversations_bump_last_message();
+
+ALTER TABLE public.crm_conversations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.crm_messages      ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "crm_conversations_company" ON public.crm_conversations;
+CREATE POLICY "crm_conversations_company" ON public.crm_conversations FOR ALL TO authenticated
+  USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS "crm_messages_company" ON public.crm_messages;
+CREATE POLICY "crm_messages_company" ON public.crm_messages FOR SELECT TO authenticated
+  USING (company_id = public.current_company_id());
+
+GRANT SELECT, INSERT, UPDATE ON public.crm_conversations TO authenticated;
+GRANT SELECT                 ON public.crm_messages      TO authenticated;
+
+GRANT ALL ON public.crm_conversations TO service_role;
+GRANT ALL ON public.crm_messages      TO service_role;
+
+GRANT USAGE, SELECT ON SEQUENCE public.crm_conversations_id_seq TO service_role, authenticated;
+GRANT USAGE, SELECT ON SEQUENCE public.crm_messages_id_seq      TO service_role, authenticated;
+
+-- =============================================================================
+-- 34. CRM — BASE DE INGESTÃO INBOUND (Fase 3, Entrega 3)
+--     (Ver supabase/migrations/20260710_crm_inbound_ingestion_base.sql)
+--
+--     Índice único em crm_channels.provider_instance_identifier (corrige gap
+--     de resolução ambígua de company_id encontrado na auditoria) +
+--     rpc_find_or_create_crm_person_by_identity (atomicidade pessoa+
+--     identidade via pg_advisory_xact_lock). Endpoint POST /api/automations/
+--     crm/inbound-message consome isso — canal não encontrado/inativo
+--     responde 422 (erro permanente de configuração), não 404, para não
+--     induzir retry-loop em N8N/Evolution.
+-- =============================================================================
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_crm_channels_provider_instance
+  ON public.crm_channels(provider_instance_identifier)
+  WHERE provider_instance_identifier IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.rpc_find_or_create_crm_person_by_identity(
+  p_company_id              int,
+  p_channel_type            crm_channel_type,
+  p_value                   text,
+  p_display_name            text,
+  p_person_created_source   text,
+  p_identity_created_source text
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_person_id           bigint;
+  v_channel_identity_id bigint;
+BEGIN
+  IF p_value IS NULL OR btrim(p_value) = '' THEN
+    RAISE EXCEPTION 'value não pode ser vazio.' USING ERRCODE = 'P0001';
+  END IF;
+
+  SELECT person_id, id INTO v_person_id, v_channel_identity_id
+  FROM crm_channel_identities
+  WHERE company_id = p_company_id AND channel_type = p_channel_type AND value = p_value AND active
+  LIMIT 1;
+
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'person_id', v_person_id, 'channel_identity_id', v_channel_identity_id,
+      'person_created', false, 'identity_created', false
+    );
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended(p_company_id::text || ':' || p_channel_type::text || ':' || p_value, 0)
+  );
+
+  SELECT person_id, id INTO v_person_id, v_channel_identity_id
+  FROM crm_channel_identities
+  WHERE company_id = p_company_id AND channel_type = p_channel_type AND value = p_value AND active
+  LIMIT 1;
+
+  IF FOUND THEN
+    RETURN jsonb_build_object(
+      'person_id', v_person_id, 'channel_identity_id', v_channel_identity_id,
+      'person_created', false, 'identity_created', false
+    );
+  END IF;
+
+  INSERT INTO crm_persons (company_id, display_name, created_source)
+  VALUES (p_company_id, COALESCE(NULLIF(btrim(p_display_name), ''), p_value), p_person_created_source)
+  RETURNING id INTO v_person_id;
+
+  INSERT INTO crm_channel_identities (company_id, person_id, channel_type, value, created_source)
+  VALUES (p_company_id, v_person_id, p_channel_type, p_value, p_identity_created_source)
+  RETURNING id INTO v_channel_identity_id;
+
+  RETURN jsonb_build_object(
+    'person_id', v_person_id, 'channel_identity_id', v_channel_identity_id,
+    'person_created', true, 'identity_created', true
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.rpc_find_or_create_crm_person_by_identity
+  TO service_role, authenticated;
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================

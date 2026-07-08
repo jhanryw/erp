@@ -1,0 +1,563 @@
+{
+  "name": "[SANTTORINI] Pós venda v2",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pos-venda-v2",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "n01-webhook",
+      "name": "Webhook — Receber venda",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [240, 300],
+      "webhookId": "pos-venda-v2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json.body ?? $json;\n\nconst saleId = data.sale_id;\nconst isAnonymous = data.is_anonymous === true || data.is_anonymous === 'true';\n\n// Normalize phone: strip non-digits, prepend 55 if missing\nconst rawPhone = String(data.customer_phone ?? '').replace(/\\D/g, '');\nconst phone = rawPhone.length > 0\n  ? (rawPhone.startsWith('55') ? rawPhone : '55' + rawPhone)\n  : null;\n\nreturn [{ json: { sale_id: saleId, phone, is_anonymous: isAnonymous } }];"
+      },
+      "id": "n02-parse",
+      "name": "Parse payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-sale-id",
+              "leftValue": "={{ $json.sale_id }}",
+              "rightValue": "",
+              "operator": { "type": "number", "operation": "isNotEmpty" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n03-validate",
+      "name": "Payload válido?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"error\": \"sale_id ausente ou inválido\" }",
+        "options": { "responseCode": 422 }
+      },
+      "id": "n04-ack-422",
+      "name": "ACK 422",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true }",
+        "options": { "responseCode": 200 }
+      },
+      "id": "n05-ack-200",
+      "name": "ACK 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'webhook_received', n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n06-register-webhook",
+      "name": "Registrar webhook_received",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1120, 180],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/context?sale_id={{ $('Parse payload').item.json.sale_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n07-context-1",
+      "name": "Buscar contexto ERP",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1340, 180]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-cashback",
+              "leftValue": "={{ $json.should_send_cashback_message }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n08-check-cashback",
+      "name": "Enviar mensagem cashback?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [1560, 180]
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "santtorini",
+        "remoteJid": "={{ (() => { const p = String($('Buscar contexto ERP').item.json.phone ?? '').replace(/\\D/g,''); return p.startsWith('55') ? p : '55' + p; })() }}",
+        "messageText": "={{ $('Buscar contexto ERP').item.json.messages.cashback }}",
+        "options_message": {}
+      },
+      "id": "n09-wa-cashback",
+      "name": "WhatsApp — Cashback",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [1780, 60],
+      "credentials": {
+        "evolutionApi": {
+          "id": "oLiz1BT2iiUT1iZp",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'cashback_message_sent', message: $('Buscar contexto ERP').item.json.messages.cashback, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n10-reg-cashback-sent",
+      "name": "Registrar cashback_message_sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2000, 60],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'skipped_cashback_message', skip_reason: $('Buscar contexto ERP').item.json.skip_reasons.cashback_message, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n11-reg-cashback-skip",
+      "name": "Registrar skipped_cashback",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1780, 340],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": 7,
+        "unit": "days"
+      },
+      "id": "n12-wait-csat",
+      "name": "Aguardar 7 dias (CSAT)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2220, 200]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/context?sale_id={{ $('Parse payload').item.json.sale_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n13-context-2",
+      "name": "Buscar contexto ERP (CSAT)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2440, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-csat",
+              "leftValue": "={{ $json.should_send_csat }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n14-check-csat",
+      "name": "Enviar CSAT?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [2660, 200]
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "santtorini",
+        "remoteJid": "={{ (() => { const p = String($('Buscar contexto ERP (CSAT)').item.json.phone ?? '').replace(/\\D/g,''); return p.startsWith('55') ? p : '55' + p; })() }}",
+        "messageText": "={{ $('Buscar contexto ERP (CSAT)').item.json.messages.csat }}",
+        "options_message": {}
+      },
+      "id": "n15-wa-csat",
+      "name": "WhatsApp — CSAT",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [2880, 80],
+      "credentials": {
+        "evolutionApi": {
+          "id": "oLiz1BT2iiUT1iZp",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'csat_sent', message: $('Buscar contexto ERP (CSAT)').item.json.messages.csat, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n16-reg-csat-sent",
+      "name": "Registrar csat_sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3100, 80],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'skipped_csat', skip_reason: $('Buscar contexto ERP (CSAT)').item.json.skip_reasons.csat, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n17-reg-csat-skip",
+      "name": "Registrar skipped_csat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2880, 360],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-expiry-schedule",
+              "leftValue": "={{ $('Buscar contexto ERP (CSAT)').item.json.should_schedule_expiry_reminder }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n18-check-expiry-sched",
+      "name": "Agendar lembrete expiração?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3320, 220]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'flow_ended_no_expiry', n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n19-reg-no-expiry",
+      "name": "Registrar flow_ended_no_expiry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3540, 420],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resumeAt": "specificTime",
+        "date": "={{ $('Buscar contexto ERP (CSAT)').item.json.expiry_reminder_wait_until }}"
+      },
+      "id": "n20-wait-expiry",
+      "name": "Aguardar data do lembrete",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [3540, 80]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/context?sale_id={{ $('Parse payload').item.json.sale_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "n21-context-3",
+      "name": "Buscar contexto ERP (Expiração)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [3760, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 3 },
+          "conditions": [
+            {
+              "id": "cond-expiry-send",
+              "leftValue": "={{ $json.should_send_expiry_reminder }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "true", "singleValue": true }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "n22-check-expiry-send",
+      "name": "Enviar lembrete expiração?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [3980, 80]
+    },
+    {
+      "parameters": {
+        "resource": "messages-api",
+        "instanceName": "santtorini",
+        "remoteJid": "={{ (() => { const p = String($('Buscar contexto ERP (Expiração)').item.json.phone ?? '').replace(/\\D/g,''); return p.startsWith('55') ? p : '55' + p; })() }}",
+        "messageText": "={{ $('Buscar contexto ERP (Expiração)').item.json.messages.expiry_reminder }}",
+        "options_message": {}
+      },
+      "id": "n23-wa-expiry",
+      "name": "WhatsApp — Lembrete Expiração",
+      "type": "n8n-nodes-evolution-api.evolutionApi",
+      "typeVersion": 1,
+      "position": [4200, -60],
+      "credentials": {
+        "evolutionApi": {
+          "id": "oLiz1BT2iiUT1iZp",
+          "name": "Evolution account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'expiry_reminder_sent', message: $('Buscar contexto ERP (Expiração)').item.json.messages.expiry_reminder, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n24-reg-expiry-sent",
+      "name": "Registrar expiry_reminder_sent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4420, -60],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.ERP_URL }}/api/automations/post-sale/events",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "={{ 'Bearer ' + $env.N8N_AUTOMATION_SECRET }}" },
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ sale_id: $('Parse payload').item.json.sale_id, event_type: 'skipped_expiry_reminder', skip_reason: $('Buscar contexto ERP (Expiração)').item.json.skip_reasons.expiry_reminder, n8n_execution_id: $execution.id }) }}",
+        "options": {}
+      },
+      "id": "n25-reg-expiry-skip",
+      "name": "Registrar skipped_expiry",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [4200, 200],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Webhook — Receber venda": {
+      "main": [[{ "node": "Parse payload", "type": "main", "index": 0 }]]
+    },
+    "Parse payload": {
+      "main": [[{ "node": "Payload válido?", "type": "main", "index": 0 }]]
+    },
+    "Payload válido?": {
+      "main": [
+        [{ "node": "ACK 200", "type": "main", "index": 0 }],
+        [{ "node": "ACK 422", "type": "main", "index": 0 }]
+      ]
+    },
+    "ACK 200": {
+      "main": [[{ "node": "Registrar webhook_received", "type": "main", "index": 0 }]]
+    },
+    "Registrar webhook_received": {
+      "main": [[{ "node": "Buscar contexto ERP", "type": "main", "index": 0 }]]
+    },
+    "Buscar contexto ERP": {
+      "main": [[{ "node": "Enviar mensagem cashback?", "type": "main", "index": 0 }]]
+    },
+    "Enviar mensagem cashback?": {
+      "main": [
+        [{ "node": "WhatsApp — Cashback", "type": "main", "index": 0 }],
+        [{ "node": "Registrar skipped_cashback", "type": "main", "index": 0 }]
+      ]
+    },
+    "WhatsApp — Cashback": {
+      "main": [[{ "node": "Registrar cashback_message_sent", "type": "main", "index": 0 }]]
+    },
+    "Registrar cashback_message_sent": {
+      "main": [[{ "node": "Aguardar 7 dias (CSAT)", "type": "main", "index": 0 }]]
+    },
+    "Registrar skipped_cashback": {
+      "main": [[{ "node": "Aguardar 7 dias (CSAT)", "type": "main", "index": 0 }]]
+    },
+    "Aguardar 7 dias (CSAT)": {
+      "main": [[{ "node": "Buscar contexto ERP (CSAT)", "type": "main", "index": 0 }]]
+    },
+    "Buscar contexto ERP (CSAT)": {
+      "main": [[{ "node": "Enviar CSAT?", "type": "main", "index": 0 }]]
+    },
+    "Enviar CSAT?": {
+      "main": [
+        [{ "node": "WhatsApp — CSAT", "type": "main", "index": 0 }],
+        [{ "node": "Registrar skipped_csat", "type": "main", "index": 0 }]
+      ]
+    },
+    "WhatsApp — CSAT": {
+      "main": [[{ "node": "Registrar csat_sent", "type": "main", "index": 0 }]]
+    },
+    "Registrar csat_sent": {
+      "main": [[{ "node": "Agendar lembrete expiração?", "type": "main", "index": 0 }]]
+    },
+    "Registrar skipped_csat": {
+      "main": [[{ "node": "Agendar lembrete expiração?", "type": "main", "index": 0 }]]
+    },
+    "Agendar lembrete expiração?": {
+      "main": [
+        [{ "node": "Aguardar data do lembrete", "type": "main", "index": 0 }],
+        [{ "node": "Registrar flow_ended_no_expiry", "type": "main", "index": 0 }]
+      ]
+    },
+    "Aguardar data do lembrete": {
+      "main": [[{ "node": "Buscar contexto ERP (Expiração)", "type": "main", "index": 0 }]]
+    },
+    "Buscar contexto ERP (Expiração)": {
+      "main": [[{ "node": "Enviar lembrete expiração?", "type": "main", "index": 0 }]]
+    },
+    "Enviar lembrete expiração?": {
+      "main": [
+        [{ "node": "WhatsApp — Lembrete Expiração", "type": "main", "index": 0 }],
+        [{ "node": "Registrar skipped_expiry", "type": "main", "index": 0 }]
+      ]
+    },
+    "WhatsApp — Lembrete Expiração": {
+      "main": [[{ "node": "Registrar expiry_reminder_sent", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": null,
+  "tags": [{ "name": "santtorini" }, { "name": "pos-venda" }],
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7cbd50c24d23d4e923faade24d6892b3edd26143d413d635f73d8abc1874c43b"
+  }
+}

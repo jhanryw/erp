@@ -27,6 +27,20 @@ export type MediaStatus = 'processing' | 'ready' | 'failed'
 export type MediaVisibility = 'public' | 'private'
 export type MediaUsageEntityType = 'product' | 'product_variation' | 'shipment'
 export type MediaUsageRole = 'primary' | 'gallery' | 'logo' | 'banner' | 'avatar' | 'proof' | 'attachment' | 'document'
+export type CrmChannelType = 'whatsapp' | 'instagram' | 'messenger' | 'email' | 'mercado_livre' | 'shopee' | 'site_chat' | 'telegram' | 'other'
+export type CrmPersonCreatedSource = 'manual' | 'import' | 'whatsapp_inbound' | 'instagram_inbound' | 'marketplace_sync' | 'sale_checkout' | 'website_form' | 'other'
+export type CrmChannelIdentityCreatedSource = 'manual' | 'inbound_message' | 'import' | 'sale_checkout' | 'marketplace_sync' | 'other'
+export type CrmChannelProvider = 'evolution' | 'meta_cloud_api' | 'gmail' | 'microsoft365' | 'smtp' | 'mercado_livre' | 'shopee' | 'custom' | 'other'
+export type CrmChannelStatus = 'active' | 'inactive' | 'error'
+export type CrmPersonCustomerLinkMatchSource = 'manual' | 'cpf_match' | 'phone_match' | 'email_match' | 'import' | 'sale_checkout' | 'merge'
+export type CrmConsentPurpose = 'transactional' | 'marketing' | 'other'
+export type CrmConsentEventType = 'granted' | 'revoked'
+export type CrmConsentSource = 'whatsapp_message' | 'web_form' | 'manual' | 'sale_checkout' | 'import' | 'verbal_pos' | 'other'
+export type CrmConversationStatus = 'open' | 'pending' | 'closed'
+export type CrmMessageDirection = 'inbound' | 'outbound'
+export type CrmMessageStatus = 'received' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
+export type CrmMessageContentType = 'text' | 'image' | 'audio' | 'video' | 'document' | 'location' | 'other'
+export type CrmMessageCreatedSource = 'manual' | 'automation' | 'inbound_webhook' | 'other'
 
 export interface Database {
   public: {
@@ -600,8 +614,287 @@ export interface Database {
           position?: number
         }
       }
+      crm_persons: {
+        Row: {
+          id: number
+          company_id: number
+          display_name: string
+          notes: string | null
+          created_source: CrmPersonCreatedSource
+          active: boolean
+          created_at: string
+          updated_at: string
+          created_by: string | null
+        }
+        Insert: {
+          company_id: number
+          display_name: string
+          notes?: string | null
+          created_source: CrmPersonCreatedSource
+          active?: boolean
+          created_by?: string | null
+        }
+        Update: {
+          display_name?: string
+          notes?: string | null
+          active?: boolean
+          updated_at?: string
+        }
+      }
+      crm_organizations: {
+        Row: {
+          id: number
+          company_id: number
+          name: string
+          tax_id: string | null
+          segment: string | null
+          notes: string | null
+          created_source: CrmPersonCreatedSource
+          active: boolean
+          created_at: string
+          updated_at: string
+          created_by: string | null
+        }
+        Insert: {
+          company_id: number
+          name: string
+          tax_id?: string | null
+          segment?: string | null
+          notes?: string | null
+          created_source: CrmPersonCreatedSource
+          active?: boolean
+          created_by?: string | null
+        }
+        Update: {
+          name?: string
+          tax_id?: string | null
+          segment?: string | null
+          notes?: string | null
+          active?: boolean
+          updated_at?: string
+        }
+      }
+      crm_company_contacts: {
+        Row: {
+          id: number
+          company_id: number
+          organization_id: number
+          person_id: number
+          role: string | null
+          is_primary: boolean
+          active: boolean
+          created_at: string
+          created_by: string | null
+        }
+        Insert: {
+          company_id: number
+          organization_id: number
+          person_id: number
+          role?: string | null
+          is_primary?: boolean
+          active?: boolean
+          created_by?: string | null
+        }
+        Update: {
+          role?: string | null
+          is_primary?: boolean
+          active?: boolean
+        }
+      }
+      crm_channels: {
+        Row: {
+          id: number
+          company_id: number
+          name: string
+          channel_type: CrmChannelType
+          provider: CrmChannelProvider
+          provider_instance_identifier: string | null
+          external_config: Json
+          status: CrmChannelStatus
+          active: boolean
+          created_at: string
+          updated_at: string
+          created_by: string | null
+        }
+        Insert: {
+          company_id: number
+          name: string
+          channel_type: CrmChannelType
+          provider: CrmChannelProvider
+          provider_instance_identifier?: string | null
+          external_config?: Json
+          status?: CrmChannelStatus
+          active?: boolean
+          created_by?: string | null
+        }
+        Update: {
+          name?: string
+          provider_instance_identifier?: string | null
+          external_config?: Json
+          status?: CrmChannelStatus
+          active?: boolean
+          updated_at?: string
+        }
+      }
+      crm_channel_identities: {
+        Row: {
+          id: number
+          company_id: number
+          person_id: number
+          channel_type: CrmChannelType
+          value: string
+          verified: boolean
+          created_source: CrmChannelIdentityCreatedSource
+          active: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          company_id: number
+          person_id: number
+          channel_type: CrmChannelType
+          value: string
+          verified?: boolean
+          created_source: CrmChannelIdentityCreatedSource
+          active?: boolean
+        }
+        Update: {
+          verified?: boolean
+          active?: boolean
+          updated_at?: string
+        }
+      }
+      crm_person_customer_links: {
+        Row: {
+          id: number
+          company_id: number
+          person_id: number
+          customer_id: number
+          match_source: CrmPersonCustomerLinkMatchSource
+          is_primary: boolean
+          active: boolean
+          created_at: string
+          created_by: string | null
+        }
+        Insert: {
+          company_id: number
+          person_id: number
+          customer_id: number
+          match_source: CrmPersonCustomerLinkMatchSource
+          is_primary?: boolean
+          active?: boolean
+          created_by?: string | null
+        }
+        Update: {
+          is_primary?: boolean
+          active?: boolean
+        }
+      }
+      crm_consent_events: {
+        Row: {
+          id: number
+          company_id: number
+          person_id: number
+          purpose: CrmConsentPurpose
+          channel_type: CrmChannelType | null
+          event_type: CrmConsentEventType
+          source: CrmConsentSource
+          evidence: Json | null
+          occurred_at: string
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          company_id: number
+          person_id: number
+          purpose: CrmConsentPurpose
+          channel_type?: CrmChannelType | null
+          event_type: CrmConsentEventType
+          source: CrmConsentSource
+          evidence?: Json | null
+          occurred_at?: string
+          created_by?: string | null
+        }
+        Update: never
+      }
+      crm_conversations: {
+        Row: {
+          id: number
+          company_id: number
+          channel_id: number
+          channel_identity_id: number
+          person_id: number
+          status: CrmConversationStatus
+          last_message_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          company_id: number
+          channel_id: number
+          channel_identity_id: number
+          person_id: number
+          status?: CrmConversationStatus
+        }
+        Update: {
+          status?: CrmConversationStatus
+          updated_at?: string
+        }
+      }
+      crm_messages: {
+        Row: {
+          id: number
+          company_id: number
+          conversation_id: number
+          channel_id: number
+          person_id: number
+          direction: CrmMessageDirection
+          status: CrmMessageStatus
+          status_updated_at: string
+          content: string | null
+          content_type: CrmMessageContentType
+          failure_reason: string | null
+          external_message_id: string | null
+          n8n_execution_id: string | null
+          created_source: CrmMessageCreatedSource
+          created_by: string | null
+          created_at: string
+        }
+        Insert: {
+          company_id: number
+          conversation_id: number
+          channel_id: number
+          person_id: number
+          direction: CrmMessageDirection
+          status: CrmMessageStatus
+          content?: string | null
+          content_type: CrmMessageContentType
+          failure_reason?: string | null
+          external_message_id?: string | null
+          n8n_execution_id?: string | null
+          created_source: CrmMessageCreatedSource
+          created_by?: string | null
+        }
+        Update: {
+          status?: CrmMessageStatus
+          status_updated_at?: string
+          failure_reason?: string | null
+          external_message_id?: string | null
+        }
+      }
     }
     Views: {
+      v_crm_consent_status: {
+        Row: {
+          person_id: number
+          company_id: number
+          purpose: CrmConsentPurpose
+          channel_type: CrmChannelType | null
+          status: CrmConsentEventType
+          last_source: CrmConsentSource
+          last_occurred_at: string
+        }
+      }
       v_cashback_balance: {
         Row: {
           customer_id: number
@@ -810,6 +1103,7 @@ export interface Database {
       return_status: ReturnStatus
       abc_curve: AbcCurve
       rfm_segment: RfmSegment
+      crm_channel_type: CrmChannelType
     }
   }
 }
@@ -864,6 +1158,18 @@ export type Stock = Tables<'stock'>
 export type CashbackTransaction = Tables<'cashback_transactions'>
 export type FinanceEntry = Tables<'finance_entries'>
 export type MarketingCost = Tables<'marketing_costs'>
+
+// CRM — camada de identidade (Fase 3, Entrega 1)
+export type CrmPerson = Tables<'crm_persons'>
+export type CrmOrganization = Tables<'crm_organizations'>
+export type CrmCompanyContact = Tables<'crm_company_contacts'>
+export type CrmChannel = Tables<'crm_channels'>
+export type CrmChannelIdentity = Tables<'crm_channel_identities'>
+export type CrmPersonCustomerLink = Tables<'crm_person_customer_links'>
+export type CrmConsentEvent = Tables<'crm_consent_events'>
+export type CrmConsentStatus = Views<'v_crm_consent_status'>
+export type CrmConversation = Tables<'crm_conversations'>
+export type CrmMessage = Tables<'crm_messages'>
 
 // Tipos compostos para queries com JOIN
 export type SaleWithCustomer = Sale & {

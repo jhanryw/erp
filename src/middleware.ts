@@ -25,6 +25,8 @@ const PUBLIC_PATHS = [
   '/api/shipping/cep',       // lookup de CEP (sem dados sensíveis)
   '/api/integrations/nuvemshop/callback',
   '/api/webhooks/',          // webhooks externos (Nuvemshop, etc.) — sem sessão
+  '/api/automations/',       // automação N8N→ERP — protegida por secret próprio (Bearer), não sessão
+  '/api/jobs/',              // cron jobs — protegidos por CRON_SECRET próprio, não sessão
 ]
 
 export async function middleware(request: NextRequest) {
