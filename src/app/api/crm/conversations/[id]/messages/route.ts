@@ -74,9 +74,21 @@ export async function POST(request: Request, { params }: { params: { id: string 
         content_type: result.data.message.content_type,
         status: result.data.message.status,
         external_message_id: result.data.message.external_message_id,
+        provider_error: result.data.providerError,
+        status_update_error: result.data.statusUpdateError,
       },
     })
   }
 
-  return ok({ message: result.data.message, deduplicated: result.data.deduplicated }, result.data.deduplicated ? 200 : 201)
+  // provider_error/status_update_error sempre presentes no corpo (null quando
+  // não houve problema) — nunca só no log do servidor. Ver auditoria da
+  // Entrega 6: antes desta correção, falha ao gravar sent/failed após o
+  // envio real ficava invisível pro chamador (mensagem parecia "sucesso",
+  // status ficava pending sem explicação).
+  return ok({
+    message: result.data.message,
+    deduplicated: result.data.deduplicated,
+    provider_error: result.data.providerError,
+    status_update_error: result.data.statusUpdateError,
+  }, result.data.deduplicated ? 200 : 201)
 }

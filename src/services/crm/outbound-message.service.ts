@@ -45,6 +45,10 @@ export interface SendOutboundMessageInput {
 export interface SendOutboundMessageResult {
   message: CrmMessage
   deduplicated: boolean
+  /** Erro reportado pelo provider no envio (sendResult.ok=false ou provider sem implementação). Nunca fica só no log. */
+  providerError: string | null
+  /** Erro ao gravar sent/failed no banco após o envio (RPC falhou) — mensagem pode ter sido enviada de verdade mas o ERP não conseguiu registrar. Nunca fica só no log. */
+  statusUpdateError: string | null
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -60,10 +64,15 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
 /** content_type que representa arquivo exige media_public_id — nada pra enviar sem isso. */
 const MEDIA_REQUIRED_CONTENT_TYPES: CrmMessageContentType[] = ['image', 'audio', 'video', 'document']
 
-async function finalize(messageId: number, companyId: number): Promise<ServiceOutcome<SendOutboundMessageResult>> {
+async function finalize(
+  messageId: number,
+  companyId: number,
+  providerError: string | null = null,
+  statusUpdateError: string | null = null,
+): Promise<ServiceOutcome<SendOutboundMessageResult>> {
   const finalResult = await getMessage(messageId, companyId)
   if (!finalResult.ok) return failure(finalResult.error, finalResult.status)
-  return success({ message: finalResult.data, deduplicated: false })
+  return success({ message: finalResult.data, deduplicated: false, providerError, statusUpdateError })
 }
 
 // ─── Operação ──────────────────────────────────────────────────────────────────
@@ -81,7 +90,7 @@ export async function sendOutboundMessage(
   const existing = await findMessageByDedupeKey(input.conversationId, input.clientDedupeKey, input.companyId)
   if (!existing.ok) return failure(existing.error)
   if (existing.data) {
-    return success({ message: existing.data, deduplicated: true })
+    return success({ message: existing.data, deduplicated: true, providerError: null, statusUpdateError: null })
   }
 
   if (MEDIA_REQUIRED_CONTENT_TYPES.includes(input.contentType) && !input.mediaPublicId) {
@@ -140,7 +149,7 @@ export async function sendOutboundMessage(
     if (messageResult.status === 409) {
       const retried = await findMessageByDedupeKey(input.conversationId, input.clientDedupeKey, input.companyId)
       if (retried.ok && retried.data) {
-        return success({ message: retried.data, deduplicated: true })
+        return success({ message: retried.data, deduplicated: true, providerError: null, statusUpdateError: null })
       }
     }
     return failure(messageResult.error, messageResult.status)
@@ -174,17 +183,14 @@ export async function sendOutboundMessage(
 
   const provider = getProvider(channel.provider)
   if (!provider) {
-    const failResult = await applyProviderStatusUpdate(
-      message.id,
-      input.companyId,
-      'failed',
-      null,
-      `Provider '${channel.provider}' não tem implementação de envio.`,
-    )
+    const providerErrorMsg = `Provider '${channel.provider}' não tem implementação de envio.`
+    const failResult = await applyProviderStatusUpdate(message.id, input.companyId, 'failed', null, providerErrorMsg)
     if (!failResult.ok) {
       console.error('[sendOutboundMessage] Falha ao aplicar status failed (provider ausente)', { messageId: message.id, error: failResult.error })
     }
-    return finalize(message.id, input.companyId)
+    // providerError sempre exposto (o problema é real, mesmo que a gravação de 'failed' tenha funcionado);
+    // statusUpdateError só quando a própria gravação falhou — os dois nunca ficam só no console.error.
+    return finalize(message.id, input.companyId, providerErrorMsg, failResult.ok ? null : failResult.error)
   }
 
   const sendResult = await provider.sendMessage({
@@ -210,5 +216,10 @@ export async function sendOutboundMessage(
     })
   }
 
-  return finalize(message.id, input.companyId)
+  return finalize(
+    message.id,
+    input.companyId,
+    sendResult.ok ? null : (sendResult.errorMessage ?? 'Falha ao enviar mensagem.'),
+    statusResult.ok ? null : statusResult.error,
+  )
 }
