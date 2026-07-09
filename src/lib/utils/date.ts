@@ -39,6 +39,21 @@ export function formatMonthYear(date: string | Date): string {
   return formatDate(date, 'MMMM yyyy')
 }
 
+/**
+ * Rótulo de separador de dia (Thread do CRM) — "Hoje"/"Ontem" comparando no
+ * fuso brasileiro fixo (mesmo padrão de brazilDate/brazilSubDays), senão
+ * data completa por extenso.
+ */
+export function formatDayLabel(date: string | Date): string {
+  const d = typeof date === 'string' ? parseISO(date) : date
+  if (!isValid(d)) return '—'
+
+  const day = brazilDate(d)
+  if (day === brazilDate()) return 'Hoje'
+  if (day === brazilSubDays(1)) return 'Ontem'
+  return formatDate(d, "dd 'de' MMMM 'de' yyyy")
+}
+
 export function toISODate(date: Date): string {
   return brazilDate(date)
 }

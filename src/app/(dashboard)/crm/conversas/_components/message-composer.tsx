@@ -1,9 +1,10 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { Paperclip, Send, X } from 'lucide-react'
+import { FileText, Music, Paperclip, Send, Video, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { formatFileSize } from '@/lib/utils/file-size'
 
 // mime real -> content_type do modelo de crm_messages (Entregas 2/4/6) —
 // mesmo mapeamento conceitual já usado no inbound, aqui do lado outbound.
@@ -12,6 +13,15 @@ function contentTypeForMime(mimeType: string): string {
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.startsWith('video/')) return 'video'
   return 'document'
+}
+
+/** Já foi feito upload deste anexo com sucesso — reenvio após falha do POST de
+ *  mensagem reaproveita o mesmo public_id em vez de subir o arquivo de novo
+ *  (achado da auditoria da Entrega 8: sem isso, cada retry criava um registro
+ *  órfão novo em `media`). */
+interface UploadedMedia {
+  publicId: string
+  contentType: string
 }
 
 export function MessageComposer({
@@ -23,10 +33,36 @@ export function MessageComposer({
 }) {
   const [text, setText] = useState('')
   const [attachedFile, setAttachedFile] = useState<File | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [uploadedMedia, setUploadedMedia] = useState<UploadedMedia | null>(null)
   const [sending, setSending] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const canSend = (text.trim().length > 0 || attachedFile !== null) && !sending
+
+  // Preview de imagem antes do envio — só gera object URL pra imagem (é o
+  // único tipo que vale a pena prévia visual aqui); outros tipos mostram
+  // ícone + nome + tamanho. Revoga sempre que o arquivo muda ou o composer desmonta.
+  useEffect(() => {
+    if (!attachedFile || !attachedFile.type.startsWith('image/')) {
+      setPreviewUrl(null)
+      return
+    }
+    const url = URL.createObjectURL(attachedFile)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [attachedFile])
+
+  function handleAttach(file: File | null) {
+    setAttachedFile(file)
+    setUploadedMedia(null) // arquivo novo — upload anterior (se houver) não vale mais
+  }
+
+  function handleRemoveAttachment() {
+    setAttachedFile(null)
+    setUploadedMedia(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   async function handleSend() {
     if (!canSend) return
@@ -36,25 +72,34 @@ export function MessageComposer({
       let mediaPublicId: string | null = null
       let contentType = 'text'
 
-      // Upload primeiro, SEPARADO do envio — nunca base64 no corpo do envio
-      // outbound (decisão já tomada na Entrega 6). POST /api/media já é
-      // acessível a qualquer usuário autenticado, sem mudança nenhuma aqui.
       if (attachedFile) {
-        const formData = new FormData()
-        formData.append('file', attachedFile)
-        formData.append('visibility', 'private')
-
-        const uploadRes = await fetch('/api/media', { method: 'POST', body: formData })
-        const uploadJson = await uploadRes.json()
-
-        if (!uploadRes.ok) {
-          toast.error('Erro ao enviar anexo', { description: uploadJson.error })
-          setSending(false)
-          return
-        }
-
-        mediaPublicId = uploadJson.media.public_id
         contentType = contentTypeForMime(attachedFile.type)
+
+        if (uploadedMedia) {
+          // Retry após falha anterior no envio da mensagem — anexo já está
+          // no Media Hub, não sobe de novo.
+          mediaPublicId = uploadedMedia.publicId
+        } else {
+          // Upload primeiro, SEPARADO do envio — nunca base64 no corpo do
+          // envio outbound (decisão já tomada na Entrega 6). POST /api/media
+          // já é acessível a qualquer usuário autenticado, sem mudança
+          // nenhuma aqui.
+          const formData = new FormData()
+          formData.append('file', attachedFile)
+          formData.append('visibility', 'private')
+
+          const uploadRes = await fetch('/api/media', { method: 'POST', body: formData })
+          const uploadJson = await uploadRes.json()
+
+          if (!uploadRes.ok) {
+            toast.error('Erro ao enviar anexo', { description: uploadJson.error })
+            setSending(false)
+            return
+          }
+
+          mediaPublicId = uploadJson.media.public_id
+          setUploadedMedia({ publicId: mediaPublicId!, contentType })
+        }
       }
 
       const clientDedupeKey = crypto.randomUUID()
@@ -85,7 +130,7 @@ export function MessageComposer({
       }
 
       setText('')
-      setAttachedFile(null)
+      handleRemoveAttachment()
       onSent()
     } catch {
       toast.error('Erro de rede ao enviar mensagem')
@@ -94,13 +139,32 @@ export function MessageComposer({
     }
   }
 
+  const attachmentIcon = attachedFile?.type.startsWith('video/')
+    ? Video
+    : attachedFile?.type.startsWith('audio/')
+      ? Music
+      : FileText
+  const AttachmentIcon = attachmentIcon
+
   return (
     <div className="border-t border-border p-3">
       {attachedFile && (
-        <div className="flex items-center gap-2 mb-2 text-xs text-text-secondary bg-bg-overlay rounded-lg px-2 py-1.5 w-fit">
-          <Paperclip className="w-3.5 h-3.5" />
-          <span className="truncate max-w-[200px]">{attachedFile.name}</span>
-          <button type="button" onClick={() => setAttachedFile(null)} className="text-text-muted hover:text-error">
+        <div className="flex items-center gap-2 mb-2 text-xs text-text-secondary bg-bg-overlay rounded-lg px-2 py-1.5 w-fit max-w-full">
+          {previewUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={previewUrl} alt="Preview do anexo" className="w-10 h-10 object-cover rounded-md flex-shrink-0" />
+          ) : (
+            <AttachmentIcon className="w-3.5 h-3.5 flex-shrink-0" />
+          )}
+          <span className="truncate max-w-[180px]">{attachedFile.name}</span>
+          <span className="text-text-muted flex-shrink-0">({formatFileSize(attachedFile.size)})</span>
+          <button
+            type="button"
+            onClick={handleRemoveAttachment}
+            disabled={sending}
+            aria-label="Remover anexo"
+            className="text-text-muted hover:text-error disabled:opacity-50 disabled:pointer-events-none flex-shrink-0"
+          >
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -111,7 +175,7 @@ export function MessageComposer({
           ref={fileInputRef}
           type="file"
           className="hidden"
-          onChange={(e) => setAttachedFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => handleAttach(e.target.files?.[0] ?? null)}
         />
         <Button
           type="button"
@@ -138,8 +202,8 @@ export function MessageComposer({
           className="flex-1 resize-none rounded-xl border border-border bg-bg-elevated px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand disabled:opacity-60"
         />
 
-        <Button type="button" onClick={handleSend} disabled={!canSend} className="flex-shrink-0">
-          <Send className="w-4 h-4" />
+        <Button type="button" onClick={handleSend} disabled={!canSend} loading={sending} className="flex-shrink-0">
+          {!sending && <Send className="w-4 h-4" />}
         </Button>
       </div>
     </div>
