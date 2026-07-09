@@ -74,6 +74,11 @@ export function ConversationList({
   selectedConversationId,
   onSelect,
 }: ConversationListProps) {
+  // DEBUG temporário (Entrega 7) — remover depois de localizar o bug.
+  // Sem useMemo/filtro/sort neste componente: `conversations` é renderizado
+  // exatamente como chega via prop, sem transformação intermediária nenhuma.
+  console.log('[DEBUG] render conversations', conversations)
+
   return (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b border-border flex flex-col gap-2">
@@ -109,6 +114,9 @@ export function ConversationList({
         {!loading && conversations.length === 0 && (
           <p className="text-sm text-text-muted text-center p-8">Nenhuma conversa encontrada.</p>
         )}
+
+        {/* DEBUG temporário (Entrega 7) — remover depois de localizar o bug. */}
+        {console.log('[DEBUG] map length', conversations.length) as unknown as null}
 
         {conversations.map((conversation) => (
           <button

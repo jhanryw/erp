@@ -36,9 +36,21 @@ export function Inbox() {
 
       const res = await fetch(`/api/crm/conversations?${params.toString()}`)
       const json = await res.json()
-      setConversations(res.ok ? (json.conversations ?? []) : [])
+
+      // DEBUG temporário (Entrega 7) — remover depois de localizar o bug.
+      console.log('[DEBUG] API conversations', json.conversations)
+
+      const nextConversations = res.ok ? (json.conversations ?? []) : []
+
+      // DEBUG temporário (Entrega 7) — remover depois de localizar o bug.
+      console.log('[DEBUG] setConversations', nextConversations.length)
+
+      setConversations(nextConversations)
       setHasMore(res.ok ? Boolean(json.has_more) : false)
-    } catch {
+    } catch (err) {
+      // DEBUG temporário (Entrega 7) — antes este catch era mudo, por isso
+      // uma falha de parse/rede nunca aparecia em lugar nenhum.
+      console.error('[DEBUG] loadConversations() caiu no catch', err)
       setConversations([])
     } finally {
       setLoading(false)
