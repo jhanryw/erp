@@ -3171,5 +3171,29 @@ GRANT EXECUTE ON FUNCTION public.rpc_apply_crm_message_status(int, bigint, text,
   TO service_role, authenticated;
 
 -- =============================================================================
+-- 38. CRM — INBOX OMNICHANNEL (Fase 3, Entrega 7)
+--     (Ver supabase/migrations/20260714_crm_inbox_views.sql)
+--
+--     1 view read-only — "última mensagem por conversa" resolvida por
+--     consulta (DISTINCT ON), não por coluna denormalizada em
+--     crm_conversations (decisão mantida da Entrega 2). Sem tabela nova,
+--     sem coluna nova, sem RPC nova.
+-- =============================================================================
+
+CREATE OR REPLACE VIEW public.v_crm_conversation_last_message AS
+SELECT DISTINCT ON (conversation_id)
+  conversation_id,
+  id AS message_id,
+  content,
+  content_type,
+  direction,
+  status,
+  created_at
+FROM public.crm_messages
+ORDER BY conversation_id, created_at DESC, id DESC;
+
+GRANT SELECT ON public.v_crm_conversation_last_message TO authenticated, service_role;
+
+-- =============================================================================
 -- FIM DO SCHEMA COMPLETO
 -- =============================================================================

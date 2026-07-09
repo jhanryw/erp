@@ -4,6 +4,10 @@ import { z } from 'zod'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { sendOutboundMessage } from '@/services/crm/outbound-message.service'
+import { getConversation } from '@/services/crm/conversations.service'
+import { listMessagesByConversation } from '@/services/crm/messages.service'
+import { listMediaByEntities } from '@/services/media.service'
+import type { ResolvedMediaUsageWithEntity } from '@/services/media.service'
 import { ok, err, forbidden, validationError } from '@/lib/api/response'
 import type { Json } from '@/types/database.types'
 
@@ -15,6 +19,55 @@ const schema = z.object({
   reply_to_message_id: z.coerce.number().int().positive().optional(),
   client_dedupe_key: z.string().uuid('client_dedupe_key deve ser um UUID gerado pelo cliente antes do envio'),
 })
+
+// ─── GET /api/crm/conversations/[id]/messages ───────────────────────────────
+// Lista mensagens da conversa (thread da Inbox) — reaproveita
+// listMessagesByConversation() (Entrega 2, ganhou paginação nesta entrega)
+// e resolve anexos em lote via listMediaByEntities() (novo, Media Hub),
+// nunca 1 query por mensagem.
+export async function GET(request: Request, { params }: { params: { id: string } }) {
+  const { user, response: unauth } = await requireRole('usuario')
+  if (unauth) return unauth
+  if (!user.company_id) return forbidden()
+
+  const conversationId = Number(params.id)
+  if (!Number.isFinite(conversationId) || conversationId <= 0) {
+    return err('ID de conversa inválido.', 400)
+  }
+
+  const conversationResult = await getConversation(conversationId, user.company_id)
+  if (!conversationResult.ok) return err(conversationResult.error, conversationResult.status)
+
+  const { searchParams } = new URL(request.url)
+  const limitParam = searchParams.get('limit')
+  const beforeIdParam = searchParams.get('before_id')
+
+  const messagesResult = await listMessagesByConversation(conversationId, user.company_id, {
+    limit: limitParam ? Number(limitParam) : undefined,
+    beforeId: beforeIdParam ? Number(beforeIdParam) : undefined,
+  })
+  if (!messagesResult.ok) return err(messagesResult.error, messagesResult.status)
+
+  const messages = messagesResult.data
+  const messageIds = messages.map((message) => String(message.id))
+
+  const mediaResult = await listMediaByEntities('crm_message', messageIds, user.company_id)
+  const mediaByMessageId = new Map<string, ResolvedMediaUsageWithEntity[]>()
+  if (mediaResult.ok) {
+    for (const item of mediaResult.data) {
+      const existing = mediaByMessageId.get(item.entity_id) ?? []
+      existing.push(item)
+      mediaByMessageId.set(item.entity_id, existing)
+    }
+  }
+
+  const messagesWithMedia = messages.map((message) => ({
+    ...message,
+    media: mediaByMessageId.get(String(message.id)) ?? [],
+  }))
+
+  return ok({ messages: messagesWithMedia })
+}
 
 // ─── POST /api/crm/conversations/[id]/messages ─────────────────────────────────
 // Envia uma mensagem outbound dentro de uma conversa já existente (sem

@@ -588,6 +588,67 @@ export async function listPrimaryMediaByEntities(
   return success(items)
 }
 
+export interface ResolvedMediaUsageWithEntity extends ResolvedMediaUsage {
+  entity_id: string
+}
+
+/**
+ * Versão em lote de listMediaByEntity() — todas as mídias (qualquer role,
+ * não só 'primary') de várias entidades numa única query. Usado pela Inbox
+ * do CRM (Entrega 7) pra resolver anexo de várias mensagens de uma vez sem
+ * N+1. Retorno é uma lista achatada com `entity_id` em cada item — quem
+ * chama agrupa por entidade (ex.: por `crm_messages.id`).
+ */
+export async function listMediaByEntities(
+  entityType: MediaUsageEntityType,
+  entityIds: string[],
+  companyId: number,
+): Promise<ServiceOutcome<ResolvedMediaUsageWithEntity[]>> {
+  if (entityIds.length === 0) return success([])
+
+  const admin = createAdminClient()
+
+  const { data, error } = await admin
+    .from('media_usages')
+    .select('id, entity_id, role, position, media:media_id (*)')
+    .eq('entity_type', entityType)
+    .in('entity_id', entityIds)
+    .eq('company_id', companyId)
+    .order('entity_id', { ascending: true })
+    .order('role', { ascending: true })
+    .order('position', { ascending: true }) as unknown as {
+      data: Array<{ id: number; entity_id: string; role: MediaUsageRole; position: number; media: Media }> | null
+      error: { message: string } | null
+    }
+
+  if (error) return failure(error.message)
+
+  const items: ResolvedMediaUsageWithEntity[] = []
+  for (const row of data ?? []) {
+    const resolved = await resolveMediaUrl(row.media)
+    if (!resolved.ok) continue
+
+    items.push({
+      entity_id: row.entity_id,
+      usage_id: row.id,
+      public_id: row.media.public_id,
+      role: row.role,
+      position: row.position,
+      mime_type: row.media.mime_type,
+      extension: row.media.extension,
+      file_size: row.media.file_size,
+      visibility: row.media.visibility,
+      url: resolved.data.url,
+      url_expires_at: resolved.data.expiresAt,
+      alt_text: row.media.alt_text,
+      active: row.media.active,
+      created_at: row.media.created_at,
+    })
+  }
+
+  return success(items)
+}
+
 // ─── Troca atômica de primary ───────────────────────────────────────────────
 
 export interface SetPrimaryMediaResult {

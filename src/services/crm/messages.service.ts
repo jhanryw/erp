@@ -154,20 +154,43 @@ export async function getMessage(messageId: number, companyId: number): Promise<
   return success(data)
 }
 
+export interface ListMessagesOptions {
+  /** Default 50 — Entrega 7 (Inbox) é o primeiro consumidor real desta função. */
+  limit?: number
+  /** Pagina pra trás (mensagens mais antigas que este id) — "carregar mais" no topo do thread. */
+  beforeId?: number
+}
+
+const DEFAULT_MESSAGE_LIMIT = 50
+
+/**
+ * Lista mensagens de uma conversa. Busca as mais recentes primeiro
+ * internamente (pra `beforeId` paginar de forma natural — "antes desta
+ * mensagem"), mas devolve em ordem cronológica ascendente, pronta pra
+ * renderizar direto num thread de chat sem o chamador precisar inverter.
+ */
 export async function listMessagesByConversation(
   conversationId: number,
   companyId: number,
+  options?: ListMessagesOptions,
 ): Promise<ServiceOutcome<CrmMessage[]>> {
   const admin = createAdminClient()
-  const { data, error } = await admin
+  const limit = options?.limit ?? DEFAULT_MESSAGE_LIMIT
+
+  let query = (admin as any)
     .from('crm_messages')
     .select('*')
     .eq('conversation_id', conversationId)
     .eq('company_id', companyId)
-    .order('created_at', { ascending: true }) as unknown as { data: CrmMessage[] | null; error: { message: string } | null }
+
+  if (options?.beforeId) query = query.lt('id', options.beforeId)
+
+  const { data, error } = await query
+    .order('id', { ascending: false })
+    .limit(limit) as unknown as { data: CrmMessage[] | null; error: { message: string } | null }
 
   if (error) return failure(error.message)
-  return success(data ?? [])
+  return success((data ?? []).reverse())
 }
 
 /**

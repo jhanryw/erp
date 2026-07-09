@@ -905,6 +905,17 @@ export interface Database {
           last_occurred_at: string
         }
       }
+      v_crm_conversation_last_message: {
+        Row: {
+          conversation_id: number
+          message_id: number
+          content: string | null
+          content_type: CrmMessageContentType
+          direction: CrmMessageDirection
+          status: CrmMessageStatus
+          created_at: string
+        }
+      }
       v_cashback_balance: {
         Row: {
           customer_id: number
@@ -1180,6 +1191,7 @@ export type CrmConsentEvent = Tables<'crm_consent_events'>
 export type CrmConsentStatus = Views<'v_crm_consent_status'>
 export type CrmConversation = Tables<'crm_conversations'>
 export type CrmMessage = Tables<'crm_messages'>
+export type CrmConversationLastMessage = Views<'v_crm_conversation_last_message'>
 
 // Tipos compostos para queries com JOIN
 export type SaleWithCustomer = Sale & {
