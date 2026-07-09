@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { MessageSquare } from 'lucide-react'
+import { cn } from '@/lib/utils/cn'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Spinner } from '@/components/ui/spinner'
 import { ConversationList, type ConversationListItem } from './conversation-list'
@@ -37,20 +38,11 @@ export function Inbox() {
       const res = await fetch(`/api/crm/conversations?${params.toString()}`)
       const json = await res.json()
 
-      // DEBUG temporário (Entrega 7) — remover depois de localizar o bug.
-      console.log('[DEBUG] API conversations', json.conversations)
-
       const nextConversations = res.ok ? (json.conversations ?? []) : []
-
-      // DEBUG temporário (Entrega 7) — remover depois de localizar o bug.
-      console.log('[DEBUG] setConversations', nextConversations.length)
 
       setConversations(nextConversations)
       setHasMore(res.ok ? Boolean(json.has_more) : false)
-    } catch (err) {
-      // DEBUG temporário (Entrega 7) — antes este catch era mudo, por isso
-      // uma falha de parse/rede nunca aparecia em lugar nenhum.
-      console.error('[DEBUG] loadConversations() caiu no catch', err)
+    } catch {
       setConversations([])
     } finally {
       setLoading(false)
@@ -79,7 +71,14 @@ export function Inbox() {
       <h1 className="text-xl font-semibold text-text-primary mb-1">CRM — Conversas</h1>
 
       <div className="flex h-[calc(100vh-160px)] min-h-[500px] gap-4">
-        <div className="w-[360px] flex-shrink-0 flex flex-col card overflow-hidden">
+        {/* Mobile/tablet (<lg): tela única — lista OU thread, nunca as duas.
+            Desktop (lg+): sempre as duas colunas lado a lado. */}
+        <div
+          className={cn(
+            'w-full lg:w-[360px] lg:flex-shrink-0 flex-col card overflow-hidden',
+            selectedConversationId === null ? 'flex' : 'hidden lg:flex'
+          )}
+        >
           <ConversationList
             conversations={conversations}
             loading={loading}
@@ -94,7 +93,12 @@ export function Inbox() {
           />
         </div>
 
-        <div className="flex-1 card overflow-hidden flex flex-col">
+        <div
+          className={cn(
+            'flex-1 card overflow-hidden flex-col',
+            selectedConversationId === null ? 'hidden lg:flex' : 'flex'
+          )}
+        >
           {selectedConversationId === null ? (
             <EmptyState
               icon={<MessageSquare className="w-6 h-6" />}
@@ -105,6 +109,7 @@ export function Inbox() {
             <ConversationThread
               conversationId={selectedConversationId}
               onMessageSent={handleMessageSent}
+              onBack={() => setSelectedConversationId(null)}
             />
           )}
         </div>

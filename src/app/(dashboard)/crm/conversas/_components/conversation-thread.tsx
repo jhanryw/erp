@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { FileText, MapPin, User as UserIcon, Check, CheckCheck, Clock, AlertCircle } from 'lucide-react'
+import { ArrowLeft, FileText, MapPin, User as UserIcon, Check, CheckCheck, Clock, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { formatDateTime } from '@/lib/utils/date'
 import { Spinner } from '@/components/ui/spinner'
@@ -70,9 +70,11 @@ function MessageAttachment({ media }: { media: MessageMedia }) {
 export function ConversationThread({
   conversationId,
   onMessageSent,
+  onBack,
 }: {
   conversationId: number
   onMessageSent: () => void
+  onBack: () => void
 }) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -110,6 +112,14 @@ export function ConversationThread({
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Voltar para a lista"
+          className="lg:hidden flex-shrink-0 p-1 -ml-1 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+        </button>
         <div className="w-8 h-8 rounded-full bg-bg-overlay flex items-center justify-center flex-shrink-0">
           <UserIcon className="w-4 h-4 text-text-secondary" />
         </div>
