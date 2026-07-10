@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { toast } from 'sonner'
 import { MessageSquare } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -57,11 +58,21 @@ export function Inbox() {
       const res = await fetch(`/api/crm/conversations?${params.toString()}`)
       const json = await res.json()
 
-      const nextConversations = res.ok ? (json.conversations ?? []) : []
+      // Antes desta correção, falha de API (ex.: RPC de busca ausente/erro
+      // no banco) virava lista vazia sem nenhum sinal — indistinguível de
+      // "nenhum resultado" pra quem está atendendo. Erro sempre visível
+      // agora, nunca só um array vazio silencioso.
+      if (!res.ok) {
+        toast.error('Erro ao carregar conversas', { description: json.error })
+        setConversations([])
+        setHasMore(false)
+        return
+      }
 
-      setConversations(nextConversations)
-      setHasMore(res.ok ? Boolean(json.has_more) : false)
+      setConversations(json.conversations ?? [])
+      setHasMore(Boolean(json.has_more))
     } catch {
+      toast.error('Erro de rede ao carregar conversas')
       setConversations([])
     } finally {
       setLoading(false)
