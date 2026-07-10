@@ -37,7 +37,7 @@ export type AuditResource =
   | 'crm_person' | 'crm_organization' | 'crm_company_contact'
   | 'crm_channel' | 'crm_channel_identity'
   | 'crm_person_customer_link' | 'crm_consent_event'
-  | 'crm_conversation' | 'crm_message'
+  | 'crm_conversation' | 'crm_message' | 'crm_conversation_note'
 
 export interface AuditPayload {
   action:         AuditAction

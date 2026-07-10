@@ -170,7 +170,15 @@ export async function listConversationsByPerson(
 /**
  * Transição de status (ex.: encerrar/reabrir conversa). Consumida desde a
  * Entrega 6 (outbound reabre conversa 'closed' ao enviar) e pela Inbox
- * (Entrega 7, botão de encerrar/reabrir).
+ * (Entrega 7, botão de encerrar/reabrir; Entrega 9, ação manual de
+ * abrir/pendente/encerrar). Transições livres entre os 3 status — sem
+ * máquina de estados (decisão explícita do usuário na Entrega 9).
+ *
+ * Risco encontrado na auditoria da Entrega 9: existe no máximo 1 conversa
+ * 'open'/'pending' por (channel_id, channel_identity_id) — índice único
+ * parcial (Entrega 2). Reabrir manualmente uma conversa 'closed' quando já
+ * existe outra 'open'/'pending' pro mesmo canal/identidade viola esse
+ * índice — tratado aqui como 409 com mensagem clara, não como 500 genérico.
  */
 export async function updateConversationStatus(
   conversationId: number,
@@ -182,10 +190,52 @@ export async function updateConversationStatus(
     .from('crm_conversations')
     .update({ status, updated_at: new Date().toISOString() })
     .eq('id', conversationId)
-    .eq('company_id', companyId) as { error: { message: string } | null }
+    .eq('company_id', companyId) as { error: { code?: string; message: string } | null }
 
-  if (error) return failure(error.message)
+  if (error) {
+    if (error.code === '23505') {
+      return failure('Já existe outra conversa aberta ou pendente para este mesmo contato/canal — encerre-a antes de reabrir esta.', 409)
+    }
+    return failure(error.message)
+  }
   return success(undefined)
+}
+
+/**
+ * Contagem de conversas por status, empresa inteira — independente de
+ * filtro/paginação da listagem (Entrega 9). Uma query de agregação, sem
+ * relação com listConversations().
+ */
+export interface ConversationCounts {
+  open: number
+  pending: number
+  closed: number
+}
+
+export async function getConversationCounts(companyId: number): Promise<ServiceOutcome<ConversationCounts>> {
+  const admin = createAdminClient()
+
+  // 3 COUNT(*) leves (head: true — não traz linhas), não uma listagem
+  // completa contada em memória; escala independente do total de conversas.
+  const [openResult, pendingResult, closedResult] = await Promise.all(
+    (['open', 'pending', 'closed'] as const).map((status) =>
+      admin
+        .from('crm_conversations')
+        .select('*', { count: 'exact', head: true })
+        .eq('company_id', companyId)
+        .eq('status', status) as unknown as Promise<{ count: number | null; error: { message: string } | null }>
+    )
+  )
+
+  for (const result of [openResult, pendingResult, closedResult]) {
+    if (result.error) return failure(result.error.message)
+  }
+
+  return success({
+    open: openResult.count ?? 0,
+    pending: pendingResult.count ?? 0,
+    closed: closedResult.count ?? 0,
+  })
 }
 
 // ─── Listagem company-wide (Entrega 7 — Inbox) ────────────────────────────────
@@ -209,6 +259,11 @@ export interface ConversationListItemLastMessage {
   createdAt: string
 }
 
+export interface ConversationListItemChannelIdentity {
+  id: number
+  value: string
+}
+
 export interface ConversationListItem {
   id: number
   channelId: number
@@ -219,6 +274,7 @@ export interface ConversationListItem {
   createdAt: string
   person: ConversationListItemPerson | null
   channel: ConversationListItemChannel | null
+  channelIdentity: ConversationListItemChannelIdentity | null
   lastMessage: ConversationListItemLastMessage | null
 }
 
@@ -226,6 +282,10 @@ export interface ListConversationsOptions {
   status?: CrmConversationStatus
   channelId?: number
   personId?: number
+  /** Nome da pessoa, valor da identidade de canal (telefone/handle) ou
+   *  conteúdo da última mensagem — via rpc_search_crm_conversations()
+   *  (Entrega 9), nunca `.or()` concatenado com o termo do usuário. */
+  search?: string
   limit?: number
   offset?: number
 }
@@ -240,10 +300,11 @@ const DEFAULT_LIST_LIMIT = 30
 /**
  * Lista conversas de toda a empresa (não de uma pessoa só — diferente de
  * listConversationsByPerson) — é a consulta principal da Inbox. Resolve
- * pessoa/canal via embedded select (FK direta) e a última mensagem via
- * v_crm_conversation_last_message numa segunda query em lote (não é FK,
- * não dá pra embutir no mesmo select) — 2 queries fixas, nunca N+1
- * independente de quantas conversas vierem na página.
+ * pessoa/canal/identidade via embedded select (FK direta) e a última
+ * mensagem via v_crm_conversation_last_message numa segunda query em lote
+ * (não é FK, não dá pra embutir no mesmo select) — 2 queries fixas
+ * (+ 1 extra só quando `search` é usado), nunca N+1 independente de
+ * quantas conversas vierem na página.
  */
 export async function listConversations(
   companyId: number,
@@ -253,14 +314,32 @@ export async function listConversations(
   const limit = options?.limit ?? DEFAULT_LIST_LIMIT
   const offset = options?.offset ?? 0
 
+  // Busca (Entrega 9): resolve os IDs que batem via RPC com parâmetro
+  // bindado (nunca `.or()` concatenado com o termo digitado pelo usuário —
+  // ver comentário da migration 20260715), ANTES da query principal.
+  // Termo vazio/sem resultado nunca chama a query principal à toa.
+  const search = options?.search?.trim()
+  let searchMatchIds: number[] | null = null
+  if (search) {
+    const { data: matches, error: searchError } = await (admin as any)
+      .rpc('rpc_search_crm_conversations', { p_company_id: companyId, p_search: search }) as unknown as {
+        data: Array<{ conversation_id: number }> | null
+        error: { message: string } | null
+      }
+    if (searchError) return failure(searchError.message)
+    searchMatchIds = (matches ?? []).map((row) => row.conversation_id)
+    if (searchMatchIds.length === 0) return success({ conversations: [], hasMore: false })
+  }
+
   let query = (admin as any)
     .from('crm_conversations')
-    .select('id, channel_id, channel_identity_id, person_id, status, last_message_at, created_at, person:person_id(id,display_name), channel:channel_id(id,name,channel_type)')
+    .select('id, channel_id, channel_identity_id, person_id, status, last_message_at, created_at, person:person_id(id,display_name), channel:channel_id(id,name,channel_type), channel_identity:channel_identity_id(id,value)')
     .eq('company_id', companyId)
 
   if (options?.status) query = query.eq('status', options.status)
   if (options?.channelId) query = query.eq('channel_id', options.channelId)
   if (options?.personId) query = query.eq('person_id', options.personId)
+  if (searchMatchIds) query = query.in('id', searchMatchIds)
 
   const { data, error } = await query
     .order('last_message_at', { ascending: false, nullsFirst: false })
@@ -271,6 +350,7 @@ export async function listConversations(
         status: CrmConversationStatus; last_message_at: string | null; created_at: string
         person: { id: number; display_name: string } | null
         channel: { id: number; name: string; channel_type: CrmChannelType } | null
+        channel_identity: { id: number; value: string } | null
       }> | null
       error: { message: string } | null
     }
@@ -319,6 +399,7 @@ export async function listConversations(
     createdAt: row.created_at,
     person: row.person ? { id: row.person.id, displayName: row.person.display_name } : null,
     channel: row.channel ? { id: row.channel.id, name: row.channel.name, channelType: row.channel.channel_type } : null,
+    channelIdentity: row.channel_identity ? { id: row.channel_identity.id, value: row.channel_identity.value } : null,
     lastMessage: lastMessageByConversation.get(row.id) ?? null,
   }))
 

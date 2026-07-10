@@ -35,7 +35,13 @@ export async function GET(request: Request) {
   const offsetParam = searchParams.get('offset')
   const offset = offsetParam ? Number(offsetParam) : undefined
 
-  const result = await listConversations(user.company_id, { status, channelId, personId, limit, offset })
+  // Busca por nome/telefone/última mensagem (Entrega 9) — parâmetro
+  // opcional e aditivo, não muda o comportamento de quem já chama esta
+  // rota sem `search`.
+  const searchParam = searchParams.get('search')
+  const search = searchParam && searchParam.trim() ? searchParam.trim() : undefined
+
+  const result = await listConversations(user.company_id, { status, channelId, personId, search, limit, offset })
   if (!result.ok) return err(result.error, result.status)
 
   // Contrato JSON do projeto é snake_case (mesmo padrão de todo o resto da
@@ -54,6 +60,9 @@ export async function GET(request: Request) {
       : null,
     channel: conversation.channel
       ? { id: conversation.channel.id, name: conversation.channel.name, channel_type: conversation.channel.channelType }
+      : null,
+    channel_identity: conversation.channelIdentity
+      ? { id: conversation.channelIdentity.id, value: conversation.channelIdentity.value }
       : null,
     last_message: conversation.lastMessage
       ? {

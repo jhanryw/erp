@@ -17,16 +17,34 @@ export interface CrmChannelOption {
   channel_type: string
 }
 
+// Espelha o contrato JSON de GET /api/crm/conversations/counts (Entrega 9).
+export interface ConversationCounts {
+  open: number
+  pending: number
+  closed: number
+}
+
+const SEARCH_DEBOUNCE_MS = 400
+
 export function Inbox() {
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [channels, setChannels] = useState<CrmChannelOption[]>([])
+  const [counts, setCounts] = useState<ConversationCounts | null>(null)
   const [loading, setLoading] = useState(true)
   const [hasMore, setHasMore] = useState(false)
 
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('')
   const [channelFilter, setChannelFilter] = useState<string>('')
 
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
+
+  // Debounce simples — evita 1 requisição por tecla digitada na busca.
+  useEffect(() => {
+    const timeout = setTimeout(() => setDebouncedSearch(search), SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timeout)
+  }, [search])
 
   const loadConversations = useCallback(async () => {
     setLoading(true)
@@ -34,6 +52,7 @@ export function Inbox() {
       const params = new URLSearchParams()
       if (statusFilter) params.set('status', statusFilter)
       if (channelFilter) params.set('channel_id', channelFilter)
+      if (debouncedSearch) params.set('search', debouncedSearch)
 
       const res = await fetch(`/api/crm/conversations?${params.toString()}`)
       const json = await res.json()
@@ -47,11 +66,25 @@ export function Inbox() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, channelFilter])
+  }, [statusFilter, channelFilter, debouncedSearch])
+
+  const loadCounts = useCallback(async () => {
+    try {
+      const res = await fetch('/api/crm/conversations/counts')
+      const json = await res.json()
+      setCounts(res.ok ? json.counts : null)
+    } catch {
+      setCounts(null)
+    }
+  }, [])
 
   useEffect(() => {
     loadConversations()
   }, [loadConversations])
+
+  useEffect(() => {
+    loadCounts()
+  }, [loadCounts])
 
   useEffect(() => {
     fetch('/api/crm/channels')
@@ -60,10 +93,23 @@ export function Inbox() {
       .catch(() => setChannels([]))
   }, [])
 
-  // Sem realtime nesta entrega (decisão explícita) — enviar/receber atualiza
-  // a lista por chamada direta, não por assinatura em background.
+  // Sem realtime nesta entrega (decisão explícita) — enviar/receber, mudar
+  // status ou atualizar manualmente refazem a busca por chamada direta, não
+  // por assinatura em background. Contadores recarregam junto porque uma
+  // mudança de status desloca o total entre as 3 colunas.
   function handleMessageSent() {
     loadConversations()
+    loadCounts()
+  }
+
+  function handleStatusChanged() {
+    loadConversations()
+    loadCounts()
+  }
+
+  function handleRefresh() {
+    loadConversations()
+    loadCounts()
   }
 
   return (
@@ -84,10 +130,14 @@ export function Inbox() {
             loading={loading}
             hasMore={hasMore}
             channels={channels}
+            counts={counts}
+            search={search}
             statusFilter={statusFilter}
             channelFilter={channelFilter}
+            onSearchChange={setSearch}
             onStatusFilterChange={setStatusFilter}
             onChannelFilterChange={setChannelFilter}
+            onRefresh={handleRefresh}
             selectedConversationId={selectedConversationId}
             onSelect={setSelectedConversationId}
           />
@@ -109,6 +159,7 @@ export function Inbox() {
             <ConversationThread
               conversationId={selectedConversationId}
               onMessageSent={handleMessageSent}
+              onStatusChanged={handleStatusChanged}
               onBack={() => setSelectedConversationId(null)}
             />
           )}

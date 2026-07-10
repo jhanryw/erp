@@ -892,6 +892,23 @@ export interface Database {
           external_message_id?: string | null
         }
       }
+      crm_conversation_notes: {
+        Row: {
+          id: number
+          company_id: number
+          conversation_id: number
+          content: string
+          created_by: string
+          created_at: string
+        }
+        Insert: {
+          company_id: number
+          conversation_id: number
+          content: string
+          created_by: string
+        }
+        Update: never
+      }
     }
     Views: {
       v_crm_consent_status: {
@@ -1192,6 +1209,7 @@ export type CrmConsentStatus = Views<'v_crm_consent_status'>
 export type CrmConversation = Tables<'crm_conversations'>
 export type CrmMessage = Tables<'crm_messages'>
 export type CrmConversationLastMessage = Views<'v_crm_conversation_last_message'>
+export type CrmConversationNote = Tables<'crm_conversation_notes'>
 
 // Tipos compostos para queries com JOIN
 export type SaleWithCustomer = Sale & {

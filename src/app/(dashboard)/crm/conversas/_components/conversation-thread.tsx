@@ -1,15 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   ArrowLeft, FileText, MapPin, Phone, Reply, User as UserIcon,
-  Check, CheckCheck, Clock, AlertCircle,
+  Check, CheckCheck, Clock, AlertCircle, RefreshCw, StickyNote,
 } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { formatDateTime, formatDayLabel } from '@/lib/utils/date'
 import { formatFileSize } from '@/lib/utils/file-size'
 import { Spinner } from '@/components/ui/spinner'
 import { MessageComposer } from './message-composer'
+import { ConversationNotesPanel } from './conversation-notes-panel'
 
 // Espelha o contrato JSON de GET /api/crm/conversations/[id]/messages —
 // CrmMessage é linha direta do banco (já snake_case), media vem resolvida
@@ -41,8 +43,10 @@ interface Message {
   media: MessageMedia[]
 }
 
+type ConversationStatus = 'open' | 'pending' | 'closed'
+
 interface ConversationDetail {
-  conversation: { id: number; status: string }
+  conversation: { id: number; status: ConversationStatus }
   person: { id: number; display_name: string } | null
   channel: { id: number; name: string; channel_type: string } | null
   channel_identity: { id: number; value: string } | null
@@ -146,15 +150,19 @@ function MessageAttachment({ media }: { media: MessageMedia }) {
 export function ConversationThread({
   conversationId,
   onMessageSent,
+  onStatusChanged,
   onBack,
 }: {
   conversationId: number
   onMessageSent: () => void
+  onStatusChanged: () => void
   onBack: () => void
 }) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(true)
+  const [statusSaving, setStatusSaving] = useState(false)
+  const [notesOpen, setNotesOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
 
   const loadThread = useCallback(async () => {
@@ -219,6 +227,34 @@ export function ConversationThread({
     onMessageSent()
   }
 
+  // Transições livres entre os 3 status (sem máquina de estados — decisão
+  // explícita do usuário, Entrega 9). Em caso de erro (ex.: 409 de conflito
+  // de reabertura, ver conversations.service.ts), não atualiza o estado
+  // local — o <Select> volta a mostrar o status anterior "de graça", por
+  // ser um componente controlado.
+  async function handleStatusChange(nextStatus: ConversationStatus) {
+    if (!detail || statusSaving) return
+    setStatusSaving(true)
+    try {
+      const res = await fetch(`/api/crm/conversations/${conversationId}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: nextStatus }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error('Erro ao mudar status da conversa', { description: json.error })
+        return
+      }
+      setDetail((prev) => (prev ? { ...prev, conversation: { ...prev.conversation, status: nextStatus } } : prev))
+      onStatusChanged()
+    } catch {
+      toast.error('Erro de rede ao mudar status da conversa')
+    } finally {
+      setStatusSaving(false)
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-3 border-b border-border flex items-center gap-2">
@@ -241,7 +277,46 @@ export function ConversationThread({
             {detail?.channel?.name ?? ''}{detail?.channel_identity ? ` · ${detail.channel_identity.value}` : ''}
           </p>
         </div>
+
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {detail && (
+            <select
+              value={detail.conversation.status}
+              onChange={(e) => handleStatusChange(e.target.value as ConversationStatus)}
+              disabled={statusSaving}
+              className="rounded-lg border border-border bg-bg-elevated px-2 py-1.5 text-xs text-text-primary focus:outline-none focus:ring-2 focus:ring-brand/50 focus:border-brand disabled:opacity-50"
+            >
+              <option value="open">Aberta</option>
+              <option value="pending">Pendente</option>
+              <option value="closed">Encerrada</option>
+            </select>
+          )}
+          <button
+            type="button"
+            onClick={() => setNotesOpen((v) => !v)}
+            aria-label="Notas internas"
+            title="Notas internas"
+            className={cn(
+              'p-2 rounded-lg transition-colors',
+              notesOpen ? 'text-brand bg-brand/10' : 'text-text-muted hover:text-text-primary hover:bg-bg-hover',
+            )}
+          >
+            <StickyNote className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={loadThread}
+            disabled={loading}
+            aria-label="Atualizar conversa"
+            title="Atualizar conversa"
+            className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
+          </button>
+        </div>
       </div>
+
+      {notesOpen && <ConversationNotesPanel conversationId={conversationId} />}
 
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4 flex flex-col gap-2">
         {loading && (
