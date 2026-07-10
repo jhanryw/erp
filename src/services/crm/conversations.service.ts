@@ -79,10 +79,50 @@ export async function channelAndIdentityMatch(
 
 // ─── Operações ─────────────────────────────────────────────────────────────────
 
+async function selectOpenOrPending(
+  admin: ReturnType<typeof createAdminClient>,
+  channelId: number,
+  channelIdentityId: number,
+): Promise<CrmConversation | null> {
+  const { data } = await admin
+    .from('crm_conversations')
+    .select('*')
+    .eq('channel_id', channelId)
+    .eq('channel_identity_id', channelIdentityId)
+    .in('status', ['open', 'pending'])
+    .maybeSingle() as unknown as { data: CrmConversation | null }
+  return data
+}
+
 /**
- * Encontra a conversa open/pending para (channel_id, channel_identity_id)
- * ou cria uma nova. Idempotente mesmo sob corrida — se o INSERT colidir com
- * o índice único parcial (outra chamada venceu), relê e retorna a existente.
+ * Encontra a conversa open/pending para (channel_id, channel_identity_id),
+ * reabre a mais recente 'closed' se existir, ou cria uma nova. Chamada
+ * exclusivamente pela ingestão inbound (Entrega 10) — único consumidor
+ * confirmado, sem outro caller que dependesse do comportamento anterior
+ * ("nunca reabre sozinho").
+ *
+ * Reabertura por decisão explícita do usuário (Entrega 10): histórico
+ * contínuo por canal/identidade, consistente com o outbound (Entrega 6),
+ * que já reabre conversa fechada ao enviar.
+ *
+ * Segurança sob concorrência, SEM RPC/advisory lock novo — auditoria
+ * confirmou que o índice único parcial existente
+ * (uq_crm_conversations_open_per_identity) já é suficiente:
+ *   - Reabrir NUNCA cria linha nova — só transiciona uma linha já
+ *     identificada deterministicamente (a 'closed' de maior id). Duas
+ *     chamadas concorrentes que leem a mesma candidata convergem pra UM
+ *     UPDATE efetivo; a segunda tem `WHERE status='closed'` que não bate
+ *     mais (0 linhas afetadas) e relê o open/pending já reaberto pela
+ *     primeira — nunca duas linhas abertas.
+ *   - No caso (raríssimo) de outra chamada ter reaberto/criado uma
+ *     conversa DIFERENTE pra mesma identidade entre o SELECT e o UPDATE, o
+ *     próprio índice único barra o UPDATE com 23505 — tratado abaixo do
+ *     mesmo jeito que o INSERT já trata (relê e devolve a que venceu).
+ *   - Conversa nunca fica 'closed' por nenhum caminho do inbound (só a
+ *     ação manual da Entrega 9 fecha) — não existe "fechamento fantasma"
+ *     no meio da corrida pra invalidar a escolha da candidata.
+ *   - O INSERT final (quando não há open/pending nem closed pra reabrir)
+ *     mantém a mesma proteção de sempre (23505 → relê).
  */
 export async function findOrCreateConversation(
   input: FindOrCreateConversationInput,
@@ -94,15 +134,45 @@ export async function findOrCreateConversation(
 
   const admin = createAdminClient()
 
-  const { data: existing } = await admin
+  const existing = await selectOpenOrPending(admin, input.channelId, input.channelIdentityId)
+  if (existing) return success(existing)
+
+  const { data: closedCandidate } = await admin
     .from('crm_conversations')
     .select('*')
     .eq('channel_id', input.channelId)
     .eq('channel_identity_id', input.channelIdentityId)
-    .in('status', ['open', 'pending'])
+    .eq('status', 'closed')
+    .order('id', { ascending: false })
+    .limit(1)
     .maybeSingle() as unknown as { data: CrmConversation | null }
 
-  if (existing) return success(existing)
+  if (closedCandidate) {
+    const { data: reopened, error: reopenError } = await (admin as any)
+      .from('crm_conversations')
+      .update({ status: 'open', updated_at: new Date().toISOString() })
+      .eq('id', closedCandidate.id)
+      .eq('status', 'closed') // guarda condicional — só aplica se ninguém mudou o status entre o SELECT e aqui
+      .select('*')
+      .maybeSingle() as unknown as { data: CrmConversation | null; error: { code?: string; message: string } | null }
+
+    if (reopenError) {
+      if (reopenError.code === '23505') {
+        // Outra chamada concorrente já é dona do slot open/pending desta
+        // identidade agora — devolve ela em vez de errar.
+        const retried = await selectOpenOrPending(admin, input.channelId, input.channelIdentityId)
+        if (retried) return success(retried)
+      }
+      return failure(reopenError.message)
+    }
+
+    if (reopened) return success(reopened)
+
+    // UPDATE não afetou nenhuma linha — outra chamada já reabriu (ou fechou
+    // de novo) essa mesma conversa entre o SELECT e o UPDATE. Relê.
+    const retried = await selectOpenOrPending(admin, input.channelId, input.channelIdentityId)
+    if (retried) return success(retried)
+  }
 
   const { data, error } = await admin
     .from('crm_conversations')
@@ -117,13 +187,7 @@ export async function findOrCreateConversation(
 
   if (error) {
     if (error.code === '23505') {
-      const { data: retried } = await admin
-        .from('crm_conversations')
-        .select('*')
-        .eq('channel_id', input.channelId)
-        .eq('channel_identity_id', input.channelIdentityId)
-        .in('status', ['open', 'pending'])
-        .maybeSingle() as unknown as { data: CrmConversation | null }
+      const retried = await selectOpenOrPending(admin, input.channelId, input.channelIdentityId)
       if (retried) return success(retried)
     }
     return failure(error.message)
