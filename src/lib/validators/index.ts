@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { validateCPF } from '@/lib/utils/cpf'
+import { brazilDate } from '@/lib/utils/date'
 
 // ─── Campos fiscais de Produto (compartilhados) ───────────────────────────────
 // Fonte única da regra de NCM/CEST/Origem — consumida aqui e pelos schemas
@@ -191,3 +192,70 @@ export const mediaUsageSchema = z.object({
 })
 
 export type MediaUsageFormData = z.infer<typeof mediaUsageSchema>
+
+// ─── Lançamento Financeiro ─────────────────────────────────────────────────────
+// Fonte única consumida por novo/page.tsx, [id]/editar/page.tsx e pelas rotas
+// server-side POST/PUT de /api/financeiro/lancamentos (Entrega 2 — correção
+// Caixa × Financeiro).
+//
+// payment_method/paid_at são obrigatórios apenas para despesas (type='expense');
+// para receitas permanecem opcionais nesta fase — Contas a Receber pertence a
+// um módulo financeiro futuro, fora de escopo aqui.
+//
+// paid_at não pode ser data futura: comparação de string 'yyyy-MM-dd' contra
+// brazilDate() (fuso fixo America/Fortaleza), mesmo formato de reference_date.
+//
+// cash_movement_id NÃO faz parte deste schema propositalmente — é preenchido
+// só pela futura RPC de regularização (Entrega 3) ou pela futura automação do
+// Caixa (Entrega 4), nunca pela API pública de lançamentos. .strict() garante
+// que um payload tentando enviar esse campo (ou qualquer outro não previsto)
+// seja rejeitado explicitamente, em vez de ser silenciosamente ignorado.
+export const financeEntrySchema = z
+  .object({
+    type: z.enum(['income', 'expense']),
+    category: z.enum([
+      'sale', 'cashback_used', 'other_income',
+      'stock_purchase', 'freight_cost', 'marketing',
+      'rent', 'salaries', 'operational', 'taxes', 'other_expense',
+    ]),
+    description: z.string().min(2, 'Descrição obrigatória'),
+    amount: z.coerce.number().positive('Valor deve ser > 0'),
+    reference_date: z.string().min(1, 'Data de competência obrigatória'),
+    notes: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+    payment_method: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.enum(['cash', 'pix', 'credit_card', 'debit_card']).optional(),
+    ),
+    paid_at: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.string().optional(),
+    ),
+  })
+  .strict()
+  .superRefine((data, ctx) => {
+    if (data.type === 'expense') {
+      if (!data.payment_method) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['payment_method'],
+          message: 'Forma de pagamento obrigatória para despesas.',
+        })
+      }
+      if (!data.paid_at) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['paid_at'],
+          message: 'Data de pagamento obrigatória para despesas.',
+        })
+      }
+    }
+    if (data.paid_at && data.paid_at > brazilDate()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['paid_at'],
+        message: 'Data de pagamento não pode ser no futuro.',
+      })
+    }
+  })
+
+export type FinanceEntryFormData = z.infer<typeof financeEntrySchema>

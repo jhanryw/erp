@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { toast } from 'sonner'
-import { Wallet, ArrowDownLeft, ArrowUpRight, Receipt, X, Clock, Lock, History } from 'lucide-react'
+import { Wallet, ArrowDownLeft, ArrowUpRight, X, Clock, Lock, History } from 'lucide-react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,20 +14,11 @@ type CashSession = {
   opening_amount_cash: number
 }
 
-type MovementType = 'sangria' | 'suprimento' | 'expense'
-type PaymentMethod = 'cash' | 'pix' | 'credit_card' | 'debit_card'
-
-const METHOD_LABELS: Record<PaymentMethod, string> = {
-  cash:        'Dinheiro',
-  pix:         'PIX',
-  credit_card: 'Crédito',
-  debit_card:  'Débito',
-}
+type MovementType = 'sangria' | 'suprimento'
 
 const MOVEMENT_LABELS: Record<MovementType, string> = {
   sangria:    'Sangria',
   suprimento: 'Suprimento',
-  expense:    'Despesa',
 }
 
 export default function CaixaPage() {
@@ -43,7 +34,6 @@ export default function CaixaPage() {
   const [movType,   setMovType]   = useState<MovementType | null>(null)
   const [movAmount, setMovAmount] = useState('')
   const [movDesc,   setMovDesc]   = useState('')
-  const [movMethod, setMovMethod] = useState<PaymentMethod>('cash')
 
   // Formulário de fechamento
   const [showClose,       setShowClose]       = useState(false)
@@ -100,7 +90,7 @@ export default function CaixaPage() {
           type:        movType,
           amount:      parseFloat(movAmount) || 0,
           description: movDesc,
-          method:      movType !== 'expense' ? 'cash' : movMethod,
+          method:      'cash',
         }),
       })
       const json = await r.json()
@@ -109,7 +99,6 @@ export default function CaixaPage() {
       setMovType(null)
       setMovAmount('')
       setMovDesc('')
-      setMovMethod('cash')
     } catch {
       toast.error('Erro inesperado')
     } finally {
@@ -275,7 +264,6 @@ export default function CaixaPage() {
           {([
             { type: 'sangria',    label: 'Sangria',    Icon: ArrowDownLeft, color: 'text-error'   },
             { type: 'suprimento', label: 'Suprimento', Icon: ArrowUpRight,  color: 'text-success' },
-            { type: 'expense',    label: 'Despesa',    Icon: Receipt,       color: 'text-warning' },
           ] as { type: MovementType; label: string; Icon: React.ElementType; color: string }[]).map(({ type, label, Icon, color }) => (
             <button
               key={type}
@@ -284,7 +272,6 @@ export default function CaixaPage() {
                 setMovType(type)
                 setMovAmount('')
                 setMovDesc('')
-                setMovMethod('cash')
               }}
               className="card p-4 flex flex-col items-center gap-2 hover:bg-bg-hover transition-colors active:scale-[0.97]"
             >
@@ -335,41 +322,15 @@ export default function CaixaPage() {
           <Input
             label="Descrição"
             placeholder={
-              movType === 'sangria'    ? 'Ex.: retirada para troco' :
-              movType === 'suprimento' ? 'Ex.: reforço de caixa'    :
-              'Ex.: compra de material de escritório'
+              movType === 'sangria' ? 'Ex.: retirada para troco' : 'Ex.: reforço de caixa'
             }
             value={movDesc}
             onChange={(e) => setMovDesc(e.target.value)}
           />
 
-          {movType === 'expense' && (
-            <div className="space-y-1.5">
-              <p className="text-xs font-medium text-text-secondary">Método de pagamento</p>
-              <div className="grid grid-cols-2 gap-2">
-                {(['cash', 'pix', 'credit_card', 'debit_card'] as PaymentMethod[]).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMovMethod(m)}
-                    className={`py-2.5 rounded-lg border text-sm font-medium transition-colors ${
-                      movMethod === m
-                        ? 'bg-brand text-white border-brand'
-                        : 'bg-bg-overlay border-border text-text-secondary hover:border-brand/50'
-                    }`}
-                  >
-                    {METHOD_LABELS[m]}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {movType !== 'expense' && (
-            <p className="text-xs text-text-muted">
-              Sangria e suprimento são sempre em dinheiro físico.
-            </p>
-          )}
+          <p className="text-xs text-text-muted">
+            Sangria e suprimento são sempre em dinheiro físico.
+          </p>
 
           <Button
             type="button"

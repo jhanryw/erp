@@ -8,13 +8,16 @@ import { z } from 'zod'
 
 const schema = z.object({
   session_id:        z.number().int().positive(),
-  type:              z.enum(['sangria', 'suprimento', 'expense']),
+  type:              z.enum(['sangria', 'suprimento']),
   amount:            z.number().positive(),
   description:       z.string().min(1),
   method:            z.enum(['cash', 'pix', 'credit_card', 'debit_card']).default('cash'),
   reference_sale_id: z.number().int().positive().optional().nullable(),
   metadata:          z.record(z.unknown()).default({}),
 })
+
+const EXPENSE_BLOCKED_MESSAGE =
+  'Despesas devem ser cadastradas no módulo Financeiro. O Caixa registra apenas movimentações físicas de entrada e retirada.'
 
 // POST /api/caixa/movimentos
 export async function POST(request: Request) {
@@ -26,6 +29,12 @@ export async function POST(request: Request) {
   let body: unknown
   try { body = await request.json() } catch {
     return NextResponse.json({ error: 'JSON inválido.' }, { status: 400 })
+  }
+
+  // Bloqueio explícito com mensagem orientativa — não deixar cair no erro
+  // genérico de enum inválido do Zod para este caso específico.
+  if (typeof body === 'object' && body !== null && (body as Record<string, unknown>).type === 'expense') {
+    return NextResponse.json({ error: EXPENSE_BLOCKED_MESSAGE }, { status: 422 })
   }
 
   const parsed = schema.safeParse(body)

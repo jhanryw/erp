@@ -26,11 +26,19 @@ const CATEGORY_LABELS: Record<string, string> = {
   other_expense: 'Outra Despesa',
 }
 
+const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  cash: 'Dinheiro',
+  pix: 'PIX',
+  credit_card: 'Crédito',
+  debit_card: 'Débito',
+  card: 'Cartão legado',
+}
+
 async function getEntries() {
   const admin = createAdminClient()
   const { data } = await admin
     .from('finance_entries')
-    .select('id, type, category, description, amount, reference_date, notes')
+    .select('id, type, category, description, amount, reference_date, notes, payment_method, cash_movement_id')
     .order('reference_date', { ascending: false })
     .limit(100) as unknown as { data: any[] | null }
   return data ?? []
@@ -100,12 +108,19 @@ export default async function LancamentosPage() {
                   <TableHead>Tipo</TableHead>
                   <TableHead>Categoria</TableHead>
                   <TableHead>Descrição</TableHead>
+                  <TableHead>Forma de pagamento</TableHead>
                   <TableHead align="right">Valor</TableHead>
                   <TableHead align="center">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {entries.map((entry) => (
+                {entries.map((entry) => {
+                  const pendingCashLink =
+                    entry.type === 'expense' &&
+                    entry.payment_method === 'cash' &&
+                    entry.cash_movement_id == null
+
+                  return (
                   <TableRow key={entry.id}>
                     <TableCell muted>{formatDate(entry.reference_date)}</TableCell>
                     <TableCell>
@@ -116,6 +131,18 @@ export default async function LancamentosPage() {
                     <TableCell muted>{CATEGORY_LABELS[entry.category] ?? entry.category}</TableCell>
                     <TableCell className="max-w-xs">
                       <span className="truncate block">{entry.description}</span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="space-y-1">
+                        <span className={entry.payment_method ? 'text-text-secondary' : 'text-text-muted italic'}>
+                          {entry.payment_method ? (PAYMENT_METHOD_LABELS[entry.payment_method] ?? entry.payment_method) : 'Não informado'}
+                        </span>
+                        {pendingCashLink && (
+                          <div>
+                            <Badge variant="warning" size="sm">Pendente de vínculo com o Caixa</Badge>
+                          </div>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell align="right">
                       <span className={`font-semibold ${entry.type === 'income' ? 'text-success' : 'text-error'}`}>
@@ -131,7 +158,8 @@ export default async function LancamentosPage() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  )
+                })}
               </TableBody>
             </Table>
           </>

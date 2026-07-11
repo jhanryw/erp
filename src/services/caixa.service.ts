@@ -89,7 +89,7 @@ export async function openCashSession(
 export async function addCashMovement(params: {
   sessionId: number
   userId: string
-  type: 'sangria' | 'suprimento' | 'expense'
+  type: 'sangria' | 'suprimento'
   amount: number
   description: string
   method?: 'cash' | 'pix' | 'credit_card' | 'debit_card'

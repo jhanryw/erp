@@ -3,7 +3,6 @@
 import { useRouter } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { z } from 'zod'
 import { toast } from 'sonner'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
@@ -11,21 +10,16 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { toISODate } from '@/lib/utils/date'
+import { financeEntrySchema, type FinanceEntryFormData } from '@/lib/validators'
 
-const financeEntrySchema = z.object({
-  type: z.enum(['income', 'expense']),
-  category: z.enum([
-    'sale', 'cashback_used', 'other_income',
-    'stock_purchase', 'freight_cost', 'marketing',
-    'rent', 'salaries', 'operational', 'taxes', 'other_expense',
-  ]),
-  description: z.string().min(2, 'Descrição obrigatória'),
-  amount: z.coerce.number().positive('Valor deve ser > 0'),
-  reference_date: z.string().min(1, 'Data obrigatória'),
-  notes: z.string().nullable().optional(),
-})
+type FinanceEntryForm = FinanceEntryFormData
 
-type FinanceEntryForm = z.infer<typeof financeEntrySchema>
+const PAYMENT_METHODS = [
+  { value: 'cash', label: 'Dinheiro' },
+  { value: 'pix', label: 'PIX' },
+  { value: 'credit_card', label: 'Crédito' },
+  { value: 'debit_card', label: 'Débito' },
+]
 
 const INCOME_CATEGORIES = [
   { value: 'sale', label: 'Venda' },
@@ -67,7 +61,12 @@ export default function NovoLancamentoPage() {
     const res = await fetch('/api/financeiro/lancamentos', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...data, notes: data.notes || null }),
+      body: JSON.stringify({
+        ...data,
+        notes: data.notes || null,
+        payment_method: data.payment_method || undefined,
+        paid_at: data.paid_at || undefined,
+      }),
     })
     const json = await res.json()
     if (!res.ok) {
@@ -142,6 +141,31 @@ export default function NovoLancamentoPage() {
             {...register('reference_date')}
           />
         </div>
+
+        {/* Forma e data de pagamento — obrigatórios só para despesa */}
+        {entryType === 'expense' && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select
+              label="Forma de pagamento"
+              required
+              placeholder="Selecione"
+              error={errors.payment_method?.message}
+              {...register('payment_method')}
+            >
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
+            <Input
+              label="Data do pagamento"
+              required
+              type="date"
+              max={toISODate(new Date())}
+              error={errors.paid_at?.message}
+              {...register('paid_at')}
+            />
+          </div>
+        )}
 
         {/* Observações */}
         <div>

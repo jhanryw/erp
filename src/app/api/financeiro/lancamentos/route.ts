@@ -3,17 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
+import { financeEntrySchema } from '@/lib/validators'
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-
-const schema = z.object({
-  type: z.enum(['income', 'expense']),
-  category: z.enum(['sale','cashback_used','other_income','stock_purchase','freight_cost','marketing','rent','salaries','operational','taxes','other_expense']),
-  description: z.string().min(2),
-  amount: z.coerce.number().positive(),
-  reference_date: z.string().min(1),
-  notes: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
-})
 
 export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -22,13 +13,22 @@ export async function POST(request: Request) {
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
-  const parsed = schema.safeParse(body)
+  const parsed = financeEntrySchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
+  // cash_movement_id nunca é aceito aqui — só a futura RPC de regularização
+  // (Entrega 3) ou a automação do Caixa (Entrega 4) preenchem esse campo.
+  // paid_at é DATE: a string 'yyyy-MM-dd' do formulário vai direto ao banco,
+  // sem nenhuma conversão de timezone.
   const admin = createAdminClient()
-  const { error } = await admin.from('finance_entries').insert({ ...parsed.data, created_by: user.id, company_id: user.company_id } as any)
+  const { error } = await admin.from('finance_entries').insert({
+    ...parsed.data,
+    paid_at: parsed.data.paid_at ?? null,
+    created_by: user.id,
+    company_id: user.company_id,
+  } as any)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

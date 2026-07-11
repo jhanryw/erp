@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { Card, CardHeader } from '@/components/ui/card'
 import {
   Table,
@@ -20,6 +22,7 @@ type EntryRow = {
   type: 'income' | 'expense'
   amount: number
   reference_date: string
+  paid_at: string | null
 }
 
 type DayBucket = {
@@ -54,26 +57,39 @@ function monthLabel(ym: string): string {
   })
 }
 
-async function getFlowData(ym: string) {
+async function getFlowData(ym: string, companyId: number) {
   const admin = createAdminClient()
   const { start, end } = monthBounds(ym)
 
+  // Data efetiva de cada lançamento: paid_at quando preenchido, senão
+  // reference_date (registros antigos/automáticos sem informação de
+  // pagamento). Como não existe view/coluna computada, o filtro por período
+  // cobre os dois casos via OR: paid_at no intervalo, OU (paid_at nulo E
+  // reference_date no intervalo) — mesma regra que antes vivia em SQL,
+  // agora expressa no filtro da consulta.
+  //
+  // Único consumidor desta agregação hoje (auditado) — segue em JavaScript
+  // de propósito. Uma view só se justifica quando surgir um segundo
+  // consumidor real (Dashboard, BI, AI Engine, API).
   const [periodRes, priorRes] = await Promise.all([
     admin
       .from('finance_entries')
-      .select('type, amount, reference_date')
-      .gte('reference_date', start)
-      .lte('reference_date', end)
-      .order('reference_date', { ascending: true }) as unknown as {
+      .select('type, amount, reference_date, paid_at')
+      .eq('company_id', companyId)
+      .or(
+        `and(paid_at.gte.${start},paid_at.lte.${end}),` +
+        `and(paid_at.is.null,reference_date.gte.${start},reference_date.lte.${end})`
+      ) as unknown as {
         data: EntryRow[] | null
         error: { message: string } | null
       },
     // TODO: otimizar com agregação SQL (SUM) quando volume crescer
     admin
       .from('finance_entries')
-      .select('type, amount')
-      .lt('reference_date', start) as unknown as {
-        data: Pick<EntryRow, 'type' | 'amount'>[] | null
+      .select('type, amount, reference_date, paid_at')
+      .eq('company_id', companyId)
+      .or(`paid_at.lt.${start},and(paid_at.is.null,reference_date.lt.${start})`) as unknown as {
+        data: EntryRow[] | null
         error: { message: string } | null
       },
   ])
@@ -83,17 +99,17 @@ async function getFlowData(ym: string) {
     return { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0 }
   }
 
-  // Saldo inicial: tudo antes do período
+  // Saldo inicial: tudo antes do período, pela data efetiva
   let initialBalance = 0
   for (const e of priorRes.data ?? []) {
     if (e.type === 'income') initialBalance += Number(e.amount)
     else initialBalance -= Number(e.amount)
   }
 
-  // Agrupar por dia
+  // Agrupar por dia efetivo (paid_at ?? reference_date)
   const buckets = new Map<string, DayBucket>()
   for (const entry of periodRes.data ?? []) {
-    const day = entry.reference_date.slice(0, 10)
+    const day = entry.paid_at ?? entry.reference_date
     if (!buckets.has(day)) buckets.set(day, { income: 0, expense: 0 })
     const b = buckets.get(day)!
     if (entry.type === 'income') b.income += Number(entry.amount)
@@ -125,12 +141,18 @@ export default async function FluxoCaixaPage({
 }: {
   searchParams: { month?: string }
 }) {
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const companyId = profile?.company_id ?? null
+
   const ym = /^\d{4}-\d{2}$/.test(searchParams.month ?? '')
     ? searchParams.month!
     : currentYearMonth()
 
-  const { rows, totalIncome, totalExpense, periodBalance, initialBalance } =
-    await getFlowData(ym)
+  const { rows, totalIncome, totalExpense, periodBalance, initialBalance } = companyId
+    ? await getFlowData(ym, companyId)
+    : { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0 }
 
   const prevMonth = shiftMonth(ym, -1)
   const nextMonth = shiftMonth(ym, 1)
@@ -147,7 +169,7 @@ export default async function FluxoCaixaPage({
           </Link>
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Fluxo de Caixa</h2>
-            <p className="text-sm text-text-muted">Baseado em reference_date</p>
+            <p className="text-sm text-text-muted">Baseado na data efetiva de pagamento</p>
           </div>
         </div>
 

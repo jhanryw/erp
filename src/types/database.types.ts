@@ -467,6 +467,11 @@ export interface Database {
           notes: string | null
           created_at: string
           created_by: string
+          // Entrega 2 — correção Caixa × Financeiro (20260710_02_finance_entries_payment_fields.sql)
+          payment_method: 'pix' | 'card' | 'cash' | 'credit_card' | 'debit_card' | null
+          // paid_at é DATE ('yyyy-MM-dd'), não TIMESTAMPTZ — sem componente de hora/timezone
+          paid_at: string | null
+          cash_movement_id: number | null
         }
         Insert: {
           type: FinanceEntryType
@@ -480,6 +485,11 @@ export interface Database {
           return_id?: number | null
           notes?: string | null
           created_by: string
+          // Entrega 2 — cash_movement_id NÃO deve ser preenchido pela API pública
+          // de lançamentos (só pela futura RPC de regularização/automação do Caixa).
+          payment_method?: 'pix' | 'card' | 'cash' | 'credit_card' | 'debit_card' | null
+          paid_at?: string | null
+          cash_movement_id?: number | null
         }
         Update: never
       }

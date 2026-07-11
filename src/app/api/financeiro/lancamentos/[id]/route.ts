@@ -3,17 +3,8 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
+import { financeEntrySchema } from '@/lib/validators'
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-
-const schema = z.object({
-  type: z.enum(['income', 'expense']),
-  category: z.enum(['sale','cashback_used','other_income','stock_purchase','freight_cost','marketing','rent','salaries','operational','taxes','other_expense']),
-  description: z.string().min(2),
-  amount: z.coerce.number().positive(),
-  reference_date: z.string().min(1),
-  notes: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
-})
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -36,11 +27,16 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
-  const parsed = schema.safeParse(body)
+  const parsed = financeEntrySchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
+  // cash_movement_id nunca é aceito aqui — mesma regra do POST.
+  // paid_at é DATE: string 'yyyy-MM-dd' direto ao banco, sem conversão.
   const admin = createAdminClient()
-  const { error } = (await (admin as any).from('finance_entries').update(parsed.data).eq('id', Number(params.id)).eq('company_id', user.company_id)) as { error: any }
+  const { error } = (await (admin as any).from('finance_entries').update({
+    ...parsed.data,
+    paid_at: parsed.data.paid_at ?? null,
+  }).eq('id', Number(params.id)).eq('company_id', user.company_id)) as { error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
   auditLog({ userId: user.id, userRole: user.role, action: 'update', resource: 'finance_entry', resourceId: params.id, detail: `${parsed.data.type}:${parsed.data.category}` })
