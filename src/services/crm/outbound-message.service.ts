@@ -22,7 +22,7 @@
 import type { CrmMessage, CrmMessageContentType, Json } from '@/types/database.types'
 import type { ServiceOutcome } from '../produtos.service'
 import { getConversation, updateConversationStatus } from './conversations.service'
-import { getChannel } from './channels.service'
+import { getChannel, isChannelActive } from './channels.service'
 import { getChannelIdentity } from './channel-identities.service'
 import { createMessage, findMessageByDedupeKey, applyProviderStatusUpdate, getMessage } from './messages.service'
 import { getMediaByPublicId, resolveMediaUrl, createMediaUsage } from '@/services/media.service'
@@ -120,7 +120,7 @@ export async function sendOutboundMessage(
   const channelResult = await getChannel(conversation.channel_id, input.companyId)
   if (!channelResult.ok) return failure(channelResult.error, channelResult.status)
   const channel = channelResult.data
-  if (!channel.active || channel.status !== 'active') {
+  if (!isChannelActive(channel)) {
     return failure(`Canal '${channel.name}' está inativo — não é possível enviar.`, 422)
   }
 

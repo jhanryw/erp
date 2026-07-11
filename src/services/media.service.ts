@@ -519,10 +519,19 @@ export async function listMediaByEntity(
 
   if (error) return failure(error.message)
 
+  // Resolução de URL em paralelo — cada uma é uma chamada de Storage
+  // (createSignedUrl para mídia privada), antes feita em série dentro do
+  // loop. Promise.all preserva a ordem de `data` independente de qual
+  // resolve primeiro; item cuja URL falha continua descartado em silêncio
+  // (mesmo comportamento de antes, só que via filter em vez de `continue`).
+  const resolved = await Promise.all((data ?? []).map((row) => resolveMediaUrl(row.media)))
+
   const items: ResolvedMediaUsage[] = []
-  for (const row of data ?? []) {
-    const resolved = await resolveMediaUrl(row.media)
-    if (!resolved.ok) continue
+  const rows = data ?? []
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const result = resolved[i]
+    if (!result.ok) continue
 
     items.push({
       usage_id: row.id,
@@ -533,8 +542,8 @@ export async function listMediaByEntity(
       extension: row.media.extension,
       file_size: row.media.file_size,
       visibility: row.media.visibility,
-      url: resolved.data.url,
-      url_expires_at: resolved.data.expiresAt,
+      url: result.data.url,
+      url_expires_at: result.data.expiresAt,
       alt_text: row.media.alt_text,
       active: row.media.active,
       created_at: row.media.created_at,
@@ -578,11 +587,15 @@ export async function listPrimaryMediaByEntities(
 
   if (error) return failure(error.message)
 
+  // Paralelo — ver comentário equivalente em listMediaByEntity().
+  const resolved = await Promise.all((data ?? []).map((row) => resolveMediaUrl(row.media)))
+
   const items: EntityPrimaryMedia[] = []
-  for (const row of data ?? []) {
-    const resolved = await resolveMediaUrl(row.media)
-    if (!resolved.ok) continue
-    items.push({ entity_id: row.entity_id, url: resolved.data.url })
+  const rows = data ?? []
+  for (let i = 0; i < rows.length; i++) {
+    const result = resolved[i]
+    if (!result.ok) continue
+    items.push({ entity_id: rows[i].entity_id, url: result.data.url })
   }
 
   return success(items)
@@ -623,10 +636,15 @@ export async function listMediaByEntities(
 
   if (error) return failure(error.message)
 
+  // Paralelo — ver comentário equivalente em listMediaByEntity().
+  const resolved = await Promise.all((data ?? []).map((row) => resolveMediaUrl(row.media)))
+
   const items: ResolvedMediaUsageWithEntity[] = []
-  for (const row of data ?? []) {
-    const resolved = await resolveMediaUrl(row.media)
-    if (!resolved.ok) continue
+  const rows = data ?? []
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const result = resolved[i]
+    if (!result.ok) continue
 
     items.push({
       entity_id: row.entity_id,
@@ -638,8 +656,8 @@ export async function listMediaByEntities(
       extension: row.media.extension,
       file_size: row.media.file_size,
       visibility: row.media.visibility,
-      url: resolved.data.url,
-      url_expires_at: resolved.data.expiresAt,
+      url: result.data.url,
+      url_expires_at: result.data.expiresAt,
       alt_text: row.media.alt_text,
       active: row.media.active,
       created_at: row.media.created_at,

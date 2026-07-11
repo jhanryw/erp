@@ -32,6 +32,7 @@ export function Inbox() {
   const [channels, setChannels] = useState<CrmChannelOption[]>([])
   const [counts, setCounts] = useState<ConversationCounts | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [hasMore, setHasMore] = useState(false)
 
   const [search, setSearch] = useState('')
@@ -47,15 +48,24 @@ export function Inbox() {
     return () => clearTimeout(timeout)
   }, [search])
 
+  // Compartilhado entre a busca "do zero" e o "carregar mais" — mesmos
+  // filtros, só o offset muda.
+  const buildParams = useCallback((offset?: number) => {
+    const params = new URLSearchParams()
+    if (statusFilter) params.set('status', statusFilter)
+    if (channelFilter) params.set('channel_id', channelFilter)
+    if (debouncedSearch) params.set('search', debouncedSearch)
+    if (offset) params.set('offset', String(offset))
+    return params
+  }, [statusFilter, channelFilter, debouncedSearch])
+
+  // Busca do zero — sempre offset 0, sempre SUBSTITUI a lista. Chamada no
+  // mount e sempre que filtro/busca muda (via useEffect abaixo), o que já
+  // reseta a paginação pra página 1 de graça, sem lógica extra.
   const loadConversations = useCallback(async () => {
     setLoading(true)
     try {
-      const params = new URLSearchParams()
-      if (statusFilter) params.set('status', statusFilter)
-      if (channelFilter) params.set('channel_id', channelFilter)
-      if (debouncedSearch) params.set('search', debouncedSearch)
-
-      const res = await fetch(`/api/crm/conversations?${params.toString()}`)
+      const res = await fetch(`/api/crm/conversations?${buildParams().toString()}`)
       const json = await res.json()
 
       // Antes desta correção, falha de API (ex.: RPC de busca ausente/erro
@@ -77,7 +87,34 @@ export function Inbox() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter, channelFilter, debouncedSearch])
+  }, [buildParams])
+
+  // "Carregar mais" — ACRESCENTA à lista existente, offset = quantidade já
+  // carregada (sempre múltiplo de `limit`, então nunca pula/repete página).
+  // Paginação por offset simples (sem cursor) — decisão explícita: uma
+  // conversa pode mudar de posição entre páginas se receber mensagem nova
+  // no meio da navegação (last_message_at muda a ordenação); risco aceito
+  // nesta entrega, cursor pagination fica pra outra.
+  const loadMoreConversations = useCallback(async () => {
+    if (loadingMore || !hasMore) return
+    setLoadingMore(true)
+    try {
+      const res = await fetch(`/api/crm/conversations?${buildParams(conversations.length).toString()}`)
+      const json = await res.json()
+
+      if (!res.ok) {
+        toast.error('Erro ao carregar mais conversas', { description: json.error })
+        return
+      }
+
+      setConversations((prev) => [...prev, ...(json.conversations ?? [])])
+      setHasMore(Boolean(json.has_more))
+    } catch {
+      toast.error('Erro de rede ao carregar mais conversas')
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [buildParams, conversations.length, hasMore, loadingMore])
 
   const loadCounts = useCallback(async () => {
     try {
@@ -140,6 +177,8 @@ export function Inbox() {
             conversations={conversations}
             loading={loading}
             hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={loadMoreConversations}
             channels={channels}
             counts={counts}
             search={search}

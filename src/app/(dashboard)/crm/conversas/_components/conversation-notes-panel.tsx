@@ -23,17 +23,29 @@ interface ConversationNote {
 export function ConversationNotesPanel({ conversationId }: { conversationId: number }) {
   const [notes, setNotes] = useState<ConversationNote[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  // Falha de API nunca vira "lista vazia" silenciosa — antes desta correção
+  // um erro de rede/backend aqui era indistinguível de "sem notas ainda".
   async function loadNotes() {
     setLoading(true)
+    setError(null)
     try {
       const res = await fetch(`/api/crm/conversations/${conversationId}/notes`)
       const json = await res.json()
-      setNotes(res.ok ? (json.notes ?? []) : [])
+      if (!res.ok) {
+        setNotes([])
+        setError(json.error ?? 'Erro ao carregar notas.')
+        toast.error('Erro ao carregar notas', { description: json.error })
+        return
+      }
+      setNotes(json.notes ?? [])
     } catch {
       setNotes([])
+      setError('Erro de rede ao carregar notas.')
+      toast.error('Erro de rede ao carregar notas')
     } finally {
       setLoading(false)
     }
@@ -91,7 +103,11 @@ export function ConversationNotesPanel({ conversationId }: { conversationId: num
           </div>
         )}
 
-        {!loading && notes.length === 0 && (
+        {!loading && error && (
+          <p className="text-xs text-error text-center py-2">{error}</p>
+        )}
+
+        {!loading && !error && notes.length === 0 && (
           <p className="text-xs text-text-muted text-center py-2">Nenhuma nota ainda.</p>
         )}
 

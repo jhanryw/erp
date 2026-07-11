@@ -1,6 +1,6 @@
 'use client'
 
-import { RefreshCw, Search } from 'lucide-react'
+import { Loader2, RefreshCw, Search } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { formatRelative } from '@/lib/utils/date'
 import { Select } from '@/components/ui/select'
@@ -56,6 +56,8 @@ interface ConversationListProps {
   conversations: ConversationListItem[]
   loading: boolean
   hasMore: boolean
+  loadingMore: boolean
+  onLoadMore: () => void
   channels: CrmChannelOption[]
   counts: ConversationCounts | null
   search: string
@@ -73,6 +75,8 @@ export function ConversationList({
   conversations,
   loading,
   hasMore,
+  loadingMore,
+  onLoadMore,
   channels,
   counts,
   search,
@@ -185,9 +189,17 @@ export function ConversationList({
         ))}
 
         {hasMore && !loading && (
-          <p className="text-xs text-text-muted text-center p-3">
-            Mais conversas disponíveis — refine os filtros para ver outras.
-          </p>
+          <div className="p-3 flex justify-center">
+            <button
+              type="button"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-60 transition-colors"
+            >
+              {loadingMore && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              {loadingMore ? 'Carregando...' : 'Carregar mais conversas'}
+            </button>
+          </div>
         )}
       </div>
     </div>

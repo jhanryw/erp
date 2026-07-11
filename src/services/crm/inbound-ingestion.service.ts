@@ -30,7 +30,7 @@ import type {
   Json,
 } from '@/types/database.types'
 import type { ServiceOutcome } from '../produtos.service'
-import { findChannelByProviderInstance } from './channels.service'
+import { resolveActiveChannelByProviderInstance } from './channels.service'
 import { normalizeChannelIdentityValue, findOrCreateChannelIdentity } from './channel-identities.service'
 import { findOrCreateConversation } from './conversations.service'
 import { findMessageByExternalId, createMessage } from './messages.service'
@@ -192,24 +192,9 @@ async function resolveExistingMessage(
 export async function ingestInboundMessage(
   input: IngestInboundMessageInput,
 ): Promise<ServiceOutcome<IngestInboundMessageResult>> {
-  const channelResult = await findChannelByProviderInstance(input.providerInstanceIdentifier)
-  if (!channelResult.ok) return failure(channelResult.error)
-
+  const channelResult = await resolveActiveChannelByProviderInstance(input.providerInstanceIdentifier)
+  if (!channelResult.ok) return failure(channelResult.error, channelResult.status)
   const channel = channelResult.data
-  if (!channel) {
-    return failure(
-      `Canal não encontrado para provider_instance_identifier='${input.providerInstanceIdentifier}'. ` +
-      'Erro permanente de configuração — não reenviar sem cadastrar/corrigir o canal.',
-      422,
-    )
-  }
-  if (!channel.active || channel.status !== 'active') {
-    return failure(
-      `Canal '${channel.name}' encontrado mas inativo (active=${channel.active}, status=${channel.status}). ` +
-      'Erro permanente de configuração — não reenviar até o canal ser reativado.',
-      422,
-    )
-  }
 
   const normalizedValue = normalizeChannelIdentityValue(channel.channel_type, input.senderIdentityValue)
   if (!normalizedValue) {

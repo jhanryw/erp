@@ -3,9 +3,10 @@
  * (Entrega 5: Evolution → N8N → ERP). Fecha o ciclo de mensagens outbound
  * (sent/delivered/read/failed) sem envio real existir ainda nesta fase.
  *
- * Reaproveita integralmente o que já existe: findChannelByProviderInstance()
- * e a política de canal inativo/inexistente = erro permanente 422 (mesma
- * de inbound-ingestion.service.ts), findMessageByExternalId() (Entrega 3).
+ * Reaproveita integralmente o que já existe: resolveActiveChannelByProviderInstance()
+ * (canais.service.ts — centraliza resolução + política de canal inativo/
+ * inexistente = erro permanente 422, mesma usada por inbound-ingestion.service.ts
+ * desde a Entrega de hardening), findMessageByExternalId() (Entrega 3).
  *
  * "Não encontrada" / "não é outbound" / "status obsoleto" NÃO são erro —
  * são resultado válido (`applied: false` + `reason`), sempre 200. Só canal
@@ -16,7 +17,7 @@
 import type { ProviderMessageStatus } from './messages.service'
 import type { CrmMessageStatus } from '@/types/database.types'
 import type { ServiceOutcome } from '../produtos.service'
-import { findChannelByProviderInstance } from './channels.service'
+import { resolveActiveChannelByProviderInstance } from './channels.service'
 import { findMessageByExternalId } from './messages.service'
 import { applyProviderStatusUpdate } from './messages.service'
 
@@ -55,24 +56,9 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
 export async function syncMessageStatus(
   input: SyncMessageStatusInput,
 ): Promise<ServiceOutcome<SyncMessageStatusResult>> {
-  const channelResult = await findChannelByProviderInstance(input.providerInstanceIdentifier)
-  if (!channelResult.ok) return failure(channelResult.error)
-
+  const channelResult = await resolveActiveChannelByProviderInstance(input.providerInstanceIdentifier)
+  if (!channelResult.ok) return failure(channelResult.error, channelResult.status)
   const channel = channelResult.data
-  if (!channel) {
-    return failure(
-      `Canal não encontrado para provider_instance_identifier='${input.providerInstanceIdentifier}'. ` +
-      'Erro permanente de configuração — não reenviar sem cadastrar/corrigir o canal.',
-      422,
-    )
-  }
-  if (!channel.active || channel.status !== 'active') {
-    return failure(
-      `Canal '${channel.name}' encontrado mas inativo (active=${channel.active}, status=${channel.status}). ` +
-      'Erro permanente de configuração — não reenviar até o canal ser reativado.',
-      422,
-    )
-  }
 
   const messageResult = await findMessageByExternalId(channel.id, input.externalMessageId, channel.company_id)
   if (!messageResult.ok) return failure(messageResult.error)

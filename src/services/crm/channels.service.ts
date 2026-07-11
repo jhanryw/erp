@@ -132,3 +132,51 @@ export async function findChannelByProviderInstance(
   if (error) return failure(error.message)
   return success(data)
 }
+
+/**
+ * Só a condição de "canal está ativo" (sem mensagem própria) — reaproveitável
+ * independente de como o canal foi resolvido (por provider_instance_identifier
+ * ou por id). Extraído na Entrega de hardening: a condição
+ * `!channel.active || channel.status !== 'active'` estava duplicada em
+ * inbound-ingestion/message-status-sync/outbound-message, cada um com sua
+ * própria mensagem de erro — esta função centraliza só a regra booleana,
+ * cada chamador continua dono da sua mensagem (outbound tem uma mensagem
+ * mais curta que os outros dois, decisão explícita de não uniformizar texto
+ * observável).
+ */
+export function isChannelActive(channel: CrmChannel): boolean {
+  return channel.active && channel.status === 'active'
+}
+
+/**
+ * Resolve canal por provider_instance_identifier + valida que está ativo,
+ * com as mensagens de erro (422, "erro permanente de configuração") que já
+ * eram usadas de forma idêntica em inbound-ingestion.service.ts e
+ * message-status-sync.service.ts antes desta centralização — texto colado
+ * literalmente dos dois, nenhuma mensagem observável muda para quem consome
+ * esses dois endpoints.
+ */
+export async function resolveActiveChannelByProviderInstance(
+  providerInstanceIdentifier: string,
+): Promise<ServiceOutcome<CrmChannel>> {
+  const result = await findChannelByProviderInstance(providerInstanceIdentifier)
+  if (!result.ok) return failure(result.error)
+
+  const channel = result.data
+  if (!channel) {
+    return failure(
+      `Canal não encontrado para provider_instance_identifier='${providerInstanceIdentifier}'. ` +
+      'Erro permanente de configuração — não reenviar sem cadastrar/corrigir o canal.',
+      422,
+    )
+  }
+  if (!isChannelActive(channel)) {
+    return failure(
+      `Canal '${channel.name}' encontrado mas inativo (active=${channel.active}, status=${channel.status}). ` +
+      'Erro permanente de configuração — não reenviar até o canal ser reativado.',
+      422,
+    )
+  }
+
+  return success(channel)
+}
