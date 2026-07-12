@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { Plus, DollarSign } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -34,18 +35,20 @@ const PAYMENT_METHOD_LABELS: Record<string, string> = {
   card: 'Cartão legado',
 }
 
-async function getEntries() {
+async function getEntries(companyId: number) {
   const admin = createAdminClient()
   const { data } = await admin
     .from('finance_entries')
     .select('id, type, category, description, amount, reference_date, notes, payment_method, cash_movement_id')
+    .eq('company_id', companyId)
     .order('reference_date', { ascending: false })
     .limit(100) as unknown as { data: any[] | null }
   return data ?? []
 }
 
 export default async function LancamentosPage() {
-  const entries = await getEntries()
+  const profile = await requirePageRole('gerente')
+  const entries = profile.company_id ? await getEntries(profile.company_id) : []
 
   const totalIncome = entries.filter(e => e.type === 'income').reduce((s, e) => s + e.amount, 0)
   const totalExpense = entries.filter(e => e.type === 'expense').reduce((s, e) => s + e.amount, 0)

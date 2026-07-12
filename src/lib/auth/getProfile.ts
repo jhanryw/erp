@@ -43,8 +43,8 @@ export async function getUserProfile(userId: string, email?: string): Promise<Us
 }
 
 /**
- * Retorna apenas o role do usuário — otimizado para uso em requirePageRole().
- * Evita buscar campos desnecessários quando só o role é relevante.
+ * Retorna apenas o role do usuário — evita buscar campos desnecessários
+ * quando só o role é relevante.
  */
 export async function getUserRole(userId: string): Promise<AppRole> {
   const admin = createAdminClient()

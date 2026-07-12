@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft, ChevronLeft, ChevronRight, Info } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils/currency'
 
@@ -53,7 +54,7 @@ type RawEntry = {
 
 // ─── Data ───────────────────────────────────────────────────────────────────
 
-async function getDreData(ym: string) {
+async function getDreData(ym: string, companyId: number) {
   const admin = createAdminClient()
   const { start, end } = monthBounds(ym)
 
@@ -61,6 +62,7 @@ async function getDreData(ym: string) {
     admin
       .from('sales')
       .select('subtotal, discount_amount, cashback_used, sale_items(unit_cost, quantity)')
+      .eq('company_id', companyId)
       .gte('sale_date', start)
       .lte('sale_date', end)
       .not('status', 'eq', 'cancelled')
@@ -73,6 +75,7 @@ async function getDreData(ym: string) {
     admin
       .from('finance_entries')
       .select('category, amount')
+      .eq('company_id', companyId)
       .gte('reference_date', start)
       .lte('reference_date', end)
       .not('category', 'eq', 'sale') as unknown as {
@@ -233,16 +236,43 @@ function Separator() {
 
 // ─── Page ────────────────────────────────────────────────────────────────────
 
+const EMPTY_DRE_DATA = {
+  receitaBruta: 0,
+  descontos: 0,
+  receitaLiquida: 0,
+  cmv: 0,
+  lucroBruto: 0,
+  margemBruta: 0,
+  despesas: {
+    marketing: 0,
+    rent: 0,
+    salaries: 0,
+    operational: 0,
+    taxes: 0,
+    freight_cost: 0,
+    other_expense: 0,
+  },
+  totalDespesasOp: 0,
+  resultadoOperacional: 0,
+  margemOp: 0,
+  outrasReceitas: 0,
+  lucroLiquidoGerencial: 0,
+  margemLiquida: 0,
+  saidaCaixaEstoque: 0,
+}
+
 export default async function DrePage({
   searchParams,
 }: {
   searchParams: { month?: string }
 }) {
+  const profile = await requirePageRole('gerente')
+
   const ym = /^\d{4}-\d{2}$/.test(searchParams.month ?? '')
     ? searchParams.month!
     : currentYM()
 
-  const data       = await getDreData(ym)
+  const data       = profile.company_id ? await getDreData(ym, profile.company_id) : EMPTY_DRE_DATA
   const prevMonth  = shiftMonth(ym, -1)
   const nextMonth  = shiftMonth(ym, +1)
 
