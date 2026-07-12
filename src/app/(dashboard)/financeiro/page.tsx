@@ -55,12 +55,13 @@ function monthBounds(mesIso: string) {
   }
 }
 
-async function getFinancialData() {
+async function getFinancialData(companyId: number) {
   const supabase = createAdminClient()
 
   const { data, error } = await supabase
     .from('vw_dre_mensal')
     .select('*')
+    .eq('company_id', companyId)
     .order('mes', { ascending: false })
     .limit(13) as unknown as { data: DreRow[] | null; error: { message: string } | null }
 
@@ -87,6 +88,7 @@ async function getFinancialData() {
     const { data: salesData } = await supabase
       .from('sales')
       .select('id, customer_id')
+      .eq('company_id', companyId)
       .gte('sale_date', start)
       .lte('sale_date', end)
       .not('status', 'eq', 'cancelled')
@@ -124,9 +126,25 @@ function marginColor(pct: number, hasRevenue: boolean) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+const EMPTY_FINANCIAL_DATA: {
+  current: DreRow | null
+  previous: DreRow | null
+  months: DreRow[]
+  totalVendas: number
+  uniqueClientes: number
+} = {
+  current: null,
+  previous: null,
+  months: [],
+  totalVendas: 0,
+  uniqueClientes: 0,
+}
+
 export default async function FinanceiroPage() {
-  await requirePageRole('gerente')
-  const { current, previous, months, totalVendas, uniqueClientes } = await getFinancialData()
+  const profile = await requirePageRole('gerente')
+  const { current, previous, months, totalVendas, uniqueClientes } = profile.company_id
+    ? await getFinancialData(profile.company_id)
+    : EMPTY_FINANCIAL_DATA
 
   const rl   = Number(current?.receita_liquida         ?? 0)
   const cmv  = Number(current?.cmv                     ?? 0)

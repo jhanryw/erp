@@ -120,7 +120,7 @@ async function getCicloOperacional(admin: ReturnType<typeof createAdminClient>) 
   }
 }
 
-async function getVendasPorAtributo(admin: ReturnType<typeof createAdminClient>): Promise<{ byColor: PieData[]; bySize: PieData[] }> {
+async function getVendasPorAtributo(admin: ReturnType<typeof createAdminClient>, companyId: number): Promise<{ byColor: PieData[]; bySize: PieData[] }> {
   const DIAS = 90
   const desde = new Date()
   desde.setDate(desde.getDate() - DIAS)
@@ -134,9 +134,13 @@ async function getVendasPorAtributo(admin: ReturnType<typeof createAdminClient>)
   const corTypeId = (varTypes ?? []).find(t => t.slug === 'cor')?.id
   const tamanhoTypeId = (varTypes ?? []).find(t => t.slug === 'tamanho')?.id
 
+  // sale_items não tem company_id próprio — isolado via sales.company_id
+  // (join !inner). product_variation_attributes (abaixo) herda o isolamento
+  // porque soldIds só contém variações de vendas já filtradas aqui.
   const { data: saleItemsRaw } = await (admin
     .from('sale_items')
-    .select('product_variation_id, quantity, sales!inner(sale_date, status)')
+    .select('product_variation_id, quantity, sales!inner(sale_date, status, company_id)')
+    .eq('sales.company_id' as any, companyId)
     .gte('sales.sale_date' as any, desdeStr)
     .not('sales.status' as any, 'eq', 'cancelled')
     .not('sales.status' as any, 'eq', 'returned')) as unknown as {
@@ -243,7 +247,7 @@ async function getCoverageByProduct(admin: ReturnType<typeof createAdminClient>)
     .slice(0, 8)
 }
 
-async function getDashboardData() {
+async function getDashboardData(companyId: number) {
   const admin = createAdminClient()
   const { start, end } = currentYearMonth()
 
@@ -252,6 +256,7 @@ async function getDashboardData() {
     admin
       .from('sales')
       .select('total, sale_items(unit_cost, quantity, gross_profit)')
+      .eq('company_id', companyId)
       .gte('sale_date', start)
       .lte('sale_date', end)
       .not('status', 'eq', 'cancelled')
@@ -264,13 +269,15 @@ async function getDashboardData() {
     admin
       .from('finance_entries')
       .select('type, amount')
+      .eq('company_id', companyId)
       .gte('reference_date', start)
       .lte('reference_date', end) as unknown as {
         data: RawCashEntry[] | null
         error: { message: string } | null
       },
 
-    // Ranking de produtos (todos — filter after)
+    // Ranking de produtos — sale_items não tem company_id próprio, isolado
+    // via sales.company_id (join !inner)
     admin
       .from('sale_items')
       .select(`
@@ -280,15 +287,16 @@ async function getDashboardData() {
         product_variations:product_variation_id (
           products:product_id (id, name)
         ),
-        sales!inner(status)
+        sales!inner(status, company_id)
       `)
+      .eq('sales.company_id' as any, companyId)
       .not('sales.status', 'eq', 'cancelled')
       .not('sales.status', 'eq', 'returned') as unknown as {
         data: RawRankingItem[] | null
         error: { message: string } | null
       },
 
-    // Lucro por cliente (todos — filter after)
+    // Lucro por cliente
     admin
       .from('sales')
       .select(`
@@ -297,6 +305,7 @@ async function getDashboardData() {
         customers:customer_id (id, name),
         sale_items (quantity, unit_cost, gross_profit)
       `)
+      .eq('company_id', companyId)
       .not('status', 'eq', 'cancelled')
       .not('status', 'eq', 'returned') as unknown as {
         data: RawClientSale[] | null
@@ -304,12 +313,12 @@ async function getDashboardData() {
       },
 
     // Alertas inteligentes
-    getAlerts(),
-    // Ciclo operacional
+    getAlerts(companyId),
+    // Ciclo operacional — fora do escopo desta entrega (Estoque 1.1 futura)
     getCicloOperacional(admin),
     // Gráficos de vendas por cor e tamanho
-    getVendasPorAtributo(admin),
-    // Cobertura de estoque por produto
+    getVendasPorAtributo(admin, companyId),
+    // Cobertura de estoque por produto — fora do escopo desta entrega (Estoque 1.1 futura)
     getCoverageByProduct(admin),
   ])
 
@@ -381,8 +390,32 @@ async function getDashboardData() {
   }
 }
 
+const EMPTY_DASHBOARD_DATA: Awaited<ReturnType<typeof getDashboardData>> = {
+  faturamento: 0,
+  custo: 0,
+  lucro: 0,
+  margem: 0,
+  entradas: 0,
+  saidas: 0,
+  saldo: 0,
+  topProducts: [],
+  topClients: [],
+  alerts: [],
+  ciclo: {
+    pecasPorDia: 0,
+    totalVendido60: 0,
+    estoqueTotal: 0,
+    coberturaDias: null,
+    pedirEmDias: null,
+    janelaDias: 60,
+  },
+  byColor: [],
+  bySize: [],
+  coverage: [],
+}
+
 export default async function DashboardPage() {
-  await requirePageRole('gerente')
+  const profile = await requirePageRole('gerente')
 
   const {
     faturamento,
@@ -398,7 +431,7 @@ export default async function DashboardPage() {
     byColor,
     bySize,
     coverage,
-  } = await getDashboardData()
+  } = profile.company_id ? await getDashboardData(profile.company_id) : EMPTY_DASHBOARD_DATA
 
   alerts.sort((a, b) => {
     const priority = { high: 2, medium: 1, low: 0 }
