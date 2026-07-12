@@ -27,6 +27,9 @@ const PUBLIC_PATHS = [
   '/api/webhooks/',          // webhooks externos (Nuvemshop, etc.) — sem sessão
   '/api/automations/',       // automação N8N→ERP — protegida por secret próprio (Bearer), não sessão
   '/api/jobs/',              // cron jobs — protegidos por CRON_SECRET próprio, não sessão
+  '/api/alerts/daily',       // cron de alerta diário — protegida por CRON_SECRET próprio, não sessão
+                              // (path exato, não o prefixo /api/alerts/ inteiro — não liberar
+                              // futuras rotas sob /api/alerts/ sem decisão própria)
 ]
 
 export async function middleware(request: NextRequest) {

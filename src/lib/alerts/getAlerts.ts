@@ -49,18 +49,7 @@ function prevYM(ym: string): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-/**
- * companyId é opcional por um motivo específico: /api/alerts/daily (cron de
- * WhatsApp, sem sessão de usuário) chama getAlerts() sem nenhum company_id
- * disponível — não há uma resposta óbvia de onde esse job deveria obtê-lo, e
- * isso está fora do escopo aprovado da Entrega Financeiro 1.2 (que só cobre
- * chamadores com sessão via requirePageRole). Quando companyId não é
- * informado, o comportamento é idêntico ao de antes desta entrega (sem
- * filtro) — nenhuma regressão para essa rota, mas ela continua com o mesmo
- * risco de mistura entre empresas que já tinha. Fica registrado como
- * pendência para uma entrega futura decidir como o cron resolve company_id.
- */
-export async function getAlerts(companyId?: number): Promise<Alert[]> {
+export async function getAlerts(companyId: number): Promise<Alert[]> {
   const admin = createAdminClient()
   const alerts: Alert[] = []
 
@@ -69,77 +58,68 @@ export async function getAlerts(companyId?: number): Promise<Alert[]> {
   const { start: currStart, end: currEnd } = ymBounds(ym)
   const { start: prevStart, end: prevEnd } = ymBounds(prev)
 
-  // Alerta 1 — produto com prejuízo. sale_items não tem company_id próprio —
-  // isolado via sales.company_id (join !inner) quando companyId é informado.
-  let rankingQuery = admin
-    .from('sale_items')
-    .select(`
-      quantity,
-      gross_profit,
-      product_variation_id,
-      product_variations:product_variation_id (
-        products:product_id (id, name)
-      ),
-      sales!inner(status, company_id)
-    `)
-  if (companyId != null) rankingQuery = rankingQuery.eq('sales.company_id' as any, companyId)
-  rankingQuery = rankingQuery
-    .not('sales.status', 'eq', 'cancelled')
-    .not('sales.status', 'eq', 'returned')
-
-  // Alerta 2 — cliente com prejuízo
-  let clientQuery = admin
-    .from('sales')
-    .select(`
-      total,
-      customer_id,
-      customers:customer_id (id, name),
-      sale_items (gross_profit)
-    `)
-  if (companyId != null) clientQuery = clientQuery.eq('company_id', companyId)
-  clientQuery = clientQuery
-    .not('status', 'eq', 'cancelled')
-    .not('status', 'eq', 'returned')
-
-  // Alerta 3 — margem geral (mês atual)
-  let currSalesQuery = admin
-    .from('sales')
-    .select('total, sale_items(gross_profit)')
-  if (companyId != null) currSalesQuery = currSalesQuery.eq('company_id', companyId)
-  currSalesQuery = currSalesQuery
-    .gte('sale_date', currStart)
-    .lte('sale_date', currEnd)
-    .not('status', 'eq', 'cancelled')
-    .not('status', 'eq', 'returned')
-
-  // Alerta 4 — queda de faturamento (mês anterior)
-  let prevSalesQuery = admin
-    .from('sales')
-    .select('total')
-  if (companyId != null) prevSalesQuery = prevSalesQuery.eq('company_id', companyId)
-  prevSalesQuery = prevSalesQuery
-    .gte('sale_date', prevStart)
-    .lte('sale_date', prevEnd)
-    .not('status', 'eq', 'cancelled')
-    .not('status', 'eq', 'returned')
-
   const [rankingRes, clientRes, currSalesRes, prevSalesRes] = await Promise.all([
-    rankingQuery as unknown as {
-      data: SaleItem[] | null
-      error: { message: string } | null
-    },
-    clientQuery as unknown as {
-      data: ClientSale[] | null
-      error: { message: string } | null
-    },
-    currSalesQuery as unknown as {
-      data: { total: number; sale_items: { gross_profit: number }[] }[] | null
-      error: { message: string } | null
-    },
-    prevSalesQuery as unknown as {
-      data: { total: number }[] | null
-      error: { message: string } | null
-    },
+    // Alerta 1 — produto com prejuízo. sale_items não tem company_id próprio
+    // — isolado via sales.company_id (join !inner).
+    admin
+      .from('sale_items')
+      .select(`
+        quantity,
+        gross_profit,
+        product_variation_id,
+        product_variations:product_variation_id (
+          products:product_id (id, name)
+        ),
+        sales!inner(status, company_id)
+      `)
+      .eq('sales.company_id' as any, companyId)
+      .not('sales.status', 'eq', 'cancelled')
+      .not('sales.status', 'eq', 'returned') as unknown as {
+        data: SaleItem[] | null
+        error: { message: string } | null
+      },
+
+    // Alerta 2 — cliente com prejuízo
+    admin
+      .from('sales')
+      .select(`
+        total,
+        customer_id,
+        customers:customer_id (id, name),
+        sale_items (gross_profit)
+      `)
+      .eq('company_id', companyId)
+      .not('status', 'eq', 'cancelled')
+      .not('status', 'eq', 'returned') as unknown as {
+        data: ClientSale[] | null
+        error: { message: string } | null
+      },
+
+    // Alerta 3 — margem geral (mês atual)
+    admin
+      .from('sales')
+      .select('total, sale_items(gross_profit)')
+      .eq('company_id', companyId)
+      .gte('sale_date', currStart)
+      .lte('sale_date', currEnd)
+      .not('status', 'eq', 'cancelled')
+      .not('status', 'eq', 'returned') as unknown as {
+        data: { total: number; sale_items: { gross_profit: number }[] }[] | null
+        error: { message: string } | null
+      },
+
+    // Alerta 4 — queda de faturamento (mês anterior)
+    admin
+      .from('sales')
+      .select('total')
+      .eq('company_id', companyId)
+      .gte('sale_date', prevStart)
+      .lte('sale_date', prevEnd)
+      .not('status', 'eq', 'cancelled')
+      .not('status', 'eq', 'returned') as unknown as {
+        data: { total: number }[] | null
+        error: { message: string } | null
+      },
   ])
 
   // — Alerta 1: produto com prejuízo

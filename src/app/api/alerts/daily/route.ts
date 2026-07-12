@@ -1,7 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getAlerts } from '@/lib/alerts/getAlerts'
 
-export async function POST() {
+// Job de alerta diário via WhatsApp. Chamado máquina-a-máquina (sem sessão
+// de usuário) — autenticado por CRON_SECRET, mesmo padrão de /api/jobs/*.
+// /api/alerts/daily está liberada no middleware especificamente (não o
+// prefixo /api/alerts/ inteiro); a segurança real é este Bearer check.
+export async function POST(request: Request) {
+  const authHeader = request.headers.get('Authorization')
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
   const apiUrl = process.env.EVOLUTION_API_URL
   const apiKey = process.env.EVOLUTION_API_KEY
   const instance = process.env.EVOLUTION_INSTANCE
@@ -14,7 +23,22 @@ export async function POST() {
     )
   }
 
-  const alerts = await getAlerts()
+  // Empresa exclusivamente de variável de ambiente — nunca de body, query
+  // string ou header controlado pelo chamador. Solução operacional para o
+  // cenário atual de uma empresa e um destinatário global; quando existir
+  // uma segunda empresa com alertas próprios, isso vira configuração por
+  // empresa (fora do escopo desta correção).
+  const companyIdRaw = process.env.ALERT_COMPANY_ID
+  const companyId = companyIdRaw ? Number(companyIdRaw) : NaN
+
+  if (!companyIdRaw || Number.isNaN(companyId)) {
+    return NextResponse.json(
+      { error: 'Variável de ambiente não configurada ou inválida: ALERT_COMPANY_ID' },
+      { status: 500 }
+    )
+  }
+
+  const alerts = await getAlerts(companyId)
   const critical = alerts.filter((a) => a.severity === 'high')
 
   if (critical.length === 0) {
