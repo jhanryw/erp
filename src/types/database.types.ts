@@ -1064,6 +1064,31 @@ export interface Database {
           last_purchase_date: string
         }
       }
+      vw_dre_mensal: {
+        Row: {
+          mes: string
+          company_id: number
+          receita_bruta: number
+          descontos: number
+          receita_liquida: number
+          cmv: number
+          lucro_bruto: number
+          margem_bruta_pct: number
+          marketing: number
+          aluguel: number
+          salarios: number
+          operacional: number
+          impostos: number
+          frete: number
+          outras_despesas: number
+          total_opex: number
+          resultado_operacional: number
+          outras_receitas: number
+          lucro_liquido_gerencial: number
+          margem_liquida_pct: number
+          saida_caixa_estoque: number
+        }
+      }
       mv_daily_sales_summary: {
         Row: {
           sale_date: string
@@ -1204,6 +1229,7 @@ export type MvAbcByProfit = Views<'mv_abc_by_profit'>
 export type MvAbcByVolume = Views<'mv_abc_by_volume'>
 export type MvSupplierPerformance = Views<'mv_supplier_performance'>
 export type VwSupplierCostByProduct = Views<'vw_supplier_cost_by_product'>
+export type VwDreMensal = Views<'vw_dre_mensal'>
 export type Category = Tables<'categories'>
 export type Customer = Tables<'customers'>
 export type CustomerMetrics = Tables<'customer_metrics'>

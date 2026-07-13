@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils/currency'
+import type { VwDreMensal } from '@/types/database.types'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,15 +22,6 @@ function shiftMonth(ym: string, delta: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 }
 
-function monthBounds(ym: string): { start: string; end: string } {
-  const [y, m] = ym.split('-').map(Number)
-  const lastDay = new Date(y, m, 0).getDate()
-  return {
-    start: `${ym}-01`,
-    end:   `${ym}-${String(lastDay).padStart(2, '0')}`,
-  }
-}
-
 function monthLabel(ym: string): string {
   const [y, m] = ym.split('-').map(Number)
   return new Date(y, m - 1, 1).toLocaleDateString('pt-BR', {
@@ -38,129 +30,48 @@ function monthLabel(ym: string): string {
   })
 }
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-
-type RawSale = {
-  subtotal:        number
-  discount_amount: number
-  cashback_used:   number
-  sale_items:      { unit_cost: number; quantity: number }[]
-}
-
-type RawEntry = {
-  category: string
-  amount:   number
-}
-
 // ─── Data ───────────────────────────────────────────────────────────────────
 
-async function getDreData(ym: string, companyId: number) {
+type DreData = Omit<VwDreMensal, 'mes' | 'company_id'>
+
+const EMPTY_DRE_DATA: DreData = {
+  receita_bruta: 0,
+  descontos: 0,
+  receita_liquida: 0,
+  cmv: 0,
+  lucro_bruto: 0,
+  margem_bruta_pct: 0,
+  marketing: 0,
+  aluguel: 0,
+  salarios: 0,
+  operacional: 0,
+  impostos: 0,
+  frete: 0,
+  outras_despesas: 0,
+  total_opex: 0,
+  resultado_operacional: 0,
+  outras_receitas: 0,
+  lucro_liquido_gerencial: 0,
+  margem_liquida_pct: 0,
+  saida_caixa_estoque: 0,
+}
+
+async function getDreData(ym: string, companyId: number): Promise<DreData> {
   const admin = createAdminClient()
-  const { start, end } = monthBounds(ym)
 
-  const [salesRes, entriesRes] = await Promise.all([
-    admin
-      .from('sales')
-      .select('subtotal, discount_amount, cashback_used, sale_items(unit_cost, quantity)')
-      .eq('company_id', companyId)
-      .gte('sale_date', start)
-      .lte('sale_date', end)
-      .not('status', 'eq', 'cancelled')
-      .not('status', 'eq', 'returned') as unknown as {
-        data: RawSale[] | null
-        error: { message: string } | null
-      },
+  const { data, error } = await admin
+    .from('vw_dre_mensal')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('mes', `${ym}-01`)
+    .maybeSingle() as unknown as { data: VwDreMensal | null; error: { message: string } | null }
 
-    // Exclui 'sale' para não duplicar receita
-    admin
-      .from('finance_entries')
-      .select('category, amount')
-      .eq('company_id', companyId)
-      .gte('reference_date', start)
-      .lte('reference_date', end)
-      .not('category', 'eq', 'sale') as unknown as {
-        data: RawEntry[] | null
-        error: { message: string } | null
-      },
-  ])
-
-  // ── Bloco 1: Receita ──────────────────────────────────────────────────────
-  let receitaBruta = 0
-  let descontos    = 0
-  let cmv          = 0
-
-  for (const sale of salesRes.data ?? []) {
-    receitaBruta += Number(sale.subtotal)
-    descontos    += Number(sale.discount_amount) + Number(sale.cashback_used)
-    for (const item of sale.sale_items ?? []) {
-      cmv += Number(item.unit_cost) * Number(item.quantity)
-    }
+  if (error) {
+    console.error('Erro ao buscar DRE:', error.message)
+    return EMPTY_DRE_DATA
   }
 
-  const receitaLiquida = receitaBruta - descontos
-
-  // ── Bloco 2: Custo ────────────────────────────────────────────────────────
-  const lucroBruto   = receitaLiquida - cmv
-  const margemBruta  = receitaLiquida > 0 ? (lucroBruto / receitaLiquida) * 100 : 0
-
-  // ── Bloco 3: Despesas operacionais ───────────────────────────────────────
-  const expMap: Record<string, number> = {
-    marketing:     0,
-    rent:          0,
-    salaries:      0,
-    operational:   0,
-    taxes:         0,
-    freight_cost:  0,
-    other_expense: 0,
-    other_income:  0,
-    // separado — não entra no DRE
-    stock_purchase: 0,
-  }
-
-  for (const e of entriesRes.data ?? []) {
-    if (e.category in expMap) expMap[e.category] += Number(e.amount)
-  }
-
-  const totalDespesasOp =
-    expMap.marketing + expMap.rent + expMap.salaries +
-    expMap.operational + expMap.taxes + expMap.freight_cost + expMap.other_expense
-
-  const resultadoOperacional = lucroBruto - totalDespesasOp
-  const margemOp = receitaLiquida > 0 ? (resultadoOperacional / receitaLiquida) * 100 : 0
-
-  // ── Bloco 4: Lucro Líquido Gerencial (competência pura) ──────────────────
-  // stock_purchase NÃO entra aqui — é saída de caixa, não despesa do período.
-  const outrasReceitas       = expMap.other_income
-  const lucroLiquidoGerencial = resultadoOperacional + outrasReceitas
-  const margemLiquida         = receitaLiquida > 0 ? (lucroLiquidoGerencial / receitaLiquida) * 100 : 0
-
-  // Saída de caixa para estoque — exibido separado, fora da DRE
-  const saidaCaixaEstoque = expMap.stock_purchase
-
-  return {
-    receitaBruta,
-    descontos,
-    receitaLiquida,
-    cmv,
-    lucroBruto,
-    margemBruta,
-    despesas: {
-      marketing:     expMap.marketing,
-      rent:          expMap.rent,
-      salaries:      expMap.salaries,
-      operational:   expMap.operational,
-      taxes:         expMap.taxes,
-      freight_cost:  expMap.freight_cost,
-      other_expense: expMap.other_expense,
-    },
-    totalDespesasOp,
-    resultadoOperacional,
-    margemOp,
-    outrasReceitas,
-    lucroLiquidoGerencial,
-    margemLiquida,
-    saidaCaixaEstoque,
-  }
+  return data ?? EMPTY_DRE_DATA
 }
 
 // ─── UI Helpers ─────────────────────────────────────────────────────────────
@@ -213,15 +124,15 @@ function ResultRow({
   value,
   margin,
 }: {
-  label:  string
-  value:  number
-  margin: number
+  label:   string
+  value:   number
+  margin?: number
 }) {
   return (
     <div className="flex items-center justify-between pt-3 mt-1 border-t border-border">
       <span className="font-bold text-text-primary">
         {label}
-        <MargemBadge value={margin} />
+        {margin !== undefined && <MargemBadge value={margin} />}
       </span>
       <span className={`tabular-nums text-lg font-bold ${value >= 0 ? 'text-success' : 'text-error'}`}>
         {formatCurrency(value)}
@@ -235,31 +146,6 @@ function Separator() {
 }
 
 // ─── Page ────────────────────────────────────────────────────────────────────
-
-const EMPTY_DRE_DATA = {
-  receitaBruta: 0,
-  descontos: 0,
-  receitaLiquida: 0,
-  cmv: 0,
-  lucroBruto: 0,
-  margemBruta: 0,
-  despesas: {
-    marketing: 0,
-    rent: 0,
-    salaries: 0,
-    operational: 0,
-    taxes: 0,
-    freight_cost: 0,
-    other_expense: 0,
-  },
-  totalDespesasOp: 0,
-  resultadoOperacional: 0,
-  margemOp: 0,
-  outrasReceitas: 0,
-  lucroLiquidoGerencial: 0,
-  margemLiquida: 0,
-  saidaCaixaEstoque: 0,
-}
 
 export default async function DrePage({
   searchParams,
@@ -316,13 +202,13 @@ export default async function DrePage({
           <p className="text-xs font-semibold uppercase tracking-wider text-text-muted">Receita</p>
         </CardHeader>
         <CardContent className="pt-0">
-          <DreRow label="Receita Bruta"          value={data.receitaBruta} />
-          <DreRow label="Descontos e Cashback"   value={-data.descontos}   muted prefix="(−)" />
+          <DreRow label="Receita Bruta"          value={data.receita_bruta} />
+          <DreRow label="Descontos e Cashback"   value={-data.descontos}    muted prefix="(−)" />
           <Separator />
           <div className="flex items-center justify-between pt-2">
             <span className="font-semibold text-text-primary">Receita Líquida</span>
             <span className="tabular-nums font-semibold text-text-primary text-base">
-              {formatCurrency(data.receitaLiquida)}
+              {formatCurrency(data.receita_liquida)}
             </span>
           </div>
         </CardContent>
@@ -342,7 +228,7 @@ export default async function DrePage({
             muted
             prefix="(−)"
           />
-          <ResultRow label="Lucro Bruto" value={data.lucroBruto} margin={data.margemBruta} />
+          <ResultRow label="Lucro Bruto" value={data.lucro_bruto} margin={data.margem_bruta_pct} />
         </CardContent>
       </Card>
 
@@ -354,17 +240,16 @@ export default async function DrePage({
           </p>
         </CardHeader>
         <CardContent className="pt-0">
-          <DreRow label="Marketing"       value={-data.despesas.marketing}     muted prefix="(−)" />
-          <DreRow label="Aluguel"         value={-data.despesas.rent}          muted prefix="(−)" />
-          <DreRow label="Salários"        value={-data.despesas.salaries}      muted prefix="(−)" />
-          <DreRow label="Operacional"     value={-data.despesas.operational}   muted prefix="(−)" />
-          <DreRow label="Impostos"        value={-data.despesas.taxes}         muted prefix="(−)" />
-          <DreRow label="Frete (custo)"   value={-data.despesas.freight_cost}  muted prefix="(−)" />
-          <DreRow label="Outras Despesas" value={-data.despesas.other_expense} muted prefix="(−)" />
+          <DreRow label="Marketing"       value={-data.marketing}       muted prefix="(−)" />
+          <DreRow label="Aluguel"         value={-data.aluguel}         muted prefix="(−)" />
+          <DreRow label="Salários"        value={-data.salarios}        muted prefix="(−)" />
+          <DreRow label="Operacional"     value={-data.operacional}     muted prefix="(−)" />
+          <DreRow label="Impostos"        value={-data.impostos}        muted prefix="(−)" />
+          <DreRow label="Frete (custo)"   value={-data.frete}           muted prefix="(−)" />
+          <DreRow label="Outras Despesas" value={-data.outras_despesas} muted prefix="(−)" />
           <ResultRow
             label="Resultado Operacional"
-            value={data.resultadoOperacional}
-            margin={data.margemOp}
+            value={data.resultado_operacional}
           />
         </CardContent>
       </Card>
@@ -377,19 +262,19 @@ export default async function DrePage({
           </p>
         </CardHeader>
         <CardContent className="pt-0">
-          {data.outrasReceitas > 0 && (
-            <DreRow label="Outras Receitas" value={data.outrasReceitas} prefix="(+)" />
+          {data.outras_receitas > 0 && (
+            <DreRow label="Outras Receitas" value={data.outras_receitas} prefix="(+)" />
           )}
           <ResultRow
             label="Lucro Líquido Gerencial"
-            value={data.lucroLiquidoGerencial}
-            margin={data.margemLiquida}
+            value={data.lucro_liquido_gerencial}
+            margin={data.margem_liquida_pct}
           />
         </CardContent>
       </Card>
 
       {/* ── INFORMATIVO DE CAIXA (fora da DRE) ────────────────────────────── */}
-      {data.saidaCaixaEstoque > 0 && (
+      {data.saida_caixa_estoque > 0 && (
         <div className="rounded-xl border border-border bg-bg-subtle px-4 py-4">
           <div className="flex items-start gap-3">
             <Info className="w-4 h-4 text-text-muted mt-0.5 shrink-0" />
@@ -405,7 +290,7 @@ export default async function DrePage({
               </p>
             </div>
             <span className="tabular-nums font-semibold text-text-secondary whitespace-nowrap">
-              {formatCurrency(data.saidaCaixaEstoque)}
+              {formatCurrency(data.saida_caixa_estoque)}
             </span>
           </div>
         </div>
