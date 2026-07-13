@@ -371,6 +371,10 @@ export interface Database {
           sale_date: string
           created_at: string
           updated_at: string
+          cancelled_at: string | null
+          cancelled_by: string | null
+          returned_at: string | null
+          returned_by: string | null
         }
         Insert: {
           customer_id: number
@@ -395,6 +399,10 @@ export interface Database {
           shipping_charged?: number
           total?: number
           notes?: string | null
+          cancelled_at?: string | null
+          cancelled_by?: string | null
+          returned_at?: string | null
+          returned_by?: string | null
         }
       }
       sale_items: {
