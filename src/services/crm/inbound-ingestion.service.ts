@@ -106,7 +106,7 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
  * decisão da Entrega 1) — canais sem valor específico caem em 'other'.
  * Não é alteração de schema, é só mapeamento do que já existe.
  */
-function personCreatedSourceForChannel(channelType: CrmChannelType): CrmPersonCreatedSource {
+export function personCreatedSourceForChannel(channelType: CrmChannelType): CrmPersonCreatedSource {
   switch (channelType) {
     case 'whatsapp':
       return 'whatsapp_inbound'
