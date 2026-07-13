@@ -33,7 +33,7 @@ const schema = z.object({
   sender_display_name: z.string().max(200).optional(),
   external_message_id: z.string().min(1),
   content: z.string().max(10000).optional(),
-  content_type: z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'other']),
+  content_type: z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'sticker', 'other']),
   n8n_execution_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
   media: mediaSchema.optional(),
