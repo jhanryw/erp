@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { ingestInboundMessage } from '@/services/crm/inbound-ingestion.service'
+import { checkContractVersion, unsupportedContractVersionBody } from '@/services/crm/contract-version'
 import type { Json } from '@/types/database.types'
 
 export const dynamic = 'force-dynamic'
@@ -26,6 +27,7 @@ const mediaSchema = z.object({
 })
 
 const schema = z.object({
+  contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
   sender_identity_value: z.string().min(1),
   sender_display_name: z.string().max(200).optional(),
@@ -63,6 +65,10 @@ export async function POST(request: Request) {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'JSON inválido.' }, { status: 400 })
+  }
+
+  if (!checkContractVersion(body).ok) {
+    return NextResponse.json(unsupportedContractVersionBody, { status: 422 })
   }
 
   const parsed = schema.safeParse(body)

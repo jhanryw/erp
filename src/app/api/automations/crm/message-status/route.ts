@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { syncMessageStatus } from '@/services/crm/message-status-sync.service'
+import { checkContractVersion, unsupportedContractVersionBody } from '@/services/crm/contract-version'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,7 @@ function isAuthorized(request: Request): boolean {
 }
 
 const schema = z.object({
+  contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
   external_message_id: z.string().min(1),
   status: z.enum(['sent', 'delivered', 'read', 'failed']),
@@ -45,6 +47,10 @@ export async function POST(request: Request) {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'JSON inválido.' }, { status: 400 })
+  }
+
+  if (!checkContractVersion(body).ok) {
+    return NextResponse.json(unsupportedContractVersionBody, { status: 422 })
   }
 
   const parsed = schema.safeParse(body)
