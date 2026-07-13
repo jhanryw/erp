@@ -51,6 +51,14 @@ export interface IngestInboundMediaInput {
   fileName?: string | null
 }
 
+/** Snapshot limitado da mensagem citada (Entrega 3) — nunca duplica mídia. */
+export interface IngestInboundQuotedMessageInput {
+  externalMessageId: string
+  contentType: CrmMessageContentType
+  contentPreview?: string | null
+  senderIdentityValue?: string | null
+}
+
 export interface IngestInboundMessageInput {
   providerInstanceIdentifier: string
   senderIdentityValue: string
@@ -61,6 +69,10 @@ export interface IngestInboundMessageInput {
   n8nExecutionId?: string | null
   metadata?: Json | null
   media?: IngestInboundMediaInput | null
+  /** Resolve reply_to_message_id via lookup por external_message_id no mesmo canal. */
+  replyToExternalMessageId?: string | null
+  /** Fallback gravado em metadata.quoted_message só quando a mensagem original não é encontrada. */
+  quotedMessage?: IngestInboundQuotedMessageInput | null
 }
 
 export interface IngestedMediaRef {
@@ -187,6 +199,51 @@ async function resolveExistingMessage(
   return attachMediaToMessage(companyId, existingMessageId, mediaInput)
 }
 
+/**
+ * Resolve reply_to_message_id via lookup por external_message_id no mesmo
+ * canal (Entrega 3). Nunca falha a ingestão: se a mensagem citada ainda não
+ * existe (fora de ordem, de outro canal, ou nunca ingerida), não há vínculo
+ * estrutural — grava só o snapshot enviado pelo N8N em metadata.quoted_message
+ * como fallback visual, sem duplicar conteúdo completo nem mídia.
+ */
+async function resolveReplyAndQuotedMessage(
+  channelId: number,
+  companyId: number,
+  baseMetadata: Json | null | undefined,
+  replyToExternalMessageId: string | null | undefined,
+  quotedMessage: IngestInboundQuotedMessageInput | null | undefined,
+): Promise<{ replyToMessageId: number | null; metadata: Json | null }> {
+  if (!replyToExternalMessageId) {
+    return { replyToMessageId: null, metadata: baseMetadata ?? null }
+  }
+
+  const lookup = await findMessageByExternalId(channelId, replyToExternalMessageId, companyId)
+  if (lookup.ok && lookup.data) {
+    return { replyToMessageId: lookup.data.id, metadata: baseMetadata ?? null }
+  }
+
+  if (!quotedMessage) {
+    return { replyToMessageId: null, metadata: baseMetadata ?? null }
+  }
+
+  const base = baseMetadata && typeof baseMetadata === 'object' && !Array.isArray(baseMetadata)
+    ? (baseMetadata as Record<string, unknown>)
+    : {}
+
+  return {
+    replyToMessageId: null,
+    metadata: {
+      ...base,
+      quoted_message: {
+        external_message_id: quotedMessage.externalMessageId,
+        content_type: quotedMessage.contentType,
+        content_preview: quotedMessage.contentPreview ?? null,
+        sender_identity_value: quotedMessage.senderIdentityValue ?? null,
+      },
+    } as Json,
+  }
+}
+
 // ─── Operação ──────────────────────────────────────────────────────────────────
 
 export async function ingestInboundMessage(
@@ -238,6 +295,14 @@ export async function ingestInboundMessage(
     })
   }
 
+  const { replyToMessageId, metadata } = await resolveReplyAndQuotedMessage(
+    channel.id,
+    channel.company_id,
+    input.metadata,
+    input.replyToExternalMessageId,
+    input.quotedMessage,
+  )
+
   const messageResult = await createMessage({
     companyId: channel.company_id,
     conversationId: conversation.id,
@@ -250,7 +315,8 @@ export async function ingestInboundMessage(
     externalMessageId: input.externalMessageId,
     n8nExecutionId: input.n8nExecutionId ?? null,
     createdSource: 'inbound_webhook',
-    metadata: input.metadata ?? null,
+    metadata,
+    replyToMessageId,
   })
 
   if (!messageResult.ok) {

@@ -26,6 +26,19 @@ const mediaSchema = z.object({
   file_name: z.string().max(255).optional(),
 })
 
+const contentTypeEnum = z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'sticker', 'other'])
+
+// Snapshot limitado da mensagem citada (Entrega 3) — usado só como fallback
+// visual quando reply_to_external_message_id não resolve pra uma mensagem
+// já ingerida (ver comentário acima de ingestInboundMessage). Nunca duplica
+// mídia nem conteúdo completo, por decisão explícita do usuário.
+const quotedMessageSchema = z.object({
+  external_message_id: z.string().min(1),
+  content_type: contentTypeEnum,
+  content_preview: z.string().max(500).optional(),
+  sender_identity_value: z.string().max(200).optional(),
+})
+
 const schema = z.object({
   contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
@@ -33,10 +46,12 @@ const schema = z.object({
   sender_display_name: z.string().max(200).optional(),
   external_message_id: z.string().min(1),
   content: z.string().max(10000).optional(),
-  content_type: z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'sticker', 'other']),
+  content_type: contentTypeEnum,
   n8n_execution_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
   media: mediaSchema.optional(),
+  reply_to_external_message_id: z.string().min(1).optional(),
+  quoted_message: quotedMessageSchema.optional(),
 })
 
 // ─── POST /api/automations/crm/inbound-message ─────────────────────────────────
@@ -86,6 +101,8 @@ export async function POST(request: Request) {
     n8n_execution_id,
     metadata,
     media,
+    reply_to_external_message_id,
+    quoted_message,
   } = parsed.data
 
   const result = await ingestInboundMessage({
@@ -99,6 +116,15 @@ export async function POST(request: Request) {
     metadata: (metadata as Json | undefined) ?? null,
     media: media
       ? { mimeType: media.mime_type, fileSize: media.file_size, base64Content: media.base64_content, fileName: media.file_name ?? null }
+      : null,
+    replyToExternalMessageId: reply_to_external_message_id ?? null,
+    quotedMessage: quoted_message
+      ? {
+          externalMessageId: quoted_message.external_message_id,
+          contentType: quoted_message.content_type,
+          contentPreview: quoted_message.content_preview ?? null,
+          senderIdentityValue: quoted_message.sender_identity_value ?? null,
+        }
       : null,
   })
 
