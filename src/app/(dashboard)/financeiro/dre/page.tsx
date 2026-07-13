@@ -50,6 +50,7 @@ const EMPTY_DRE_DATA: DreData = {
   outras_despesas: 0,
   total_opex: 0,
   resultado_operacional: 0,
+  margem_operacional_pct: 0,
   outras_receitas: 0,
   lucro_liquido_gerencial: 0,
   margem_liquida_pct: 0,
@@ -124,15 +125,15 @@ function ResultRow({
   value,
   margin,
 }: {
-  label:   string
-  value:   number
-  margin?: number
+  label:  string
+  value:  number
+  margin: number
 }) {
   return (
     <div className="flex items-center justify-between pt-3 mt-1 border-t border-border">
       <span className="font-bold text-text-primary">
         {label}
-        {margin !== undefined && <MargemBadge value={margin} />}
+        <MargemBadge value={margin} />
       </span>
       <span className={`tabular-nums text-lg font-bold ${value >= 0 ? 'text-success' : 'text-error'}`}>
         {formatCurrency(value)}
@@ -250,6 +251,7 @@ export default async function DrePage({
           <ResultRow
             label="Resultado Operacional"
             value={data.resultado_operacional}
+            margin={data.margem_operacional_pct}
           />
         </CardContent>
       </Card>

@@ -1083,6 +1083,7 @@ export interface Database {
           outras_despesas: number
           total_opex: number
           resultado_operacional: number
+          margem_operacional_pct: number
           outras_receitas: number
           lucro_liquido_gerencial: number
           margem_liquida_pct: number
