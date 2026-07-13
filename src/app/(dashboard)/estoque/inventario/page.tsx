@@ -222,13 +222,25 @@ export default function InventarioFisicoPage() {
     }
 
     startSaving(async () => {
-      const res = await fetch('/api/estoque/inventario', {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ items: toSend }),
-      })
+      let res: Response
+      try {
+        res = await fetch('/api/estoque/inventario', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ items: toSend }),
+        })
+      } catch {
+        toast.error('Falha de conexão ao salvar inventário. Tente novamente.')
+        return
+      }
 
-      const json = await res.json()
+      let json: any
+      try {
+        json = await res.json()
+      } catch {
+        toast.error(`Erro ao salvar inventário (status ${res.status}). Tente novamente.`)
+        return
+      }
 
       if (!res.ok && res.status !== 207) {
         toast.error(json.error ?? 'Erro ao salvar inventário.')

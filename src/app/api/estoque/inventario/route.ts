@@ -58,36 +58,57 @@ export async function POST(request: Request) {
   let errorCount = 0
 
   for (const item of toProcess) {
-    const result = await adjustStock(
-      {
-        product_variation_id: item.product_variation_id,
-        delta:                item.delta,
-        reason:               'inventario-fisico',
-        notes:                item.notes ?? sessionNote,
-      },
-      user.id
-    )
+    try {
+      const result = await adjustStock(
+        {
+          product_variation_id: item.product_variation_id,
+          delta:                item.delta,
+          reason:               'inventario-fisico',
+          notes:                item.notes ?? sessionNote,
+        },
+        user.id
+      )
 
-    if (!result.ok) {
+      if (!result.ok) {
+        errorCount++
+        results.push({
+          product_variation_id: item.product_variation_id,
+          previous_quantity:    0,
+          new_quantity:         0,
+          delta:                item.delta,
+          error:                result.error,
+        })
+      } else {
+        results.push({
+          product_variation_id: item.product_variation_id,
+          previous_quantity:    result.data.previous_quantity,
+          new_quantity:         result.data.new_quantity,
+          delta:                result.data.delta,
+        })
+
+        // Sincronizar estoque corrigido na Nuvemshop de forma não-bloqueante
+        pushVariantStockToNuvemshop(item.product_variation_id, { eventType: 'stock_push_erp' })
+          .catch((err) => console.error('[POST /api/estoque/inventario] Nuvemshop sync error', err))
+      }
+    } catch (err) {
       errorCount++
+      logError({
+        route:   'POST /api/estoque/inventario',
+        err,
+        context: {
+          user_id:               user.id,
+          company_id:            user.company_id,
+          product_variation_id:  item.product_variation_id,
+          delta:                 item.delta,
+        },
+      })
       results.push({
         product_variation_id: item.product_variation_id,
         previous_quantity:    0,
         new_quantity:         0,
         delta:                item.delta,
-        error:                result.error,
+        error:                'Erro interno ao processar este item.',
       })
-    } else {
-      results.push({
-        product_variation_id: item.product_variation_id,
-        previous_quantity:    result.data.previous_quantity,
-        new_quantity:         result.data.new_quantity,
-        delta:                result.data.delta,
-      })
-
-      // Sincronizar estoque corrigido na Nuvemshop de forma não-bloqueante
-      pushVariantStockToNuvemshop(item.product_variation_id, { eventType: 'stock_push_erp' })
-        .catch((err) => console.error('[POST /api/estoque/inventario] Nuvemshop sync error', err))
     }
   }
 
