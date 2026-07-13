@@ -39,6 +39,24 @@ const quotedMessageSchema = z.object({
   sender_identity_value: z.string().max(200).optional(),
 })
 
+// Schemas formais de metadata por content_type (Entrega 4) — só location e
+// contact ganham validação estrita (`.strict()`, sem chave arbitrária);
+// os demais content_types continuam com `metadata` livre (comportamento
+// preservado). Armazenamento não muda: ainda é a coluna `metadata` de
+// crm_messages, só a validação de entrada fica formal.
+const locationMetadataSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+  address: z.string().max(300).optional(),
+  name: z.string().max(200).optional(),
+}).strict()
+
+const contactMetadataSchema = z.object({
+  name: z.string().min(1).max(200),
+  phone: z.string().min(1).max(32),
+  vcard: z.string().max(5000).optional(),
+}).strict()
+
 const schema = z.object({
   contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
@@ -52,6 +70,27 @@ const schema = z.object({
   media: mediaSchema.optional(),
   reply_to_external_message_id: z.string().min(1).optional(),
   quoted_message: quotedMessageSchema.optional(),
+}).superRefine((data, ctx) => {
+  if (data.content_type === 'location') {
+    const result = locationMetadataSchema.safeParse(data.metadata ?? {})
+    if (!result.success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['metadata'],
+        message: `metadata inválido para content_type=location: ${result.error.message}`,
+      })
+    }
+  }
+  if (data.content_type === 'contact') {
+    const result = contactMetadataSchema.safeParse(data.metadata ?? {})
+    if (!result.success) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['metadata'],
+        message: `metadata inválido para content_type=contact: ${result.error.message}`,
+      })
+    }
+  }
 })
 
 // ─── POST /api/automations/crm/inbound-message ─────────────────────────────────
