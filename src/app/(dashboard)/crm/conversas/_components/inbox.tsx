@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Spinner } from '@/components/ui/spinner'
 import { ConversationList, type ConversationListItem } from './conversation-list'
 import { ConversationThread } from './conversation-thread'
+import { useCrmRealtime, type CrmRealtimeMessageEvent } from '../_hooks/use-crm-realtime'
 
 // Espelha o contrato JSON de GET /api/crm/channels — tipo local, mesmo
 // padrão do resto do projeto (ex.: product-media.tsx) de não importar tipo
@@ -27,7 +28,7 @@ export interface ConversationCounts {
 
 const SEARCH_DEBOUNCE_MS = 400
 
-export function Inbox() {
+export function Inbox({ companyId }: { companyId: number | null }) {
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [channels, setChannels] = useState<CrmChannelOption[]>([])
   const [counts, setCounts] = useState<ConversationCounts | null>(null)
@@ -41,6 +42,7 @@ export function Inbox() {
   const [channelFilter, setChannelFilter] = useState<string>('')
 
   const [selectedConversationId, setSelectedConversationId] = useState<number | null>(null)
+  const [threadRealtimeEvent, setThreadRealtimeEvent] = useState<CrmRealtimeMessageEvent | null>(null)
 
   // Debounce simples — evita 1 requisição por tecla digitada na busca.
   useEffect(() => {
@@ -141,10 +143,63 @@ export function Inbox() {
       .catch(() => setChannels([]))
   }, [])
 
-  // Sem realtime nesta entrega (decisão explícita) — enviar/receber, mudar
-  // status ou atualizar manualmente refazem a busca por chamada direta, não
-  // por assinatura em background. Contadores recarregam junto porque uma
-  // mudança de status desloca o total entre as 3 colunas.
+  // Realtime (1 canal por empresa, ver use-crm-realtime.ts): INSERT em
+  // crm_messages move a conversa pro topo e atualiza preview/last_message_at
+  // localmente, sem refetch — exceto quando a conversa não está na página/
+  // filtro carregado agora, aí não dá pra reconstruir o item sem o join de
+  // pessoa/canal/identidade que só a API resolve, então cai num refetch
+  // pontual. Dedupe por id não se aplica aqui (preview é 1 objeto por
+  // conversa, não uma lista de mensagens — "duplicar" só reaplicaria o
+  // mesmo valor); quem precisa de dedupe de verdade é a thread aberta
+  // (array de mensagens), tratado em ConversationThread via realtimeEvent.
+  const handleRealtimeMessageEvent = useCallback((event: CrmRealtimeMessageEvent) => {
+    const { row } = event
+
+    if (event.eventType === 'INSERT') {
+      const exists = conversations.some((c) => c.id === row.conversation_id)
+      if (!exists) {
+        loadConversations()
+      } else {
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === row.conversation_id)
+          if (idx === -1) return prev
+          const updated = {
+            ...prev[idx],
+            last_message_at: row.created_at,
+            last_message: {
+              content: row.content,
+              content_type: row.content_type,
+              direction: row.direction,
+              status: row.status,
+              created_at: row.created_at,
+            },
+          }
+          return [updated, ...prev.filter((_, i) => i !== idx)]
+        })
+      }
+    }
+
+    if (row.conversation_id === selectedConversationId) {
+      setThreadRealtimeEvent(event)
+    }
+  }, [conversations, selectedConversationId, loadConversations])
+
+  useCrmRealtime(companyId, handleRealtimeMessageEvent)
+
+  // Fallback pra quando o WebSocket do Realtime cair silenciosamente (aba
+  // em background, rede instável) — evento único ao voltar a ficar visível,
+  // nunca um intervalo periódico (decisão explícita: sem polling agressivo).
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible') {
+        loadConversations()
+        loadCounts()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [loadConversations, loadCounts])
+
   function handleMessageSent() {
     loadConversations()
     loadCounts()
@@ -211,6 +266,7 @@ export function Inbox() {
               onMessageSent={handleMessageSent}
               onStatusChanged={handleStatusChanged}
               onBack={() => setSelectedConversationId(null)}
+              realtimeEvent={threadRealtimeEvent}
             />
           )}
         </div>

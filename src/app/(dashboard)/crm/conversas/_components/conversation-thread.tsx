@@ -12,6 +12,13 @@ import { formatFileSize } from '@/lib/utils/file-size'
 import { Spinner } from '@/components/ui/spinner'
 import { MessageComposer } from './message-composer'
 import { ConversationNotesPanel } from './conversation-notes-panel'
+import type { CrmRealtimeMessageEvent } from '../_hooks/use-crm-realtime'
+
+// Mídia não vem na linha de crm_messages (media_usages é tabela à parte,
+// resolvida em lote por listMediaByEntities) — mensagem realtime com um
+// destes content_types cai num refetch pontual da thread em vez de
+// aparecer direto, pra não mostrar o balão sem o anexo.
+const MEDIA_CONTENT_TYPES = new Set(['image', 'audio', 'video', 'document', 'sticker'])
 
 // Espelha o contrato JSON de GET /api/crm/conversations/[id]/messages —
 // CrmMessage é linha direta do banco (já snake_case), media vem resolvida
@@ -152,11 +159,13 @@ export function ConversationThread({
   onMessageSent,
   onStatusChanged,
   onBack,
+  realtimeEvent,
 }: {
   conversationId: number
   onMessageSent: () => void
   onStatusChanged: () => void
   onBack: () => void
+  realtimeEvent: CrmRealtimeMessageEvent | null
 }) {
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -187,6 +196,60 @@ export function ConversationThread({
 
   useEffect(() => {
     loadThread()
+  }, [loadThread])
+
+  // Realtime (evento repassado pelo Inbox, já filtrado por company_id no
+  // canal — ver use-crm-realtime.ts): INSERT de texto/localização/contato
+  // aparece direto no array local, com dedupe por id (proteção contra
+  // entrega duplicada do Realtime e contra sobreposição com o refetch que
+  // loadThread() já faz depois de enviar). INSERT de mídia cai num refetch
+  // pontual (ver MEDIA_CONTENT_TYPES acima). UPDATE só troca status/
+  // failure_reason da mensagem já existente (ex.: delivered/read chegando
+  // via /message-status) — dedupe é automático por já ser update-by-id.
+  useEffect(() => {
+    if (!realtimeEvent || realtimeEvent.row.conversation_id !== conversationId) return
+    const { row, eventType } = realtimeEvent
+
+    if (eventType === 'INSERT') {
+      if (MEDIA_CONTENT_TYPES.has(row.content_type)) {
+        loadThread()
+        return
+      }
+      setMessages((prev) => {
+        if (prev.some((m) => m.id === row.id)) return prev
+        return [
+          ...prev,
+          {
+            id: row.id,
+            direction: row.direction,
+            status: row.status as Message['status'],
+            content: row.content,
+            content_type: row.content_type,
+            metadata: row.metadata,
+            failure_reason: row.failure_reason,
+            created_at: row.created_at,
+            reply_to_message_id: row.reply_to_message_id,
+            media: [],
+          },
+        ]
+      })
+      return
+    }
+
+    setMessages((prev) =>
+      prev.map((m) => (m.id === row.id ? { ...m, status: row.status as Message['status'], failure_reason: row.failure_reason } : m))
+    )
+  }, [realtimeEvent, conversationId, loadThread])
+
+  // Fallback pra WebSocket caindo silenciosamente (aba em background, rede
+  // instável) — evento único ao voltar a ficar visível, nunca intervalo
+  // periódico (mesma decisão do Inbox: sem polling agressivo).
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === 'visible') loadThread()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [loadThread])
 
   // Abre sempre na última mensagem, e volta pro fim após qualquer recarga
