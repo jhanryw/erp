@@ -26,6 +26,7 @@
 import type {
   CrmChannelType,
   CrmMessageContentType,
+  CrmMessageDirection,
   CrmPersonCreatedSource,
   Json,
 } from '@/types/database.types'
@@ -85,6 +86,15 @@ export interface IngestInboundMessageInput {
   externalMessageId: string
   content?: string | null
   contentType: CrmMessageContentType
+  /**
+   * Parte A (fromMe): 'outbound' = evento data.key.fromMe=true na Evolution
+   * (empresa mandou direto no WhatsApp, fora do CRM). 'inbound' (default) =
+   * mensagem do cliente, comportamento inalterado. sender_identity_value
+   * continua sendo sempre o remoteJid do CLIENTE nos dois casos — a
+   * resolução de canal/pessoa/conversa é idêntica, só muda o que vai pra
+   * status/created_source de crm_messages.
+   */
+  direction?: CrmMessageDirection
   n8nExecutionId?: string | null
   metadata?: Json | null
   media?: IngestInboundMediaInput | null
@@ -354,6 +364,16 @@ export async function ingestInboundMessage(
   )
   const metadata = mergeAdContext(metadataWithQuote, input.adContext)
 
+  // Parte A (fromMe): direction 'outbound' aqui significa que a mensagem
+  // NUNCA passou pelo CRM (findMessageByExternalId acima já teria
+  // deduplicado se tivesse) — é um envio direto no WhatsApp conectado,
+  // aprendido depois via eco da Evolution. status='sent' (já aconteceu de
+  // verdade, não há fase 'pending' do lado do ERP) e created_source
+  // distinto ('external_echo') do envio feito pelo próprio CRM ('manual',
+  // em outbound-message.service.ts) — nunca aciona o provider de novo.
+  const direction: CrmMessageDirection = input.direction ?? 'inbound'
+  const isFromMeEcho = direction === 'outbound'
+
   // Mensagem principal (texto real do cliente, em content/contentType) é
   // criada aqui, imediatamente — ad_context é só metadata JSON já montada
   // acima, sem I/O extra. attachMediaToMessage() (mídia real, não a
@@ -363,13 +383,13 @@ export async function ingestInboundMessage(
     conversationId: conversation.id,
     channelId: channel.id,
     personId,
-    direction: 'inbound',
-    status: 'received',
+    direction,
+    status: isFromMeEcho ? 'sent' : 'received',
     content: input.content ?? null,
     contentType: input.contentType,
     externalMessageId: input.externalMessageId,
     n8nExecutionId: input.n8nExecutionId ?? null,
-    createdSource: 'inbound_webhook',
+    createdSource: isFromMeEcho ? 'external_echo' : 'inbound_webhook',
     metadata,
     replyToMessageId,
   })

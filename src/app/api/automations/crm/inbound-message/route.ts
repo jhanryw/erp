@@ -73,6 +73,16 @@ const adContextSchema = z.object({
   media_type: z.string().max(50).optional(),
 }).strict()
 
+// Parte A (fromMe): direction opcional, default 'inbound' — retrocompatível
+// com todo payload existente do N8N, que nunca manda este campo hoje.
+// 'outbound' sinaliza um evento com data.key.fromMe=true na Evolution — a
+// empresa enviou direto pelo WhatsApp conectado, fora do CRM. Resolução de
+// canal/pessoa/conversa continua idêntica nos dois casos: sender_identity_value
+// é sempre o remoteJid do CLIENTE (é assim que o Baileys/Evolution
+// identifica a conversa, independente de quem mandou a mensagem dentro
+// dela) — só direction/status/created_source da mensagem mudam.
+const directionEnum = z.enum(['inbound', 'outbound']).default('inbound')
+
 const schema = z.object({
   contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
@@ -81,6 +91,7 @@ const schema = z.object({
   external_message_id: z.string().min(1),
   content: z.string().max(10000).optional(),
   content_type: contentTypeEnum,
+  direction: directionEnum,
   n8n_execution_id: z.string().optional(),
   metadata: z.record(z.unknown()).optional(),
   media: mediaSchema.optional(),
@@ -160,6 +171,7 @@ export async function POST(request: Request) {
     external_message_id,
     content,
     content_type,
+    direction,
     n8n_execution_id,
     metadata,
     media,
@@ -175,6 +187,7 @@ export async function POST(request: Request) {
     externalMessageId: external_message_id,
     content: content ?? null,
     contentType: content_type,
+    direction,
     n8nExecutionId: n8n_execution_id ?? null,
     metadata: (metadata as Json | undefined) ?? null,
     media: media
@@ -230,6 +243,7 @@ export async function POST(request: Request) {
     media_public_id: result.data.media?.publicId ?? null,
     media_error: result.data.mediaError,
     has_ad_context: Boolean(ad_context),
+    direction,
     // Latência webhook→insert medida no servidor — não cobre tempo
     // Evolution→N8N nem N8N→ERP em trânsito (sem timestamp de origem no
     // payload atual), nem renderização no frontend (isso é client-side,

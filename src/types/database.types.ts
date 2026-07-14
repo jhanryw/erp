@@ -40,7 +40,7 @@ export type CrmConversationStatus = 'open' | 'pending' | 'closed'
 export type CrmMessageDirection = 'inbound' | 'outbound'
 export type CrmMessageStatus = 'received' | 'pending' | 'sent' | 'delivered' | 'read' | 'failed'
 export type CrmMessageContentType = 'text' | 'image' | 'audio' | 'video' | 'document' | 'location' | 'contact' | 'sticker' | 'other'
-export type CrmMessageCreatedSource = 'manual' | 'automation' | 'inbound_webhook' | 'other'
+export type CrmMessageCreatedSource = 'manual' | 'automation' | 'inbound_webhook' | 'external_echo' | 'other'
 
 export interface Database {
   public: {
