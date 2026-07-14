@@ -57,6 +57,22 @@ const contactMetadataSchema = z.object({
   vcard: z.string().max(5000).optional(),
 }).strict()
 
+// Contexto de anúncio (Meta/Instagram "click to WhatsApp") — campo próprio,
+// não sobrecarrega `metadata` livre nem cria um content_type novo. Sempre
+// referência (URL/texto curto), nunca base64/binário — thumbnail_url é só
+// um link, o ERP nunca baixa a imagem. `.strict()` rejeita objeto
+// arbitrário, mesmo padrão de locationMetadataSchema/contactMetadataSchema.
+const adContextSchema = z.object({
+  type: z.literal('ad'),
+  platform: z.string().min(1).max(50),
+  title: z.string().max(200).optional(),
+  body: z.string().max(500).optional(),
+  source_url: z.string().url().max(2000).optional(),
+  source_id: z.string().max(200).optional(),
+  thumbnail_url: z.string().url().max(2000).optional(),
+  media_type: z.string().max(50).optional(),
+}).strict()
+
 const schema = z.object({
   contract_version: z.number().int().optional(),
   provider_instance_identifier: z.string().min(1),
@@ -70,6 +86,7 @@ const schema = z.object({
   media: mediaSchema.optional(),
   reply_to_external_message_id: z.string().min(1).optional(),
   quoted_message: quotedMessageSchema.optional(),
+  ad_context: adContextSchema.optional(),
 }).superRefine((data, ctx) => {
   if (data.content_type === 'location') {
     const result = locationMetadataSchema.safeParse(data.metadata ?? {})
@@ -110,6 +127,12 @@ const schema = z.object({
 // Anexo é vinculado via Media Hub (media/media_usages), nunca por rota
 // humana — sempre chamada direta de service layer. Sem UI, sem outbound.
 export async function POST(request: Request) {
+  // Instrumentação temporária de latência (auditoria do pipeline de anúncio
+  // Meta/Instagram) — correlation_id só pra cruzar linhas de log da mesma
+  // requisição, nunca conteúdo sensível completo.
+  const receivedAt = Date.now()
+  const correlationId = crypto.randomUUID()
+
   if (!isAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
@@ -142,6 +165,7 @@ export async function POST(request: Request) {
     media,
     reply_to_external_message_id,
     quoted_message,
+    ad_context,
   } = parsed.data
 
   const result = await ingestInboundMessage({
@@ -165,20 +189,35 @@ export async function POST(request: Request) {
           senderIdentityValue: quoted_message.sender_identity_value ?? null,
         }
       : null,
+    adContext: ad_context
+      ? {
+          platform: ad_context.platform,
+          title: ad_context.title ?? null,
+          body: ad_context.body ?? null,
+          sourceUrl: ad_context.source_url ?? null,
+          sourceId: ad_context.source_id ?? null,
+          thumbnailUrl: ad_context.thumbnail_url ?? null,
+          mediaType: ad_context.media_type ?? null,
+        }
+      : null,
   })
 
   if (!result.ok) {
     console.error('[POST /api/automations/crm/inbound-message]', {
+      correlation_id: correlationId,
       provider_instance_identifier,
       external_message_id,
       n8n_execution_id,
+      has_ad_context: Boolean(ad_context),
       error: result.error,
       status: result.status,
+      latency_ms: Date.now() - receivedAt,
     })
     return NextResponse.json({ error: result.error }, { status: result.status })
   }
 
   console.info('[POST /api/automations/crm/inbound-message]', {
+    correlation_id: correlationId,
     provider_instance_identifier,
     external_message_id,
     n8n_execution_id,
@@ -190,6 +229,12 @@ export async function POST(request: Request) {
     deduplicated: result.data.deduplicated,
     media_public_id: result.data.media?.publicId ?? null,
     media_error: result.data.mediaError,
+    has_ad_context: Boolean(ad_context),
+    // Latência webhook→insert medida no servidor — não cobre tempo
+    // Evolution→N8N nem N8N→ERP em trânsito (sem timestamp de origem no
+    // payload atual), nem renderização no frontend (isso é client-side,
+    // fora do alcance deste log).
+    latency_ms: Date.now() - receivedAt,
   })
 
   return NextResponse.json({

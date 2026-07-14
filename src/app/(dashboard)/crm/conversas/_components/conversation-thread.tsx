@@ -121,6 +121,61 @@ function MessageContact({ metadata }: { metadata: Message['metadata'] }) {
   )
 }
 
+// Contexto de anúncio Meta/Instagram (metadata.ad_context) — sempre
+// referência (URL/texto curto), nunca base64/thumbnail binária. Presença
+// puramente opcional: sem ad_context, nada muda (mesmo comportamento de
+// antes). Nunca substitui a mensagem real do cliente — é renderizado como
+// card acima da bolha, a bolha em si (content/content_type) segue idêntica.
+interface AdContext {
+  platform: string
+  title: string | null
+  body: string | null
+  sourceUrl: string | null
+  thumbnailUrl: string | null
+}
+
+function parseAdContext(metadata: Message['metadata']): AdContext | null {
+  const raw = metadata?.ad_context
+  if (!raw || typeof raw !== 'object') return null
+  const ctx = raw as Record<string, unknown>
+  const title = typeof ctx.title === 'string' ? ctx.title : null
+  const body = typeof ctx.body === 'string' ? ctx.body : null
+  const sourceUrl = typeof ctx.source_url === 'string' ? ctx.source_url : null
+  const thumbnailUrl = typeof ctx.thumbnail_url === 'string' ? ctx.thumbnail_url : null
+  if (!title && !body && !sourceUrl && !thumbnailUrl) return null
+  return { platform: typeof ctx.platform === 'string' ? ctx.platform : 'other', title, body, sourceUrl, thumbnailUrl }
+}
+
+const AD_PLATFORM_LABEL: Record<string, string> = {
+  instagram: 'Anúncio do Instagram',
+  facebook: 'Anúncio do Facebook',
+  messenger: 'Anúncio do Messenger',
+  whatsapp: 'Anúncio do WhatsApp',
+}
+
+function AdContextCard({ context }: { context: AdContext }) {
+  return (
+    <div className="max-w-[70%] w-fit rounded-xl border border-border bg-bg-elevated px-3 py-2 flex items-center gap-2.5">
+      {context.thumbnailUrl && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={context.thumbnailUrl} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+      )}
+      <div className="min-w-0">
+        <p className="text-[11px] font-medium text-text-secondary truncate">
+          {AD_PLATFORM_LABEL[context.platform] ?? 'Anúncio'}
+        </p>
+        {context.title && <p className="text-xs text-text-primary truncate">{context.title}</p>}
+        {context.body && <p className="text-[11px] text-text-muted truncate">{context.body}</p>}
+        {context.sourceUrl && (
+          <a href={context.sourceUrl} target="_blank" rel="noreferrer" className="text-[11px] text-brand underline">
+            Mostrar detalhes
+          </a>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function MessageAttachment({ media }: { media: MessageMedia }) {
   if (media.mime_type.startsWith('image/')) {
     // eslint-disable-next-line @next/next/no-img-element
@@ -403,48 +458,56 @@ export function ConversationThread({
             {group.items.map((message) => {
               const repliedTo = message.reply_to_message_id ? messagesById.get(message.reply_to_message_id) : null
               const isOutbound = message.direction === 'outbound'
+              const adContext = parseAdContext(message.metadata)
 
               return (
-                <div key={message.id} className={cn('flex', isOutbound ? 'justify-end' : 'justify-start')}>
-                  <div
-                    className={cn(
-                      'max-w-[70%] rounded-2xl px-3 py-2',
-                      isOutbound
-                        ? 'bg-brand text-white rounded-br-sm'
-                        : 'bg-bg-overlay text-text-primary rounded-bl-sm',
-                    )}
-                  >
-                    {repliedTo && (
-                      <div
-                        className={cn(
-                          'flex items-center gap-1 text-[10px] mb-1.5 pb-1.5 border-b',
-                          isOutbound ? 'border-white/20 text-white/70' : 'border-border text-text-muted',
-                        )}
-                      >
-                        <Reply className="w-3 h-3 flex-shrink-0" />
-                        <span className="truncate">{repliedTo.content || 'Anexo'}</span>
-                      </div>
-                    )}
-
-                    {message.media.map((media) => (
-                      <MessageAttachment key={media.usage_id} media={media} />
-                    ))}
-
-                    {message.content_type === 'location' && <MessageLocation metadata={message.metadata} />}
-                    {message.content_type === 'contact' && <MessageContact metadata={message.metadata} />}
-
-                    {message.content && <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>}
-
-                    <div className="flex items-center justify-end gap-1 mt-1">
-                      <span className={cn('text-[10px]', isOutbound ? 'text-white/70' : 'text-text-muted')}>
-                        {formatDateTime(message.created_at)}
-                      </span>
-                      {isOutbound && <StatusIcon status={message.status} />}
+                <div key={message.id} className="flex flex-col gap-1">
+                  {adContext && (
+                    <div className={cn('flex', isOutbound ? 'justify-end' : 'justify-start')}>
+                      <AdContextCard context={adContext} />
                     </div>
+                  )}
+                  <div className={cn('flex', isOutbound ? 'justify-end' : 'justify-start')}>
+                    <div
+                      className={cn(
+                        'max-w-[70%] rounded-2xl px-3 py-2',
+                        isOutbound
+                          ? 'bg-brand text-white rounded-br-sm'
+                          : 'bg-bg-overlay text-text-primary rounded-bl-sm',
+                      )}
+                    >
+                      {repliedTo && (
+                        <div
+                          className={cn(
+                            'flex items-center gap-1 text-[10px] mb-1.5 pb-1.5 border-b',
+                            isOutbound ? 'border-white/20 text-white/70' : 'border-border text-text-muted',
+                          )}
+                        >
+                          <Reply className="w-3 h-3 flex-shrink-0" />
+                          <span className="truncate">{repliedTo.content || 'Anexo'}</span>
+                        </div>
+                      )}
 
-                    {message.status === 'failed' && message.failure_reason && (
-                      <p className="text-[10px] text-error mt-0.5">{message.failure_reason}</p>
-                    )}
+                      {message.media.map((media) => (
+                        <MessageAttachment key={media.usage_id} media={media} />
+                      ))}
+
+                      {message.content_type === 'location' && <MessageLocation metadata={message.metadata} />}
+                      {message.content_type === 'contact' && <MessageContact metadata={message.metadata} />}
+
+                      {message.content && <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>}
+
+                      <div className="flex items-center justify-end gap-1 mt-1">
+                        <span className={cn('text-[10px]', isOutbound ? 'text-white/70' : 'text-text-muted')}>
+                          {formatDateTime(message.created_at)}
+                        </span>
+                        {isOutbound && <StatusIcon status={message.status} />}
+                      </div>
+
+                      {message.status === 'failed' && message.failure_reason && (
+                        <p className="text-[10px] text-error mt-0.5">{message.failure_reason}</p>
+                      )}
+                    </div>
                   </div>
                 </div>
               )

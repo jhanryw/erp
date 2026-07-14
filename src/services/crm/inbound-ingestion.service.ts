@@ -59,6 +59,25 @@ export interface IngestInboundQuotedMessageInput {
   senderIdentityValue?: string | null
 }
 
+/**
+ * Contexto de anúncio Meta/Instagram ("click to WhatsApp") — auditoria do
+ * pipeline de anúncio. Só referências (URL/texto curto), nunca
+ * base64/binário — thumbnail_url é link, o ERP nunca baixa a imagem antes
+ * (nem depois) do insert. Grava em metadata.ad_context, nunca em
+ * content/contentType — o texto real do cliente continua vindo por `content`
+ * sem qualquer alteração, e content_type continua o real da mensagem
+ * (normalmente 'text'), nunca um tipo novo pra "anúncio".
+ */
+export interface IngestInboundAdContextInput {
+  platform: string
+  title?: string | null
+  body?: string | null
+  sourceUrl?: string | null
+  sourceId?: string | null
+  thumbnailUrl?: string | null
+  mediaType?: string | null
+}
+
 export interface IngestInboundMessageInput {
   providerInstanceIdentifier: string
   senderIdentityValue: string
@@ -73,6 +92,8 @@ export interface IngestInboundMessageInput {
   replyToExternalMessageId?: string | null
   /** Fallback gravado em metadata.quoted_message só quando a mensagem original não é encontrada. */
   quotedMessage?: IngestInboundQuotedMessageInput | null
+  /** Gravado em metadata.ad_context — nunca substitui content/contentType. */
+  adContext?: IngestInboundAdContextInput | null
 }
 
 export interface IngestedMediaRef {
@@ -244,6 +265,35 @@ async function resolveReplyAndQuotedMessage(
   }
 }
 
+/**
+ * Mescla ad_context em metadata sem apagar chaves existentes (ex.:
+ * quoted_message já resolvido acima) — mesmo princípio de merge aditivo já
+ * usado pra quoted_message. Puramente síncrono: nenhum fetch de thumbnail
+ * nem enriquecimento externo, só monta o objeto a partir do que o N8N já
+ * mandou — não atrasa o insert.
+ */
+function mergeAdContext(metadata: Json | null, adContext: IngestInboundAdContextInput | null | undefined): Json | null {
+  if (!adContext) return metadata
+
+  const base = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : {}
+
+  return {
+    ...base,
+    ad_context: {
+      type: 'ad',
+      platform: adContext.platform,
+      title: adContext.title ?? null,
+      body: adContext.body ?? null,
+      source_url: adContext.sourceUrl ?? null,
+      source_id: adContext.sourceId ?? null,
+      thumbnail_url: adContext.thumbnailUrl ?? null,
+      media_type: adContext.mediaType ?? null,
+    },
+  } as Json
+}
+
 // ─── Operação ──────────────────────────────────────────────────────────────────
 
 export async function ingestInboundMessage(
@@ -295,14 +345,19 @@ export async function ingestInboundMessage(
     })
   }
 
-  const { replyToMessageId, metadata } = await resolveReplyAndQuotedMessage(
+  const { replyToMessageId, metadata: metadataWithQuote } = await resolveReplyAndQuotedMessage(
     channel.id,
     channel.company_id,
     input.metadata,
     input.replyToExternalMessageId,
     input.quotedMessage,
   )
+  const metadata = mergeAdContext(metadataWithQuote, input.adContext)
 
+  // Mensagem principal (texto real do cliente, em content/contentType) é
+  // criada aqui, imediatamente — ad_context é só metadata JSON já montada
+  // acima, sem I/O extra. attachMediaToMessage() (mídia real, não a
+  // thumbnail do anúncio) só roda DEPOIS deste insert, mais abaixo.
   const messageResult = await createMessage({
     companyId: channel.company_id,
     conversationId: conversation.id,
