@@ -62,7 +62,7 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
 }
 
 /** content_type que representa arquivo exige media_public_id — nada pra enviar sem isso. */
-const MEDIA_REQUIRED_CONTENT_TYPES: CrmMessageContentType[] = ['image', 'audio', 'video', 'document']
+const MEDIA_REQUIRED_CONTENT_TYPES: CrmMessageContentType[] = ['image', 'audio', 'video', 'document', 'sticker']
 
 async function finalize(
   messageId: number,

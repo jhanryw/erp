@@ -13,7 +13,7 @@ import type { Json } from '@/types/database.types'
 
 const schema = z.object({
   content: z.string().max(10000).optional(),
-  content_type: z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'other']),
+  content_type: z.enum(['text', 'image', 'audio', 'video', 'document', 'location', 'contact', 'sticker', 'other']),
   media_public_id: z.string().uuid().optional(),
   metadata: z.record(z.unknown()).optional(),
   reply_to_message_id: z.coerce.number().int().positive().optional(),

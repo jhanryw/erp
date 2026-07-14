@@ -8,7 +8,12 @@ import { formatFileSize } from '@/lib/utils/file-size'
 
 // mime real -> content_type do modelo de crm_messages (Entregas 2/4/6) —
 // mesmo mapeamento conceitual já usado no inbound, aqui do lado outbound.
+// image/webp é o formato de sticker do WhatsApp — sem este branch, todo
+// sticker enviado pelo composer virava content_type 'image' (achado da
+// auditoria da Parte B: outbound sticker existia no schema/banco desde a
+// Entrega 2, mas nunca tinha caminho completo até aqui).
 function contentTypeForMime(mimeType: string): string {
+  if (mimeType === 'image/webp') return 'sticker'
   if (mimeType.startsWith('image/')) return 'image'
   if (mimeType.startsWith('audio/')) return 'audio'
   if (mimeType.startsWith('video/')) return 'video'
