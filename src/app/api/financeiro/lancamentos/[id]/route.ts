@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
-import { financeEntrySchema } from '@/lib/validators'
+import { financeEntrySchema, normalizeFinanceEntryPayment } from '@/lib/validators'
 import { NextResponse } from 'next/server'
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -32,10 +32,16 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 
   // cash_movement_id nunca é aceito aqui — mesma regra do POST.
   // paid_at é DATE: string 'yyyy-MM-dd' direto ao banco, sem conversão.
+  //
+  // payment_method precisa do mesmo tratamento explícito de paid_at: se ficar
+  // `undefined` (campo limpo no formulário), o JSON.stringify da requisição
+  // do supabase-js OMITE a chave e o UPDATE preserva o valor antigo da coluna
+  // em vez de limpá-la — normalizeFinanceEntryPayment garante `null` explícito
+  // nos dois campos juntos, nunca só um deles.
   const admin = createAdminClient()
   const { error } = (await (admin as any).from('finance_entries').update({
     ...parsed.data,
-    paid_at: parsed.data.paid_at ?? null,
+    ...normalizeFinanceEntryPayment(parsed.data),
   }).eq('id', Number(params.id)).eq('company_id', user.company_id)) as { error: any }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 

@@ -198,9 +198,14 @@ export type MediaUsageFormData = z.infer<typeof mediaUsageSchema>
 // server-side POST/PUT de /api/financeiro/lancamentos (Entrega 2 — correção
 // Caixa × Financeiro).
 //
-// payment_method/paid_at são obrigatórios apenas para despesas (type='expense');
-// para receitas permanecem opcionais nesta fase — Contas a Receber pertence a
-// um módulo financeiro futuro, fora de escopo aqui.
+// payment_method/paid_at são obrigatórios juntos para despesas (type='expense'):
+// despesa lançada manualmente aqui é sempre um pagamento já feito — não existe
+// "despesa pendente" neste fluxo (Contas a Pagar pertence a um módulo futuro).
+//
+// Para receitas (type='income') os dois campos são opcionais — uma venda pode
+// ficar pendente de recebimento — mas nunca isolados: a constraint de banco
+// fe_payment_method_paid_at_together exige os dois juntos ou nenhum, então o
+// superRefine abaixo espelha essa regra também para receita, não só despesa.
 //
 // paid_at não pode ser data futura: comparação de string 'yyyy-MM-dd' contra
 // brazilDate() (fuso fixo America/Fortaleza), mesmo formato de reference_date.
@@ -248,6 +253,24 @@ export const financeEntrySchema = z
           message: 'Data de pagamento obrigatória para despesas.',
         })
       }
+    } else {
+      // Receita: payment_method e paid_at podem ficar os dois vazios (venda
+      // pendente), mas nunca só um dos dois — mesma regra de
+      // fe_payment_method_paid_at_together, do lado do formulário.
+      if (data.payment_method && !data.paid_at) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['paid_at'],
+          message: 'Informe a data de recebimento para registrar o pagamento.',
+        })
+      }
+      if (!data.payment_method && data.paid_at) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['payment_method'],
+          message: 'Informe a forma de pagamento para registrar o recebimento.',
+        })
+      }
     }
     if (data.paid_at && data.paid_at > brazilDate()) {
       ctx.addIssue({
@@ -259,3 +282,22 @@ export const financeEntrySchema = z
   })
 
 export type FinanceEntryFormData = z.infer<typeof financeEntrySchema>
+
+// Normalização centralizada do par payment_method/paid_at antes de persistir
+// em finance_entries — usada por POST e PUT de /api/financeiro/lancamentos.
+// Existe porque `parsed.data.payment_method` pode ser `undefined` (campo não
+// preenchido): espalhar isso direto num payload de update do supabase-js faz
+// o JSON.stringify da requisição OMITIR a chave inteira, e o UPDATE então
+// preserva o valor antigo da coluna em vez de limpá-la — é assim que uma
+// edição "recebido → pendente" (só paid_at explicitamente nulado,
+// payment_method omitido e mantido) violava fe_payment_method_paid_at_together.
+// Forçar `?? null` nos dois campos, sempre juntos, elimina essa classe de bug.
+export function normalizeFinanceEntryPayment(data: FinanceEntryFormData): {
+  payment_method: FinanceEntryFormData['payment_method'] | null
+  paid_at: string | null
+} {
+  return {
+    payment_method: data.payment_method ?? null,
+    paid_at: data.paid_at ?? null,
+  }
+}

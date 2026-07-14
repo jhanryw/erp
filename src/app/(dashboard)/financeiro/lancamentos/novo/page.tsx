@@ -142,30 +142,32 @@ export default function NovoLancamentoPage() {
           />
         </div>
 
-        {/* Forma e data de pagamento — obrigatórios só para despesa */}
-        {entryType === 'expense' && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select
-              label="Forma de pagamento"
-              required
-              placeholder="Selecione"
-              error={errors.payment_method?.message}
-              {...register('payment_method')}
-            >
-              {PAYMENT_METHODS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </Select>
-            <Input
-              label="Data do pagamento"
-              required
-              type="date"
-              max={toISODate(new Date())}
-              error={errors.paid_at?.message}
-              {...register('paid_at')}
-            />
-          </div>
-        )}
+        {/* Forma e data de pagamento — obrigatórios juntos para despesa;
+            para receita são opcionais (venda pode ficar pendente), mas nunca
+            só um dos dois preenchido (financeEntrySchema barra isso). */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <Select
+            label="Forma de pagamento"
+            required={entryType === 'expense'}
+            placeholder={entryType === 'expense' ? 'Selecione' : undefined}
+            hint={entryType === 'income' ? 'Deixe em branco se a venda ainda não foi recebida.' : undefined}
+            error={errors.payment_method?.message}
+            {...register('payment_method')}
+          >
+            {entryType === 'income' && <option value="">Pendente — ainda não recebida</option>}
+            {PAYMENT_METHODS.map((m) => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </Select>
+          <Input
+            label="Data do recebimento/pagamento"
+            required={entryType === 'expense'}
+            type="date"
+            max={toISODate(new Date())}
+            error={errors.paid_at?.message}
+            {...register('paid_at')}
+          />
+        </div>
 
         {/* Observações */}
         <div>

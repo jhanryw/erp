@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
-import { financeEntrySchema } from '@/lib/validators'
+import { financeEntrySchema, normalizeFinanceEntryPayment } from '@/lib/validators'
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
   const admin = createAdminClient()
   const { error } = await admin.from('finance_entries').insert({
     ...parsed.data,
-    paid_at: parsed.data.paid_at ?? null,
+    ...normalizeFinanceEntryPayment(parsed.data),
     created_by: user.id,
     company_id: user.company_id,
   } as any)
