@@ -1,5 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { resolveOrThrow, logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
+import { logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import { PrintTrigger } from './PrintTrigger'
 
@@ -13,47 +13,60 @@ const PAYMENT_LABELS: Record<string, string> = {
   debit_card:  'Cartão de Débito',
 }
 
+const ROUTE = 'GET /vendas/[id]/imprimir getSaleForPrint'
+
 async function getSaleForPrint(id: string) {
   const admin = createAdminClient()
+  const saleId = Number(id)
 
-  const { data: saleData, error: saleError } = await (admin as any)
+  // ── Etapa 1: venda base — sem embeds, é a única que decide notFound() ──────
+  const { data: saleData, error: saleError } = await admin
     .from('sales')
-    .select(`
-      id,
-      sale_number,
-      status,
-      total,
-      payment_method,
-      customers (
-        id,
-        name,
-        phone
-      ),
-      shipments (
-        delivery_mode,
-        customer_addresses (
-          street,
-          number,
-          complement,
-          neighborhood,
-          city,
-          state,
-          cep
-        )
-      )
-    `)
-    .eq('id', Number(id))
-    .single() as unknown as { data: any; error: PgErrorLike | null }
+    .select('id, sale_number, status, total, payment_method, customer_id')
+    .eq('id', saleId)
+    .maybeSingle() as unknown as { data: any; error: PgErrorLike | null }
 
-  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id]/imprimir getSaleForPrint', { sale_id: id })
-  if (!sale) return null
+  if (saleError) {
+    logQueryError(saleError, `${ROUTE} (sale_base)`, { sale_id: id, stage: 'sale_base' })
+    throw new Error(`Erro ao consultar dados (${ROUTE} (sale_base)).`)
+  }
+  if (!saleData) return null
+  const saleBase = saleData
 
-  // Verificar se já tem pagamento registrado
-  const { count: paymentsCount, error: paymentsCountError } = await (admin as any)
-    .from('sale_payments')
-    .select('id', { count: 'exact', head: true })
-    .eq('sale_id', Number(id))
-  logQueryError(paymentsCountError, 'GET /vendas/[id]/imprimir getSaleForPrint (sale_payments count)', { sale_id: id })
+  // ── Etapa 2: relações de 1º nível, em paralelo ──────────────────────────────
+  const stage2 = await Promise.all([
+    admin.from('customers').select('id, name, phone').eq('id', saleBase.customer_id).maybeSingle(),
+    (admin as any).from('shipments').select('delivery_mode, address_id').eq('order_id', saleId).maybeSingle(),
+    (admin as any).from('sale_payments').select('id', { count: 'exact', head: true }).eq('sale_id', saleId),
+  ]) as any[]
+
+  const [
+    { data: customer, error: customerError },
+    { data: shipment, error: shipmentError },
+    { count: paymentsCount, error: paymentsCountError },
+  ] = stage2
+
+  logQueryError(customerError,      `${ROUTE} (customer)`, { sale_id: id, stage: 'customer' })
+  logQueryError(shipmentError,      `${ROUTE} (shipment)`, { sale_id: id, stage: 'shipment' })
+  logQueryError(paymentsCountError, `${ROUTE} (payments)`, { sale_id: id, stage: 'payments' })
+
+  // ── Etapa 3: endereço do envio — depende do shipment da etapa 2 ────────────
+  let address: any = null
+  if (shipment?.address_id) {
+    const { data: addressData, error: addressError } = await (admin as any)
+      .from('customer_addresses')
+      .select('street, number, complement, neighborhood, city, state, cep')
+      .eq('id', shipment.address_id)
+      .maybeSingle()
+    logQueryError(addressError, `${ROUTE} (address)`, { sale_id: id, stage: 'address' })
+    address = addressData ?? null
+  }
+
+  const sale = {
+    ...saleBase,
+    customers: customer ?? null,
+    shipments: shipment ? { ...shipment, customer_addresses: address } : null,
+  }
 
   const isPaid = sale.status === 'paid' ||
                  sale.status === 'shipped' ||

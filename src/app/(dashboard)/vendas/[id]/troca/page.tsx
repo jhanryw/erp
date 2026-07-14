@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
-import { resolveOrThrow, logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
+import { logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
@@ -11,43 +11,103 @@ import { formatDate } from '@/lib/utils/date'
 
 export const dynamic = 'force-dynamic'
 
+const ROUTE = 'GET /vendas/[id]/troca getExchangeData'
+
 async function getExchangeData(saleId: number) {
   const admin = createAdminClient()
 
-  // Venda com itens
-  const { data: saleData, error: saleError } = await (admin as any)
+  // ── Etapa 1: venda base — sem embeds, é a única que decide notFound() ──────
+  const { data: saleData, error: saleError } = await admin
     .from('sales')
-    .select(`
-      id, sale_number, sale_date, status, total, customer_id,
-      customers:customer_id (id, name),
-      sale_items (
-        id, quantity, unit_price, total_price,
-        product_variations (
-          id, sku_variation,
-          products (id, name),
-          product_variation_attributes (
-            variation_types:variation_type_id (slug, name),
-            variation_values:variation_value_id (value)
-          )
-        )
-      )
-    `)
+    .select('id, sale_number, sale_date, status, total, customer_id')
     .eq('id', saleId)
-    .single() as unknown as { data: any; error: PgErrorLike | null }
+    .maybeSingle() as unknown as { data: any; error: PgErrorLike | null }
 
-  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id]/troca getExchangeData', { sale_id: saleId })
-  if (!sale) return null
+  if (saleError) {
+    logQueryError(saleError, `${ROUTE} (sale_base)`, { sale_id: saleId, stage: 'sale_base' })
+    throw new Error(`Erro ao consultar dados (${ROUTE} (sale_base)).`)
+  }
+  if (!saleData) return null
+  const saleBase = saleData
 
-  // Quantidades já devolvidas via trocas anteriores para cada sale_item
-  const { data: existingExchangeItems, error: existingExchangeItemsError } = await (admin as any)
-    .from('exchange_items')
-    .select('sale_item_id, quantity_returned, exchanges!inner(original_sale_id, status)')
-    .eq('exchanges.original_sale_id', saleId)
-    .eq('exchanges.status', 'completed') as unknown as {
-      data: { sale_item_id: number; quantity_returned: number }[] | null
-      error: PgErrorLike | null
-    }
-  logQueryError(existingExchangeItemsError, 'GET /vendas/[id]/troca getExchangeData (exchange_items)', { sale_id: saleId })
+  // ── Etapa 2: relações de 1º nível, em paralelo ──────────────────────────────
+  const stage2 = await Promise.all([
+    admin.from('customers').select('id, name').eq('id', saleBase.customer_id).maybeSingle(),
+    admin.from('sale_items').select('id, quantity, unit_price, total_price, product_variation_id').eq('sale_id', saleBase.id),
+    (admin as any)
+      .from('exchange_items')
+      .select('sale_item_id, quantity_returned, exchanges!inner(original_sale_id, status)')
+      .eq('exchanges.original_sale_id', saleId)
+      .eq('exchanges.status', 'completed'),
+  ]) as any[]
+
+  const [
+    { data: customer, error: customerError },
+    { data: saleItems, error: saleItemsError },
+    { data: existingExchangeItems, error: existingExchangeItemsError },
+  ] = stage2
+
+  logQueryError(customerError,               `${ROUTE} (customer)`,       { sale_id: saleId, stage: 'customer' })
+  logQueryError(saleItemsError,               `${ROUTE} (sale_items)`,     { sale_id: saleId, stage: 'sale_items' })
+  logQueryError(existingExchangeItemsError,   `${ROUTE} (exchange_items)`, { sale_id: saleId, stage: 'exchange_items' })
+
+  // ── Etapa 3: variações dos itens vendidos ───────────────────────────────────
+  const variationIds = [...new Set((saleItems ?? []).map((i: any) => i.product_variation_id))]
+
+  const { data: productVariations, error: productVariationsError } = variationIds.length
+    ? await admin.from('product_variations').select('id, sku_variation, product_id').in('id', variationIds)
+    : { data: [] as any[], error: null }
+  logQueryError(productVariationsError, `${ROUTE} (product_variations)`, { sale_id: saleId, stage: 'product_variations' })
+
+  // ── Etapa 4: produtos + atributos das variações, em paralelo ────────────────
+  const productIds = [...new Set((productVariations ?? []).map((v: any) => v.product_id))]
+
+  const stage4 = await Promise.all([
+    productIds.length
+      ? admin.from('products').select('id, name').in('id', productIds)
+      : Promise.resolve({ data: [], error: null }),
+    variationIds.length
+      ? (admin as any)
+          .from('product_variation_attributes')
+          .select('product_variation_id, variation_types:variation_type_id(slug,name), variation_values:variation_value_id(value)')
+          .in('product_variation_id', variationIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]) as any[]
+
+  const [
+    { data: products, error: productsError },
+    { data: variationAttributes, error: variationAttributesError },
+  ] = stage4
+
+  logQueryError(productsError,            `${ROUTE} (products)`,            { sale_id: saleId, stage: 'products' })
+  logQueryError(variationAttributesError, `${ROUTE} (variation_attributes)`, { sale_id: saleId, stage: 'variation_attributes' })
+
+  // ── Reagrupar no mesmo formato que a página já consome ──────────────────────
+  const productsById = new Map((products ?? []).map((p: any) => [p.id, p]))
+
+  const attrsByVariation = new Map<number, any[]>()
+  for (const a of variationAttributes ?? []) {
+    const list = attrsByVariation.get(a.product_variation_id) ?? []
+    list.push(a)
+    attrsByVariation.set(a.product_variation_id, list)
+  }
+
+  const variationsById = new Map(
+    (productVariations ?? []).map((v: any) => [v.id, {
+      ...v,
+      products: productsById.get(v.product_id) ?? null,
+      product_variation_attributes: attrsByVariation.get(v.id) ?? [],
+    }])
+  )
+
+  const sale = {
+    ...saleBase,
+    customers: customer ?? null,
+    sale_items: (saleItems ?? []).map((item: any) => ({
+      ...item,
+      product_variations: variationsById.get(item.product_variation_id) ?? null,
+    })),
+  }
 
   const alreadyReturned: Record<number, number> = {}
   for (const ei of existingExchangeItems ?? []) {

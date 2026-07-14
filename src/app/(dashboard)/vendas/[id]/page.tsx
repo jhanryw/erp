@@ -1,7 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
-import { resolveOrThrow, logQueryError } from '@/lib/errors/pgResult'
+import { logQueryError } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Package, Truck, Printer, Pencil } from 'lucide-react'
@@ -61,80 +61,166 @@ const SHIPMENT_STATUS_LABELS: Record<string, string> = {
   cancelado:              'Cancelado',
 }
 
+const ROUTE = 'GET /vendas/[id] getSale'
+
+/**
+ * Vendas tem 3 FKs para `users` (seller_id, cancelled_by, returned_by — os dois
+ * últimos desde 20260721_sales_reversal_audit_columns.sql). Um embed
+ * `users(...)` sem qualificar a FK é ambíguo para o PostgREST (erro PGRST201)
+ * e derruba a query inteira — inclusive o `sale_items`/`customers` que vêm
+ * junto na mesma `.select()`. Por isso a venda é buscada sozinha, sem nenhum
+ * relacionamento embutido, e cada relação é resolvida em queries separadas
+ * que não podem derrubar as outras.
+ */
 async function getSale(id: string) {
   const admin = createAdminClient()
+  const saleId = Number(id)
+
+  // ── Etapa 1: venda base — sem embeds, é a única que decide notFound() ──────
   const { data: saleData, error: saleError } = await admin
     .from('sales')
-    .select(`
-      *,
-      customers (id, name, cpf, phone),
-      users (name),
-      sale_items (
-        id, quantity, unit_price, total_price, unit_cost,
-        product_variations (
-          id, sku_variation,
-          products (id, name, sku),
-          product_variation_attributes (
-            variation_types:variation_type_id ( name, slug ),
-            variation_values:variation_value_id ( value )
-          )
-        )
-      )
-    `)
-    .eq('id', Number(id))
-    .single() as unknown as { data: any; error: import('@/lib/errors/pgResult').PgErrorLike | null }
+    .select('*')
+    .eq('id', saleId)
+    .maybeSingle() as unknown as { data: any; error: import('@/lib/errors/pgResult').PgErrorLike | null }
 
-  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id] getSale', { sale_id: id })
-  if (!sale) return null
+  if (saleError) {
+    logQueryError(saleError, `${ROUTE} (sale_base)`, { sale_id: id, stage: 'sale_base' })
+    throw new Error(`Erro ao consultar dados (${ROUTE} (sale_base)).`)
+  }
+  if (!saleData) return null
+  const sale = saleData
 
-  // Buscar envio vinculado a esta venda
-  const { data: shipment, error: shipmentError } = await (admin as any)
-    .from('shipments')
-    .select('id, delivery_mode, status, notes')
-    .eq('order_id', Number(id))
-    .maybeSingle() as unknown as {
-      data: { id: number; delivery_mode: string; status: string; notes: string | null } | null
-      error: import('@/lib/errors/pgResult').PgErrorLike | null
-    }
-  logQueryError(shipmentError, 'GET /vendas/[id] getSale (shipment)', { sale_id: id })
+  // ── Etapa 2: relações de 1º nível, em paralelo — nenhuma pode gerar 404 ────
+  const stage2 = await Promise.all([
+    admin.from('customers').select('id, name, cpf, phone').eq('id', sale.customer_id).maybeSingle(),
+    admin.from('users').select('name').eq('id', sale.seller_id).maybeSingle(),
+    sale.responsible_seller_id
+      ? (admin as any).from('sellers').select('id, name').eq('id', sale.responsible_seller_id).maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    admin.from('sale_items').select('id, quantity, unit_price, total_price, unit_cost, product_variation_id').eq('sale_id', sale.id),
+    (admin as any).from('shipments').select('id, delivery_mode, status, notes').eq('order_id', sale.id).maybeSingle(),
+    (admin as any).from('sale_payments')
+      .select('id, method, amount_tendered, change_amount, change_method, net_amount, installments, card_brand, acquirer, fee_amount')
+      .eq('sale_id', sale.id)
+      .order('net_amount', { ascending: false }),
+    (admin as any).from('exchanges')
+      .select('id, status, returned_amount, credit_issued, created_at')
+      .eq('original_sale_id', sale.id)
+      .eq('status', 'completed')
+      .order('created_at', { ascending: false }),
+  ]) as any[]
 
-  // Buscar pagamentos detalhados (sale_payments) — vazio para vendas legadas
-  const { data: salePayments, error: salePaymentsError } = await (admin as any)
-    .from('sale_payments')
-    .select('id, method, amount_tendered, change_amount, change_method, net_amount, installments, card_brand, acquirer, fee_amount')
-    .eq('sale_id', Number(id))
-    .order('net_amount', { ascending: false }) as unknown as {
-      data: {
-        id: number
-        method: string
-        amount_tendered: number
-        change_amount: number
-        change_method: string | null
-        net_amount: number
-        installments: number
-        card_brand: string | null
-        acquirer: string | null
-        fee_amount: number
-      }[] | null
-      error: import('@/lib/errors/pgResult').PgErrorLike | null
-    }
-  logQueryError(salePaymentsError, 'GET /vendas/[id] getSale (sale_payments)', { sale_id: id })
+  const [
+    { data: customer, error: customerError },
+    { data: seller, error: sellerError },
+    { data: responsibleSeller, error: responsibleSellerError },
+    { data: saleItems, error: saleItemsError },
+    { data: shipment, error: shipmentError },
+    { data: salePayments, error: salePaymentsError },
+    { data: exchanges, error: exchangesError },
+  ] = stage2
 
-  // Buscar trocas feitas nesta venda
-  const { data: exchanges, error: exchangesError } = await (admin as any)
-    .from('exchanges')
-    .select('id, status, returned_amount, credit_issued, created_at, exchange_items(id, quantity_returned, unit_price, product_variation_id)')
-    .eq('original_sale_id', Number(id))
-    .eq('status', 'completed')
-    .order('created_at', { ascending: false }) as unknown as {
-      data: { id: number; status: string; returned_amount: number; credit_issued: number; created_at: string; exchange_items: any[] }[] | null
-      error: import('@/lib/errors/pgResult').PgErrorLike | null
-    }
-  logQueryError(exchangesError, 'GET /vendas/[id] getSale (exchanges)', { sale_id: id })
+  logQueryError(customerError,          `${ROUTE} (customer)`,           { sale_id: id, stage: 'customer' })
+  logQueryError(sellerError,            `${ROUTE} (seller)`,             { sale_id: id, stage: 'seller' })
+  logQueryError(responsibleSellerError, `${ROUTE} (responsible_seller)`, { sale_id: id, stage: 'responsible_seller' })
+  logQueryError(saleItemsError,         `${ROUTE} (sale_items)`,         { sale_id: id, stage: 'sale_items' })
+  logQueryError(shipmentError,          `${ROUTE} (shipment)`,           { sale_id: id, stage: 'shipment' })
+  logQueryError(salePaymentsError,      `${ROUTE} (payments)`,           { sale_id: id, stage: 'payments' })
+  logQueryError(exchangesError,         `${ROUTE} (exchanges)`,          { sale_id: id, stage: 'exchanges' })
 
-  const hasExchanges = (exchanges ?? []).length > 0
+  // ── Etapa 3: dependem dos resultados da etapa 2 ─────────────────────────────
+  const variationIds = [...new Set((saleItems ?? []).map((i: any) => i.product_variation_id))]
+  const exchangeIds  = (exchanges ?? []).map((e: any) => e.id)
 
-  return { ...sale, shipment: shipment ?? null, salePayments: salePayments ?? [], exchanges: exchanges ?? [], hasExchanges }
+  const stage3 = await Promise.all([
+    variationIds.length
+      ? admin.from('product_variations').select('id, sku_variation, product_id').in('id', variationIds)
+      : Promise.resolve({ data: [], error: null }),
+    exchangeIds.length
+      ? (admin as any).from('exchange_items')
+          .select('id, exchange_id, quantity_returned, unit_price, product_variation_id')
+          .in('exchange_id', exchangeIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]) as any[]
+
+  const [
+    { data: productVariations, error: productVariationsError },
+    { data: exchangeItems, error: exchangeItemsError },
+  ] = stage3
+
+  logQueryError(productVariationsError, `${ROUTE} (product_variations)`, { sale_id: id, stage: 'product_variations' })
+  logQueryError(exchangeItemsError,     `${ROUTE} (exchange_items)`,     { sale_id: id, stage: 'exchange_items' })
+
+  // ── Etapa 4: depende da etapa 3 (produtos/atributos das variações) ─────────
+  const productIds = [...new Set((productVariations ?? []).map((v: any) => v.product_id))]
+
+  const stage4 = await Promise.all([
+    productIds.length
+      ? admin.from('products').select('id, name, sku').in('id', productIds)
+      : Promise.resolve({ data: [], error: null }),
+    variationIds.length
+      ? (admin as any).from('product_variation_attributes')
+          .select('product_variation_id, variation_types:variation_type_id(name,slug), variation_values:variation_value_id(value)')
+          .in('product_variation_id', variationIds)
+      : Promise.resolve({ data: [], error: null }),
+  ]) as any[]
+
+  const [
+    { data: products, error: productsError },
+    { data: variationAttributes, error: variationAttributesError },
+  ] = stage4
+
+  logQueryError(productsError,            `${ROUTE} (products)`,              { sale_id: id, stage: 'products' })
+  logQueryError(variationAttributesError, `${ROUTE} (variation_attributes)`,   { sale_id: id, stage: 'variation_attributes' })
+
+  // ── Reagrupar no mesmo formato que a página já consome ──────────────────────
+  const productsById = new Map((products ?? []).map((p: any) => [p.id, p]))
+
+  const attrsByVariation = new Map<number, any[]>()
+  for (const a of variationAttributes ?? []) {
+    const list = attrsByVariation.get(a.product_variation_id) ?? []
+    list.push(a)
+    attrsByVariation.set(a.product_variation_id, list)
+  }
+
+  const variationsById = new Map(
+    (productVariations ?? []).map((v: any) => [v.id, {
+      ...v,
+      products: productsById.get(v.product_id) ?? null,
+      product_variation_attributes: attrsByVariation.get(v.id) ?? [],
+    }])
+  )
+
+  const saleItemsEnriched = (saleItems ?? []).map((item: any) => ({
+    ...item,
+    product_variations: variationsById.get(item.product_variation_id) ?? null,
+  }))
+
+  const exchangeItemsByExchange = new Map<number, any[]>()
+  for (const ei of exchangeItems ?? []) {
+    const list = exchangeItemsByExchange.get(ei.exchange_id) ?? []
+    list.push(ei)
+    exchangeItemsByExchange.set(ei.exchange_id, list)
+  }
+
+  const exchangesEnriched = (exchanges ?? []).map((ex: any) => ({
+    ...ex,
+    exchange_items: exchangeItemsByExchange.get(ex.id) ?? [],
+  }))
+
+  const hasExchanges = exchangesEnriched.length > 0
+
+  return {
+    ...sale,
+    customers:         customer ?? null,
+    seller:            seller ?? null,
+    responsibleSeller: responsibleSeller ?? null,
+    sale_items:        saleItemsEnriched,
+    shipment:          shipment ?? null,
+    salePayments:      salePayments ?? [],
+    exchanges:         exchangesEnriched,
+    hasExchanges,
+  }
 }
 
 export default async function VendaDetalhePage({ params }: { params: { id: string } }) {
