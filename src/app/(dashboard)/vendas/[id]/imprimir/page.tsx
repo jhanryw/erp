@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { resolveOrThrow, logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import { PrintTrigger } from './PrintTrigger'
 
@@ -15,7 +16,7 @@ const PAYMENT_LABELS: Record<string, string> = {
 async function getSaleForPrint(id: string) {
   const admin = createAdminClient()
 
-  const { data: sale } = await (admin as any)
+  const { data: saleData, error: saleError } = await (admin as any)
     .from('sales')
     .select(`
       id,
@@ -42,15 +43,17 @@ async function getSaleForPrint(id: string) {
       )
     `)
     .eq('id', Number(id))
-    .single()
+    .single() as unknown as { data: any; error: PgErrorLike | null }
 
+  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id]/imprimir getSaleForPrint', { sale_id: id })
   if (!sale) return null
 
   // Verificar se já tem pagamento registrado
-  const { count: paymentsCount } = await (admin as any)
+  const { count: paymentsCount, error: paymentsCountError } = await (admin as any)
     .from('sale_payments')
     .select('id', { count: 'exact', head: true })
     .eq('sale_id', Number(id))
+  logQueryError(paymentsCountError, 'GET /vendas/[id]/imprimir getSaleForPrint (sale_payments count)', { sale_id: id })
 
   const isPaid = sale.status === 'paid' ||
                  sale.status === 'shipped' ||

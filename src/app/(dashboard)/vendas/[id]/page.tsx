@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
+import { resolveOrThrow, logQueryError } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft, Package, Truck, Printer, Pencil } from 'lucide-react'
@@ -62,7 +63,7 @@ const SHIPMENT_STATUS_LABELS: Record<string, string> = {
 
 async function getSale(id: string) {
   const admin = createAdminClient()
-  const { data: sale } = await admin
+  const { data: saleData, error: saleError } = await admin
     .from('sales')
     .select(`
       *,
@@ -81,19 +82,24 @@ async function getSale(id: string) {
       )
     `)
     .eq('id', Number(id))
-    .single() as unknown as { data: any }
+    .single() as unknown as { data: any; error: import('@/lib/errors/pgResult').PgErrorLike | null }
 
+  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id] getSale', { sale_id: id })
   if (!sale) return null
 
   // Buscar envio vinculado a esta venda
-  const { data: shipment } = await (admin as any)
+  const { data: shipment, error: shipmentError } = await (admin as any)
     .from('shipments')
     .select('id, delivery_mode, status, notes')
     .eq('order_id', Number(id))
-    .maybeSingle() as unknown as { data: { id: number; delivery_mode: string; status: string; notes: string | null } | null }
+    .maybeSingle() as unknown as {
+      data: { id: number; delivery_mode: string; status: string; notes: string | null } | null
+      error: import('@/lib/errors/pgResult').PgErrorLike | null
+    }
+  logQueryError(shipmentError, 'GET /vendas/[id] getSale (shipment)', { sale_id: id })
 
   // Buscar pagamentos detalhados (sale_payments) — vazio para vendas legadas
-  const { data: salePayments } = await (admin as any)
+  const { data: salePayments, error: salePaymentsError } = await (admin as any)
     .from('sale_payments')
     .select('id, method, amount_tendered, change_amount, change_method, net_amount, installments, card_brand, acquirer, fee_amount')
     .eq('sale_id', Number(id))
@@ -110,17 +116,21 @@ async function getSale(id: string) {
         acquirer: string | null
         fee_amount: number
       }[] | null
+      error: import('@/lib/errors/pgResult').PgErrorLike | null
     }
+  logQueryError(salePaymentsError, 'GET /vendas/[id] getSale (sale_payments)', { sale_id: id })
 
   // Buscar trocas feitas nesta venda
-  const { data: exchanges } = await (admin as any)
+  const { data: exchanges, error: exchangesError } = await (admin as any)
     .from('exchanges')
     .select('id, status, returned_amount, credit_issued, created_at, exchange_items(id, quantity_returned, unit_price, product_variation_id)')
     .eq('original_sale_id', Number(id))
     .eq('status', 'completed')
     .order('created_at', { ascending: false }) as unknown as {
       data: { id: number; status: string; returned_amount: number; credit_issued: number; created_at: string; exchange_items: any[] }[] | null
+      error: import('@/lib/errors/pgResult').PgErrorLike | null
     }
+  logQueryError(exchangesError, 'GET /vendas/[id] getSale (exchanges)', { sale_id: id })
 
   const hasExchanges = (exchanges ?? []).length > 0
 

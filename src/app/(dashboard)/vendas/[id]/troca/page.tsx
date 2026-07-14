@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
+import { resolveOrThrow, logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
@@ -14,7 +15,7 @@ async function getExchangeData(saleId: number) {
   const admin = createAdminClient()
 
   // Venda com itens
-  const { data: sale } = await (admin as any)
+  const { data: saleData, error: saleError } = await (admin as any)
     .from('sales')
     .select(`
       id, sale_number, sale_date, status, total, customer_id,
@@ -32,18 +33,21 @@ async function getExchangeData(saleId: number) {
       )
     `)
     .eq('id', saleId)
-    .single() as unknown as { data: any }
+    .single() as unknown as { data: any; error: PgErrorLike | null }
 
+  const sale = resolveOrThrow(saleData, saleError, 'GET /vendas/[id]/troca getExchangeData', { sale_id: saleId })
   if (!sale) return null
 
   // Quantidades já devolvidas via trocas anteriores para cada sale_item
-  const { data: existingExchangeItems } = await (admin as any)
+  const { data: existingExchangeItems, error: existingExchangeItemsError } = await (admin as any)
     .from('exchange_items')
     .select('sale_item_id, quantity_returned, exchanges!inner(original_sale_id, status)')
     .eq('exchanges.original_sale_id', saleId)
     .eq('exchanges.status', 'completed') as unknown as {
       data: { sale_item_id: number; quantity_returned: number }[] | null
+      error: PgErrorLike | null
     }
+  logQueryError(existingExchangeItemsError, 'GET /vendas/[id]/troca getExchangeData (exchange_items)', { sale_id: saleId })
 
   const alreadyReturned: Record<number, number> = {}
   for (const ei of existingExchangeItems ?? []) {
