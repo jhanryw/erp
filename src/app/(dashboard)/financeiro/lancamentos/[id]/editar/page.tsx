@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { Suspense, useEffect, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
@@ -10,10 +10,35 @@ import { ArrowLeft } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import { toISODate } from '@/lib/utils/date'
+import { toISODate, formatDateTime } from '@/lib/utils/date'
 import { financeEntrySchema, type FinanceEntryFormData } from '@/lib/validators'
+import { formatCurrency } from '@/lib/utils/currency'
+import { safeReturnPath } from '../../_lib/safe-return'
+import { AlertTriangle } from 'lucide-react'
 
 type FinanceEntryForm = FinanceEntryFormData
+
+type CashMovementInfo = {
+  id: number
+  description: string
+  amount: number
+  method: string
+  created_at: string
+  cancelled_at: string | null
+  cancellation_reason: string | null
+  metadata: Record<string, unknown> | null
+}
+
+type AuditHistoryEntry = {
+  id: number
+  ts: string
+  action: string
+  user_role: string | null
+  before_data: Record<string, unknown> | null
+  after_data: Record<string, unknown> | null
+  detail: string | null
+  users: { name: string } | null
+}
 
 const PAYMENT_METHODS = [
   { value: 'cash', label: 'Dinheiro' },
@@ -40,8 +65,24 @@ const EXPENSE_CATEGORIES = [
 ]
 
 export default function EditarLancamentoPage({ params }: { params: { id: string } }) {
+  return (
+    <Suspense>
+      <EditarLancamentoForm params={params} />
+    </Suspense>
+  )
+}
+
+function EditarLancamentoForm({ params }: { params: { id: string } }) {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // "from" preserva os filtros/página da listagem de onde o usuário veio —
+  // sem isso, ele sempre voltaria para a primeira página sem filtros.
+  // safeReturnPath rejeita qualquer coisa que não seja um caminho interno de
+  // /financeiro/lancamentos, evitando um redirect aberto via link malicioso.
+  const backTo = safeReturnPath(searchParams.get('from'))
   const [loading, setLoading] = useState(true)
+  const [cashMovement, setCashMovement] = useState<CashMovementInfo | null>(null)
+  const [auditHistory, setAuditHistory] = useState<AuditHistoryEntry[]>([])
 
   const {
     register,
@@ -59,10 +100,10 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
   useEffect(() => {
     fetch(`/api/financeiro/lancamentos/${params.id}`)
       .then(r => r.json())
-      .then(({ entry, error }) => {
+      .then(({ entry, cashMovement, auditHistory, error }) => {
         if (error || !entry) {
           toast.error('Lançamento não encontrado')
-          router.push('/financeiro/lancamentos')
+          router.push(backTo)
           return
         }
         reset({
@@ -79,6 +120,8 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
           payment_method: entry.payment_method ?? undefined,
           paid_at: entry.paid_at ?? undefined,
         })
+        setCashMovement(cashMovement ?? null)
+        setAuditHistory(auditHistory ?? [])
         setLoading(false)
       })
   }, [params.id, reset, router])
@@ -100,7 +143,7 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
     }
     toast.success('Lançamento atualizado com sucesso!')
     router.refresh()
-    router.push('/financeiro/lancamentos')
+    router.push(backTo)
   }
 
   if (loading) {
@@ -114,7 +157,7 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
   return (
     <div className="max-w-xl space-y-5">
       <div className="flex items-center gap-3">
-        <Link href="/financeiro/lancamentos">
+        <Link href={backTo}>
           <Button variant="ghost" size="icon">
             <ArrowLeft className="w-4 h-4" />
           </Button>
@@ -124,6 +167,58 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
           <p className="text-sm text-text-muted">Altere os dados do lançamento financeiro</p>
         </div>
       </div>
+
+      {cashMovement && (
+        <div className="card p-4 border-warning/30 bg-warning/5 space-y-3">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-warning flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-warning">
+                Este lançamento foi originado de um movimento do Caixa.
+              </p>
+              <p className="text-xs text-text-muted mt-0.5">
+                Movimento de Caixa #{cashMovement.id}. Editar os campos abaixo atualiza somente este
+                lançamento financeiro — o vínculo com o Caixa é preservado e o movimento original não é alterado.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div>
+              <p className="text-text-muted">Descrição original</p>
+              <p className="text-text-primary font-medium">{cashMovement.description}</p>
+            </div>
+            <div>
+              <p className="text-text-muted">Valor original</p>
+              <p className="text-text-primary font-medium">{formatCurrency(cashMovement.amount)}</p>
+            </div>
+            <div>
+              <p className="text-text-muted">Método</p>
+              <p className="text-text-primary font-medium">{cashMovement.method}</p>
+            </div>
+            <div>
+              <p className="text-text-muted">Criado em</p>
+              <p className="text-text-primary font-medium">{formatDateTime(cashMovement.created_at)}</p>
+            </div>
+            {cashMovement.cancelled_at && (
+              <div className="col-span-2 sm:col-span-4">
+                <p className="text-error font-medium">
+                  Movimento cancelado em {formatDateTime(cashMovement.cancelled_at)}
+                  {cashMovement.cancellation_reason && ` — ${cashMovement.cancellation_reason}`}
+                </p>
+              </div>
+            )}
+            {cashMovement.metadata && Object.keys(cashMovement.metadata).length > 0 && (
+              <div className="col-span-2 sm:col-span-4">
+                <p className="text-text-muted mb-1">Metadata</p>
+                <pre className="text-[11px] bg-bg-overlay rounded p-2 overflow-x-auto">
+                  {JSON.stringify(cashMovement.metadata, null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit(onSubmit)} className="card p-6 space-y-5">
         <Select label="Tipo" required error={errors.type?.message} {...register('type')}>
@@ -211,7 +306,7 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
         </div>
 
         <div className="flex gap-3 pt-2">
-          <Link href="/financeiro/lancamentos" className="flex-1">
+          <Link href={backTo} className="flex-1">
             <Button type="button" variant="secondary" className="w-full">
               Cancelar
             </Button>
@@ -221,6 +316,50 @@ export default function EditarLancamentoPage({ params }: { params: { id: string 
           </Button>
         </div>
       </form>
+
+      {auditHistory.length > 0 && (
+        <div className="card p-4 space-y-3">
+          <p className="text-sm font-semibold text-text-primary">Histórico de alterações</p>
+          <div className="space-y-2">
+            {auditHistory.map((log) => (
+              <div key={log.id} className="text-xs border-b border-border last:border-0 pb-2 last:pb-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-text-secondary">
+                    {log.action === 'create' || log.action === 'link' ? 'Criação (regularização do Caixa)' : 'Alteração'}
+                    {' · '}{log.users?.name ?? 'Sistema'}
+                    {log.user_role && ` (${log.user_role})`}
+                  </span>
+                  <span className="text-text-muted whitespace-nowrap">{formatDateTime(log.ts)}</span>
+                </div>
+                {log.detail && <p className="text-text-muted mt-0.5">{log.detail}</p>}
+                {(log.before_data || log.after_data) && (
+                  <details className="mt-1">
+                    <summary className="text-brand cursor-pointer">Ver valores</summary>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                      {log.before_data && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Antes</p>
+                          <pre className="bg-bg-overlay rounded p-2 overflow-x-auto text-[11px]">
+                            {JSON.stringify(log.before_data, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                      {log.after_data && (
+                        <div>
+                          <p className="text-text-muted mb-0.5">Depois</p>
+                          <pre className="bg-bg-overlay rounded p-2 overflow-x-auto text-[11px]">
+                            {JSON.stringify(log.after_data, null, 2)}
+                          </pre>
+                        </div>
+                      )}
+                    </div>
+                  </details>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

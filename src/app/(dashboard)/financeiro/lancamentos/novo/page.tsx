@@ -1,6 +1,7 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import { Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
@@ -11,6 +12,7 @@ import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { toISODate } from '@/lib/utils/date'
 import { financeEntrySchema, type FinanceEntryFormData } from '@/lib/validators'
+import { safeReturnPath } from '../_lib/safe-return'
 
 type FinanceEntryForm = FinanceEntryFormData
 
@@ -39,7 +41,21 @@ const EXPENSE_CATEGORIES = [
 ]
 
 export default function NovoLancamentoPage() {
+  return (
+    <Suspense>
+      <NovoLancamentoForm />
+    </Suspense>
+  )
+}
+
+function NovoLancamentoForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // "from" preserva os filtros/página da listagem de onde o usuário veio —
+  // sem isso, ele sempre voltaria para a primeira página sem filtros.
+  // safeReturnPath rejeita qualquer coisa que não seja um caminho interno de
+  // /financeiro/lancamentos, evitando um redirect aberto via link malicioso.
+  const backTo = safeReturnPath(searchParams.get('from'))
 
   const {
     register,
@@ -75,13 +91,13 @@ export default function NovoLancamentoPage() {
     }
     toast.success('Lançamento registrado com sucesso!')
     router.refresh()
-    router.push('/financeiro')
+    router.push(backTo)
   }
 
   return (
     <div className="max-w-xl space-y-5">
       <div className="flex items-center gap-3">
-        <Link href="/financeiro">
+        <Link href={backTo}>
           <Button variant="ghost" size="icon">
             <ArrowLeft className="w-4 h-4" />
           </Button>
@@ -182,7 +198,7 @@ export default function NovoLancamentoPage() {
 
         {/* Ações */}
         <div className="flex gap-3 pt-2">
-          <Link href="/financeiro" className="flex-1">
+          <Link href={backTo} className="flex-1">
             <Button type="button" variant="secondary" className="w-full">
               Cancelar
             </Button>

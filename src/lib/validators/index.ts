@@ -225,7 +225,7 @@ export const financeEntrySchema = z
     ]),
     description: z.string().min(2, 'Descrição obrigatória'),
     amount: z.coerce.number().positive('Valor deve ser > 0'),
-    reference_date: z.string().min(1, 'Data de competência obrigatória'),
+    reference_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data de competência inválida'),
     notes: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
     payment_method: z.preprocess(
       (v) => (v === '' || v == null ? undefined : v),
@@ -233,7 +233,7 @@ export const financeEntrySchema = z
     ),
     paid_at: z.preprocess(
       (v) => (v === '' || v == null ? undefined : v),
-      z.string().optional(),
+      z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data de pagamento inválida').optional(),
     ),
   })
   .strict()

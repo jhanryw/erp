@@ -6,13 +6,21 @@ interface PaginationProps {
   totalPages: number
   baseUrl: string   // ex.: "/clientes" ou "/vendas"
   query?: string    // mantém o ?q= ao navegar entre páginas
+  // Parâmetros adicionais a preservar ao trocar de página (filtros, pageSize
+  // etc.) — chaves com valor undefined/'' são omitidas da URL.
+  extraParams?: Record<string, string | undefined>
 }
 
-export function Pagination({ page, totalPages, baseUrl, query }: PaginationProps) {
+export function Pagination({ page, totalPages, baseUrl, query, extraParams }: PaginationProps) {
   if (totalPages <= 1) return null
 
   function href(p: number) {
     const params = new URLSearchParams()
+    if (extraParams) {
+      for (const [key, value] of Object.entries(extraParams)) {
+        if (value) params.set(key, value)
+      }
+    }
     if (query) params.set('q', query)
     params.set('page', String(p))
     return `${baseUrl}?${params.toString()}`

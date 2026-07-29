@@ -14,7 +14,12 @@ export async function POST(request: Request) {
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido' }, { status: 400 }) }
 
   const parsed = financeEntrySchema.safeParse(body)
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
+  if (!parsed.success) {
+    const flat = parsed.error.flatten()
+    const fieldMsg = Object.values(flat.fieldErrors as Record<string, string[]>)[0]?.[0]
+    const formMsg = flat.formErrors[0]
+    return NextResponse.json({ error: fieldMsg ?? formMsg ?? 'Dados inválidos' }, { status: 422 })
+  }
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
@@ -23,15 +28,24 @@ export async function POST(request: Request) {
   // paid_at é DATE: a string 'yyyy-MM-dd' do formulário vai direto ao banco,
   // sem nenhuma conversão de timezone.
   const admin = createAdminClient()
-  const { error } = await admin.from('finance_entries').insert({
+  const insertPayload = {
     ...parsed.data,
     ...normalizeFinanceEntryPayment(parsed.data),
     created_by: user.id,
     company_id: user.company_id,
-  } as any)
+  }
+  const { data: created, error } = await admin.from('finance_entries').insert(insertPayload as any).select('id').single()
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  auditLog({ userId: user.id, userRole: user.role, action: 'create', resource: 'finance_entry', detail: `${parsed.data.type}:${parsed.data.category}:${parsed.data.amount}` })
+  auditLog({
+    userId: user.id,
+    userRole: user.role,
+    action: 'create',
+    resource: 'finance_entry',
+    resourceId: (created as any)?.id,
+    after: insertPayload,
+    detail: `${parsed.data.type}:${parsed.data.category}:${parsed.data.amount}`,
+  })
   return NextResponse.json({ ok: true }, { status: 201 })
 }
