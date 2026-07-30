@@ -79,6 +79,7 @@ export default function NovoProdutoPage() {
 
 
   const [categories,  setCategories]  = useState<{ id: number; name: string; product_type_id: number | null }[]>([])
+  const [productTypes, setProductTypes] = useState<{ id: number; name: string; slug: string; sku_code: string | null }[]>([])
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
   const [brands,      setBrands]      = useState<{ id: number; name: string }[]>([])
   const [varTypes,    setVarTypes]    = useState<VariationType[]>([])
@@ -112,6 +113,7 @@ export default function NovoProdutoPage() {
   // Carregar dados iniciais
   useEffect(() => {
     fetch('/api/categorias').then(r => r.json()).then(({ categories }) => setCategories(categories ?? []))
+    fetch('/api/produtos/tipos').then(r => r.json()).then(({ product_types }) => setProductTypes(product_types ?? []))
     fetch('/api/fornecedores').then(r => r.json()).then(({ suppliers }) => setSuppliers(suppliers ?? []))
     fetch('/api/marcas?active=true').then(r => r.json()).then(({ brands }) => setBrands(brands ?? []))
     fetch('/api/variacoes').then(r => r.json()).then(({ types }) => setVarTypes(types ?? []))
@@ -425,7 +427,7 @@ export default function NovoProdutoPage() {
             <Input label="Nome do produto" required placeholder="Ex: Body de Renda Floral" error={errors.name?.message} {...register('name')} />
             <Select label="Tipo" required error={errors.tipo?.message} {...register('tipo')}>
               <option value="">Selecione...</option>
-              {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>)}
+              {productTypes.map(pt => <option key={pt.slug} value={pt.slug}>{pt.name}</option>)}
             </Select>
             {modeloOptions.governed ? (
               // Caminho dinâmico (Fase G acelerada — hoje só Calcinha): valores
