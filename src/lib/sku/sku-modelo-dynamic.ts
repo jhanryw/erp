@@ -15,6 +15,7 @@
 // =============================================================================
 
 import { SKU_ANO } from './sku-map'
+import type { ProductTypeCandidate, ModeloGovernance } from './resolve-taxonomy'
 
 export interface DynamicModeloContext {
   productTypeId: number
@@ -78,6 +79,7 @@ export async function resolveDynamicModeloContext(tipoSlug: string, companyId: n
 export interface ModeloValue {
   id: number
   value: string
+  slug: string
   skuCode: string
 }
 
@@ -94,27 +96,27 @@ export async function loadModeloValuesForType(context: DynamicModeloContext, adm
   if (context.valueGovernance === 'unrestricted') {
     const { data } = await admin
       .from('variation_values')
-      .select('id, value, sku_code')
+      .select('id, value, slug, sku_code')
       .eq('variation_type_id', context.modeloVariationTypeId)
       .eq('active', true)
       .order('value')
 
-    return ((data ?? []) as { id: number; value: string; sku_code: string | null }[])
+    return ((data ?? []) as { id: number; value: string; slug: string; sku_code: string | null }[])
       .filter(v => v.sku_code)
-      .map(v => ({ id: v.id, value: v.value, skuCode: v.sku_code as string }))
+      .map(v => ({ id: v.id, value: v.value, slug: v.slug, skuCode: v.sku_code as string }))
   }
 
   const { data } = await admin
     .from('type_attribute_values')
-    .select('variation_values!inner(id, value, sku_code, active)')
+    .select('variation_values!inner(id, value, slug, sku_code, active)')
     .eq('product_type_id', context.productTypeId)
     .eq('active', true)
     .eq('variation_values.active', true)
 
-  return ((data ?? []) as { variation_values: { id: number; value: string; sku_code: string | null } }[])
+  return ((data ?? []) as { variation_values: { id: number; value: string; slug: string; sku_code: string | null } }[])
     .map(row => row.variation_values)
     .filter(v => v && v.sku_code)
-    .map(v => ({ id: v.id, value: v.value, skuCode: v.sku_code as string }))
+    .map(v => ({ id: v.id, value: v.value, slug: v.slug, skuCode: v.sku_code as string }))
     .sort((a, b) => a.value.localeCompare(b.value))
 }
 
@@ -133,7 +135,7 @@ export async function loadModeloValuesForType(context: DynamicModeloContext, adm
 export async function loadModeloValue(modeloValueId: number, context: DynamicModeloContext, admin: any): Promise<ModeloValue | null> {
   const { data } = await admin
     .from('variation_values')
-    .select('id, value, sku_code, variation_type_id, active')
+    .select('id, value, slug, sku_code, variation_type_id, active')
     .eq('id', modeloValueId)
     .maybeSingle()
 
@@ -151,7 +153,7 @@ export async function loadModeloValue(modeloValueId: number, context: DynamicMod
     if (!link) return null
   }
 
-  return { id: data.id as number, value: data.value as string, skuCode: data.sku_code as string }
+  return { id: data.id as number, value: data.value as string, slug: data.slug as string, skuCode: data.sku_code as string }
 }
 
 /**
@@ -186,4 +188,94 @@ export function buildDynamicSkuBase(params: {
     throw new Error(`Falha interna na geração dinâmica do SKU: comprimento incorreto (${sku.length}). Gerado: '${sku}'`)
   }
   return sku
+}
+
+/**
+ * Lista os product_types ativos de uma empresa — fonte única usada pelo
+ * select de Tipo (produtos/novo), pelo endpoint /api/produtos/tipos e pela
+ * resolução de Tipo na importação CSV (resolveTipoModelo, em
+ * resolve-taxonomy.ts). Nenhuma consulta duplicada em cada consumidor.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function listActiveProductTypes(companyId: number, admin: any): Promise<ProductTypeCandidate[]> {
+  const { data } = await admin
+    .from('product_types')
+    .select('id, name, slug, sku_code')
+    .eq('company_id', companyId)
+    .eq('active', true)
+    .order('name')
+
+  return (data ?? []) as ProductTypeCandidate[]
+}
+
+export interface ModeloGovernanceLookup {
+  /** Governança ativa por slug de Tipo — único critério para o caminho
+   * dinâmico em resolveTipoModelo. */
+  governanceByTipoSlug: Record<string, ModeloGovernance>
+  /** Slugs de Tipo com um type_attributes existente pra 'modelo' porém
+   * INATIVO — sinal explícito de "este Tipo não usa Modelo codificado"
+   * (diferente de "nunca configurado", que deve gerar erro em
+   * resolveTipoModelo, não aceitar por omissão). */
+  explicitlyNotUsedTipoSlugs: Set<string>
+}
+
+/**
+ * Calcula, para cada product_type ativo, a governança de Modelo (ativa ou
+ * explicitamente desligada) — reaproveita resolveDynamicModeloContext +
+ * loadModeloValuesForType (nenhuma regra de governança nova). Usado pela
+ * importação CSV para resolver todas as linhas de uma vez, sem duplicar a
+ * lógica que já governa o cadastro manual e o endpoint
+ * /api/produtos/modelo-options.
+ *
+ * Importante: a existência de uma linha em product_types NÃO implica
+ * governança — praticamente todo Tipo legado já tem linha em product_types
+ * (202607301700_pim_seed_legacy_product_types.sql) sem nunca ter ganhado
+ * type_attributes pra Modelo. Por isso a checagem de "existe configuração"
+ * é feita direto em type_attributes (sem eq('active', true)), não via
+ * resolveDynamicModeloContext sozinho (que só enxerga o caso ativo).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function loadModeloGovernanceForAllTypes(
+  productTypes: ProductTypeCandidate[],
+  companyId: number,
+  admin: any,
+): Promise<ModeloGovernanceLookup> {
+  const governanceByTipoSlug: Record<string, ModeloGovernance> = {}
+  const explicitlyNotUsedTipoSlugs = new Set<string>()
+
+  const { data: modeloTypeRow } = await admin
+    .from('variation_types')
+    .select('id')
+    .eq('slug', 'modelo')
+    .maybeSingle()
+  const modeloVariationTypeId = (modeloTypeRow as { id: number } | null)?.id
+  if (!modeloVariationTypeId) return { governanceByTipoSlug, explicitlyNotUsedTipoSlugs }
+
+  for (const pt of productTypes) {
+    const { data: typeAttr } = await admin
+      .from('type_attributes')
+      .select('required, active')
+      .eq('product_type_id', pt.id)
+      .eq('variation_type_id', modeloVariationTypeId)
+      .maybeSingle()
+
+    const attr = typeAttr as { required: boolean; active: boolean } | null
+    if (!attr) continue // nunca configurado — resolveTipoModelo decide (legado ou erro)
+
+    if (!attr.active) {
+      explicitlyNotUsedTipoSlugs.add(pt.slug)
+      continue
+    }
+
+    const context = await resolveDynamicModeloContext(pt.slug, companyId, admin)
+    if (!context) continue
+    const values = await loadModeloValuesForType(context, admin)
+
+    governanceByTipoSlug[pt.slug] = {
+      required: !!attr.required,
+      values: values.map(v => ({ id: v.id, value: v.value, slug: v.slug, sku_code: v.skuCode })),
+    }
+  }
+
+  return { governanceByTipoSlug, explicitlyNotUsedTipoSlugs }
 }

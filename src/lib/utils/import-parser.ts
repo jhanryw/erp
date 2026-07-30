@@ -1,3 +1,5 @@
+import { resolveTipoModelo, type ProductTypeCandidate, type ModeloGovernance } from '@/lib/sku/resolve-taxonomy'
+
 export type ImportRow = {
   nome_produto?: string
   nome?: string
@@ -50,6 +52,15 @@ export type DbData = {
   colors: { id: number; value: string; slug: string }[]
   sizes: { id: number; value: string; slug: string }[]
   existingProducts: { name: string; tipo: string; modelo: string; ano: string }[]
+  /** product_types ativos da empresa — resolução de Tipo contra o PIM dinâmico. */
+  productTypes: ProductTypeCandidate[]
+  /** Governança de Modelo por slug de Tipo (só presente pra Tipos com Modelo
+   * governado dinamicamente) — buscada sob demanda em produtos/importar/page.tsx
+   * via /api/produtos/modelo-options, uma vez por Tipo distinto no CSV. */
+  modeloGovernanceByTipoSlug: Record<string, ModeloGovernance>
+  /** Slugs de Tipo com type_attributes existente pra Modelo porém inativo —
+   * sinal explícito de "não usa Modelo codificado" (ver resolve-taxonomy.ts). */
+  modeloExplicitlyNotUsedTipoSlugs: Set<string>
 }
 
 export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
@@ -88,7 +99,20 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
       return
     }
 
-    if (!tipo || !modelo) newIssues.push({ row: rowNum, message: 'Tipo e Modelo são obrigatórios', type: 'error' })
+    // Resolve Tipo/Modelo contra o PIM dinâmico (mesma função usada pela
+    // importação definitiva no servidor — /api/produtos/import) — nunca
+    // rejeita um Tipo ativo em product_types só por não estar no mapa
+    // estático legado, e resolve o Modelo pelo slug ou texto normalizado
+    // dentro da lista governada daquele Tipo.
+    const tipoModeloResolution = resolveTipoModelo(
+      tipo, modelo, dbData.productTypes, dbData.modeloGovernanceByTipoSlug, dbData.modeloExplicitlyNotUsedTipoSlugs,
+    )
+    if (!tipoModeloResolution.ok) {
+      newIssues.push({ row: rowNum, message: `${nome_produto.trim() || 'Produto'}: ${tipoModeloResolution.error}`, type: 'error' })
+      return
+    }
+    const { tipo: resolvedTipo, modelo: resolvedModelo } = tipoModeloResolution.result
+
     if (isNaN(pPreco) || pPreco <= 0) newIssues.push({ row: rowNum, message: 'Preço inválido ou vazio', type: 'error' })
     if (isNaN(pCusto) || pCusto < 0)  newIssues.push({ row: rowNum, message: 'Custo inválido', type: 'error' })
     if (isNaN(estoque) || estoque < 0) newIssues.push({ row: rowNum, message: 'Estoque não pode ser negativo', type: 'error' })
@@ -133,8 +157,10 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
       ? 'own_brand'
       : 'third_party'
 
-    // Check against ERP — report only once per unique product key
-    const productKey = `${nome_produto.trim().toLowerCase()}|${tipo}|${modelo}|${ano}`
+    // Check against ERP — report only once per unique product key (Tipo/Modelo
+    // já canônicos, resolvidos contra o PIM — duas grafias diferentes do
+    // mesmo Tipo/Modelo colidem corretamente como o mesmo produto)
+    const productKey = `${nome_produto.trim().toLowerCase()}|${resolvedTipo}|${resolvedModelo}|${ano}`
     if (existingKeys.has(productKey) && !alreadyReportedErpConflict.has(productKey)) {
       alreadyReportedErpConflict.add(productKey)
       newIssues.push({
@@ -151,8 +177,8 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     if (!productMap.has(mapKey)) {
       productMap.set(mapKey, {
         name: nome_produto.trim(),
-        tipo,
-        modelo,
+        tipo: resolvedTipo,
+        modelo: resolvedModelo,
         ano,
         category_id,
         supplier_id,

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import { parseImportRows, type ImportRow, type ParsedProduct, type ErrorWarning, type DbData } from '@/lib/utils/import-parser'
+import { matchProductType, type ModeloGovernance } from '@/lib/sku/resolve-taxonomy'
 
 export default function ImportarProdutosPage() {
   const router = useRouter()
@@ -29,25 +30,35 @@ export default function ImportarProdutosPage() {
   const [issues, setIssues]                 = useState<ErrorWarning[]>([])
   const [hasErrors, setHasErrors]           = useState(false)
   const [importing, setImporting]           = useState(false)
+  // Uma chave por lote validado (não por clique) — retries do MESMO lote
+  // (ex.: erro de rede, o usuário clica "Importar" de novo) reusam a
+  // mesma chave, permitindo que a RPC detecte repetição e não duplique
+  // produtos. Um novo arquivo/nova validação gera uma chave nova.
+  const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const [importResult, setImportResult]     = useState<{
     imported: number
     serverError?: string
   } | null>(null)
 
-  // Carregar dados de referência (categorias, fornecedores, variações, produtos existentes)
+  // Carregar dados de referência (categorias, fornecedores, variações, produtos
+  // existentes, Tipos ativos do PIM). Governança de Modelo por Tipo é
+  // buscada à parte, sob demanda, quando o CSV é carregado — só para os
+  // Tipos realmente presentes no arquivo (ver useEffect de rawRows abaixo).
   useEffect(() => {
     async function loadDbData() {
       try {
-        const [catsRes, suppRes, varsRes, namesRes] = await Promise.all([
+        const [catsRes, suppRes, varsRes, namesRes, tiposRes] = await Promise.all([
           fetch('/api/categorias'),
           fetch('/api/fornecedores'),
           fetch('/api/variacoes'),
           fetch('/api/produtos/names'),
+          fetch('/api/produtos/tipos'),
         ])
         const cats  = await catsRes.json()
         const supps = await suppRes.json()
         const vars  = await varsRes.json()
         const names = await namesRes.json()
+        const tipos = await tiposRes.json()
 
         const types     = vars.types || []
         const colorType = types.find((t: any) => t.slug === 'cor')
@@ -59,6 +70,9 @@ export default function ImportarProdutosPage() {
           colors:           colorType?.variation_values ?? [],
           sizes:            sizeType?.variation_values  ?? [],
           existingProducts: names.products   ?? [],
+          productTypes:     tipos.product_types ?? [],
+          modeloGovernanceByTipoSlug: {},
+          modeloExplicitlyNotUsedTipoSlugs: new Set(),
         })
       } catch {
         toast.error('Erro ao carregar dados do sistema')
@@ -100,14 +114,68 @@ export default function ImportarProdutosPage() {
     else        reader.readAsArrayBuffer(selected)
   }
 
+  // Antes de validar, busca a governança de Modelo (type_attribute_values)
+  // só dos Tipos realmente presentes no CSV, via /api/produtos/modelo-options
+  // — mesma fonte usada pelo cadastro manual e pela importação definitiva no
+  // servidor (nenhuma regra de governança nova aqui). Só então roda
+  // parseImportRows, que usa resolveTipoModelo (mesma função do servidor)
+  // para validar Tipo/Modelo — garante que a prévia nunca aceita algo que o
+  // servidor rejeitaria depois.
   useEffect(() => {
     if (rawRows.length === 0 || !dbData) return
+    let cancelled = false
     setLoading(true)
-    const { parsedProducts: pp, issues: iss, hasErrors: he } = parseImportRows(rawRows, dbData)
-    setParsedProducts(pp)
-    setIssues(iss)
-    setHasErrors(he)
-    setLoading(false)
+
+    async function run() {
+      const distinctTipoInputs = Array.from(
+        new Set(rawRows.map(r => String(r.tipo || '').trim()).filter(Boolean))
+      )
+
+      const modeloGovernanceByTipoSlug: Record<string, ModeloGovernance> = {}
+      const modeloExplicitlyNotUsedTipoSlugs = new Set<string>()
+
+      await Promise.all(distinctTipoInputs.map(async (tipoInput) => {
+        const match = matchProductType(tipoInput, dbData!.productTypes)
+        if (!match || modeloGovernanceByTipoSlug[match.slug] || modeloExplicitlyNotUsedTipoSlugs.has(match.slug)) return
+
+        try {
+          const res  = await fetch(`/api/produtos/modelo-options?tipo=${encodeURIComponent(match.slug)}`)
+          const json = await res.json()
+          if (json.governed) {
+            modeloGovernanceByTipoSlug[match.slug] = {
+              required: !!json.required,
+              values: (json.values ?? []).map((v: any) => ({
+                id: v.id, value: v.value, slug: v.slug, sku_code: v.sku_code,
+              })),
+            }
+          } else if (json.configured) {
+            // type_attributes existe pra este Tipo porém inativo — sinal
+            // explícito de "não usa Modelo codificado" (não confundir com
+            // "nunca configurado", que cai no mapa legado ou em erro).
+            modeloExplicitlyNotUsedTipoSlugs.add(match.slug)
+          }
+        } catch {
+          // Falha de rede — Tipo fica sem governança carregada; resolveTipoModelo
+          // tenta o mapa legado e, se também não encontrar, reporta erro de
+          // configuração (nunca aceita por omissão).
+        }
+      }))
+
+      if (cancelled) return
+
+      const { parsedProducts: pp, issues: iss, hasErrors: he } = parseImportRows(
+        rawRows,
+        { ...dbData!, modeloGovernanceByTipoSlug, modeloExplicitlyNotUsedTipoSlugs },
+      )
+      setParsedProducts(pp)
+      setIssues(iss)
+      setHasErrors(he)
+      setIdempotencyKey(crypto.randomUUID())
+      setLoading(false)
+    }
+
+    run()
+    return () => { cancelled = true }
   }, [rawRows, dbData])
 
   async function handleImport() {
@@ -120,7 +188,7 @@ export default function ImportarProdutosPage() {
       const res  = await fetch('/api/produtos/import', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify(parsedProducts),
+        body:    JSON.stringify({ products: parsedProducts, idempotency_key: idempotencyKey ?? undefined }),
       })
       const json = await res.json()
 
