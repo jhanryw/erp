@@ -187,17 +187,45 @@ CREATE TABLE IF NOT EXISTS public.parameters (
 );
 
 -- =============================================================================
+-- 5b. TIPOS DE PRODUTO (Tipo — topo da hierarquia Tipo→Categoria→Modelo)
+-- =============================================================================
+-- Ver supabase/migrations/20260729_pim_product_types_models.sql. Antes desta
+-- migration, "Tipo" (calcinha, sutiã, body...) não era uma tabela — existia
+-- só como objeto hardcoded em src/lib/sku/sku-map.ts. Refatoração de
+-- taxonomia do PIM (plano em /Users/jhanry/.claude/plans/robust-booping-sun.md).
+
+CREATE TABLE IF NOT EXISTS public.product_types (
+  id          SERIAL      PRIMARY KEY,
+  company_id  INT         NOT NULL REFERENCES public.companies(id),
+  name        TEXT        NOT NULL,
+  slug        TEXT        NOT NULL,
+  sku_code    TEXT,
+  active      BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_product_types_company_slug UNIQUE (company_id, slug)
+);
+
+-- =============================================================================
 -- 6. CATEGORIAS
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS public.categories (
-  id          SERIAL      PRIMARY KEY,
-  name        TEXT        NOT NULL,
-  slug        TEXT        NOT NULL UNIQUE,
-  parent_id   INT         REFERENCES public.categories(id) ON DELETE SET NULL,
-  company_id  INT         REFERENCES public.companies(id),
-  active      BOOLEAN     NOT NULL DEFAULT TRUE,
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  id               SERIAL      PRIMARY KEY,
+  name             TEXT        NOT NULL,
+  slug             TEXT        NOT NULL,
+  parent_id        INT         REFERENCES public.categories(id) ON DELETE SET NULL,
+  company_id       INT         REFERENCES public.companies(id),
+  active           BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- Retroativo (20260729_pim_product_types_models.sql): antes dessa migration
+  -- esta tabela misturava Tipo e Categoria (ex.: "Calcinha" era linha de
+  -- categories, não Tipo). product_type_id nullable durante a transição;
+  -- parent_id fica congelado (só usado historicamente pelas 4 filhas de
+  -- "Cinta"), nenhum código novo lê ou escreve nele.
+  product_type_id  INT         REFERENCES public.product_types(id),
+  sku_code         TEXT,
+  CONSTRAINT uq_categories_company_type_slug UNIQUE (company_id, product_type_id, slug)
 );
 
 -- =============================================================================
@@ -244,6 +272,44 @@ ALTER TABLE public.variation_types
 CREATE INDEX IF NOT EXISTS idx_variation_types_kind
   ON public.variation_types(kind);
 
+-- Retroativo (ver supabase/migrations/202607301100_pim_attributes_foundation.sql):
+-- Fase A da arquitetura de atributos do PIM. kind distingue onde o valor mora
+-- (variação de estoque vs. produto-pai); include_in_sku é ortogonal — decide
+-- se o código do valor entra na string do SKU. Modelo é o primeiro caso de
+-- kind='descriptive' + include_in_sku=true (não multiplica estoque, mas
+-- fornece o segmento MM). data_type/cardinality preparam o suporte a
+-- atributos não-select (ex.: booleano) sem exigir isso ainda. value_governance
+-- substitui a regra implícita antiga ("sem vínculo = permissivo") por uma
+-- política explícita por atributo.
+ALTER TABLE public.variation_types
+  ADD COLUMN IF NOT EXISTS include_in_sku    BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN IF NOT EXISTS data_type         TEXT    NOT NULL DEFAULT 'select'
+    CHECK (data_type IN ('select', 'boolean', 'text', 'number')),
+  ADD COLUMN IF NOT EXISTS cardinality       TEXT    NOT NULL DEFAULT 'single'
+    CHECK (cardinality IN ('single', 'multiple')),
+  ADD COLUMN IF NOT EXISTS value_governance  TEXT    NOT NULL DEFAULT 'unrestricted'
+    CHECK (value_governance IN ('unrestricted', 'type_restricted', 'category_restricted'));
+
+-- ADD CONSTRAINT não aceita IF NOT EXISTS diretamente no Postgres — checagem
+-- via pg_constraint, mesmo padrão do arquivo de migration real.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.variation_types'::regclass
+      AND conname = 'variation_types_cardinality_requires_select'
+  ) THEN
+    ALTER TABLE public.variation_types
+      ADD CONSTRAINT variation_types_cardinality_requires_select
+      CHECK (cardinality = 'single' OR data_type = 'select');
+  END IF;
+END $$;
+
+UPDATE public.variation_types
+SET include_in_sku = true
+WHERE slug IN ('cor', 'tamanho')
+  AND include_in_sku = false;
+
 -- Governança de atributos por categoria: quais variation_types se aplicam
 -- (e quais são obrigatórios) para produtos de uma categoria. Sem
 -- consumidor de código ainda — cadastro/edição/importação continuam
@@ -263,6 +329,111 @@ CREATE INDEX IF NOT EXISTS idx_category_attributes_category_id
 
 CREATE INDEX IF NOT EXISTS idx_category_attributes_variation_type_id
   ON public.category_attributes(variation_type_id);
+
+-- =============================================================================
+-- 8a. GOVERNANÇA DE ATRIBUTO POR TIPO (type_attributes) E ATRIBUTOS DO
+-- PRODUTO-PAI (product_attribute_values)
+-- =============================================================================
+-- Ver supabase/migrations/202607301200_pim_type_attributes_and_product_attribute_values.sql.
+-- type_attributes define o teto de atributos que um Tipo permite/exige —
+-- category_attributes só refina dentro desse teto, nunca introduz atributo
+-- fora dele. product_attribute_values é onde atributos "descriptive" do
+-- produto-pai vivem (Modelo é o primeiro caso: kind=descriptive,
+-- include_in_sku=true — não multiplica variação de estoque, mas fornece o
+-- segmento MM do SKU).
+
+CREATE TABLE IF NOT EXISTS public.type_attributes (
+  id                 SERIAL      PRIMARY KEY,
+  product_type_id    INT         NOT NULL REFERENCES public.product_types(id),
+  variation_type_id  INT         NOT NULL REFERENCES public.variation_types(id),
+  required           BOOLEAN     NOT NULL DEFAULT FALSE,
+  active             BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_type_attributes UNIQUE (product_type_id, variation_type_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_type_attributes_product_type_id
+  ON public.type_attributes(product_type_id);
+
+CREATE INDEX IF NOT EXISTS idx_type_attributes_variation_type_id
+  ON public.type_attributes(variation_type_id);
+
+-- Governança de VALOR por Tipo (ver supabase/migrations/202607301600_pim_type_attribute_values.sql).
+-- Corrige gap encontrado em teste real: Calcinha e Sex Shop compartilham o
+-- mesmo atributo Modelo (variation_type_id) — sem esta tabela, o endpoint de
+-- opções (e a validação do POST /api/produtos) enxergava os valores de
+-- AMBOS os Tipos juntos. N:N de propósito — um valor pode servir a mais de
+-- um Tipo no futuro sem duplicar cadastro. Consultada só quando
+-- variation_types.value_governance for 'type_restricted' ou
+-- 'category_restricted' — 'unrestricted' (Cor/Tamanho hoje) ignora esta
+-- tabela e mantém o comportamento global de sempre.
+CREATE TABLE IF NOT EXISTS public.type_attribute_values (
+  id                  SERIAL      PRIMARY KEY,
+  product_type_id     INT         NOT NULL REFERENCES public.product_types(id),
+  variation_value_id  INT         NOT NULL REFERENCES public.variation_values(id),
+  active              BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_type_attribute_values UNIQUE (product_type_id, variation_value_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_type_attribute_values_product_type_id
+  ON public.type_attribute_values(product_type_id);
+
+CREATE INDEX IF NOT EXISTS idx_type_attribute_values_variation_value_id
+  ON public.type_attribute_values(variation_value_id);
+
+-- PRIMARY KEY composta (product_id, variation_type_id) garante no máximo 1
+-- valor por atributo por produto — assume cardinality='single' para tudo
+-- que passar por aqui (único caso hoje: Modelo).
+CREATE TABLE IF NOT EXISTS public.product_attribute_values (
+  product_id         INT         NOT NULL REFERENCES public.products(id) ON DELETE CASCADE,
+  variation_type_id  INT         NOT NULL REFERENCES public.variation_types(id),
+  variation_value_id INT         NOT NULL REFERENCES public.variation_values(id),
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (product_id, variation_type_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_attribute_values_variation_type_id
+  ON public.product_attribute_values(variation_type_id);
+
+CREATE INDEX IF NOT EXISTS idx_product_attribute_values_variation_value_id
+  ON public.product_attribute_values(variation_value_id);
+
+-- =============================================================================
+-- 8b. MODELOS DE PRODUTO (Modelo — base da hierarquia Tipo→Categoria→Modelo)
+-- =============================================================================
+-- Ver supabase/migrations/20260729_pim_product_types_models.sql. Escopado
+-- por product_type_id (não por category_id) — permite um Modelo (ex.: "Fio")
+-- ser reutilizado por várias Categorias do mesmo Tipo sem duplicar cadastro.
+-- category_models declara quais Modelos aparecem para cada Categoria, mesma
+-- forma de category_attributes.
+
+CREATE TABLE IF NOT EXISTS public.product_models (
+  id                SERIAL      PRIMARY KEY,
+  company_id        INT         NOT NULL REFERENCES public.companies(id),
+  product_type_id   INT         NOT NULL REFERENCES public.product_types(id),
+  name              TEXT        NOT NULL,
+  slug              TEXT        NOT NULL,
+  sku_code          TEXT,
+  active            BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT uq_product_models_company_type_slug UNIQUE (company_id, product_type_id, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_models_product_type_id
+  ON public.product_models(product_type_id);
+
+CREATE TABLE IF NOT EXISTS public.category_models (
+  category_id  INT     NOT NULL REFERENCES public.categories(id),
+  model_id     INT     NOT NULL REFERENCES public.product_models(id),
+  active       BOOLEAN NOT NULL DEFAULT TRUE,
+  PRIMARY KEY (category_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_category_models_model_id
+  ON public.category_models(model_id);
 
 -- =============================================================================
 -- 9. FORNECEDORES
@@ -359,6 +530,25 @@ ALTER TABLE public.products
 
 CREATE INDEX IF NOT EXISTS idx_products_brand_id
   ON public.products(brand_id);
+
+-- Retroativo (ver supabase/migrations/20260729_pim_product_types_models.sql):
+-- Modelo como entidade (substitui gradualmente products.modelo texto).
+-- Nullable e convivendo com tipo/modelo durante toda a transição —
+-- nenhum dos dois é removido nesta migration.
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS model_id INT REFERENCES public.product_models(id);
+
+CREATE INDEX IF NOT EXISTS idx_products_model_id
+  ON public.products(model_id);
+
+-- Retroativo (ver supabase/migrations/202607301100_pim_attributes_foundation.sql):
+-- diferencia qual gerador de SKU um produto usa. Nunca inferido da string do
+-- SKU (um TTMMCCTTAA de 10 dígitos é idêntico nos dois esquemas) — sempre
+-- decidido por esta coluna. DEFAULT 'legacy' já backfilla todo produto
+-- existente no momento da criação da coluna.
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS sku_scheme TEXT NOT NULL DEFAULT 'legacy'
+    CHECK (sku_scheme IN ('legacy', 'dynamic'));
 
 -- =============================================================================
 -- 11. VARIAÇÕES DE PRODUTO

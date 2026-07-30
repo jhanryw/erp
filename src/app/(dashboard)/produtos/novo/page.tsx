@@ -32,7 +32,8 @@ const variantRowSchema = z.object({
 const formSchema = z.object({
   name:        z.string().min(2, 'Nome obrigatório'),
   tipo:        z.string().min(1, 'Tipo obrigatório'),
-  modelo:      z.string().min(1, 'Modelo obrigatório'),
+  modelo:      z.string().min(1, 'Modelo obrigatório').optional(),
+  modelo_value_id: z.number().int().positive().optional(),
   ano:         z.string().min(4, 'Ano obrigatório'),
   category_id: z.coerce.number({ invalid_type_error: 'Selecione uma categoria' }).int().positive('Selecione uma categoria'),
   supplier_id: z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().int().positive().nullable().optional()),
@@ -56,6 +57,11 @@ const formSchema = z.object({
   ),
   unidade_med: z.string().max(10).default('UN'),
 })
+// Obrigatoriedade de Modelo não é estática — depende do Tipo (Calcinha
+// exige, Sex Shop não) e só é conhecida em runtime via modeloOptions
+// (ver /api/produtos/modelo-options). Checada imperativamente em
+// generateVariants(), mesmo padrão já usado para corRequired/tamanhoRequired
+// — não dá pra expressar isso num schema estático sem acesso a esse estado.
 
 type FormData = z.infer<typeof formSchema>
 
@@ -72,11 +78,12 @@ export default function NovoProdutoPage() {
   if (!hasMinRole(userRole, 'gerente')) return null
 
 
-  const [categories,  setCategories]  = useState<{ id: number; name: string }[]>([])
+  const [categories,  setCategories]  = useState<{ id: number; name: string; product_type_id: number | null }[]>([])
   const [suppliers,   setSuppliers]   = useState<{ id: number; name: string }[]>([])
   const [brands,      setBrands]      = useState<{ id: number; name: string }[]>([])
   const [varTypes,    setVarTypes]    = useState<VariationType[]>([])
   const [categoryAttributes, setCategoryAttributes] = useState<CategoryAttributeLink[]>([])
+  const [modeloOptions, setModeloOptions] = useState<{ governed: boolean; required: boolean; tipoSkuCode?: string; productTypeId?: number; values: VariationValue[] }>({ governed: false, required: false, values: [] })
   const [selColors,     setSelColors]     = useState<VariationValue[]>([])
   const [selSizes,      setSelSizes]      = useState<VariationValue[]>([])
   const [generated,     setGenerated]     = useState(false)
@@ -98,6 +105,7 @@ export default function NovoProdutoPage() {
 
   const tipo = watch('tipo')
   const modelo = watch('modelo')
+  const modeloValueId = watch('modelo_value_id')
   const ano = watch('ano')
   const categoryId = watch('category_id')
 
@@ -108,6 +116,26 @@ export default function NovoProdutoPage() {
     fetch('/api/marcas?active=true').then(r => r.json()).then(({ brands }) => setBrands(brands ?? []))
     fetch('/api/variacoes').then(r => r.json()).then(({ types }) => setVarTypes(types ?? []))
   }, [])
+
+  // Modelo dinâmico por Tipo (Fase G acelerada — hoje só Calcinha tem
+  // Modelo governado via type_attributes). Troca de Tipo sempre limpa a
+  // seleção anterior de Modelo (texto e id) pra nunca ficar com um valor
+  // de um Tipo diferente do que está selecionado agora.
+  useEffect(() => {
+    setValue('modelo', undefined)
+    setValue('modelo_value_id', undefined)
+    if (!tipo) { setModeloOptions({ governed: false, required: false, values: [] }); return }
+    fetch(`/api/produtos/modelo-options?tipo=${encodeURIComponent(tipo)}`)
+      .then(r => r.json())
+      .then(json => setModeloOptions({
+        governed: !!json.governed,
+        required: !!json.required,
+        tipoSkuCode: json.tipoSkuCode,
+        productTypeId: json.productTypeId,
+        values: json.values ?? [],
+      }))
+      .catch(() => setModeloOptions({ governed: false, required: false, values: [] }))
+  }, [tipo, setValue])
 
   // Atributos obrigatórios da categoria selecionada (cor/tamanho apenas —
   // únicos variation_types com UI de seleção hoje). Sem categoria
@@ -125,6 +153,17 @@ export default function NovoProdutoPage() {
   const sizeType   = varTypes.find(t => t.slug === 'tamanho')
   const otherTypes = varTypes.filter(t => t.slug !== 'cor' && t.slug !== 'tamanho')
 
+  // Categorias visíveis: se o Tipo selecionado já tem categorias reais
+  // ligadas (product_type_id preenchido — hoje só Sex Shop), mostra só
+  // essas, escondendo as legadas (evita categorizar um produto de Sex Shop
+  // como "Calcinha" por engano). Se o Tipo ainda não tem nenhuma categoria
+  // ligada (Calcinha e todo o resto, ainda sem backfill), cai de volta na
+  // lista legada completa — nunca fica vazio por falta de backfill.
+  const categoriesForTipo = categories.filter(c => c.product_type_id != null && c.product_type_id === modeloOptions.productTypeId)
+  const visibleCategories = categoriesForTipo.length > 0
+    ? categoriesForTipo
+    : categories.filter(c => c.product_type_id == null)
+
   const corRequired     = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'cor')
   const tamanhoRequired = categoryAttributes.some(ca => ca.required && ca.variation_type?.slug === 'tamanho')
 
@@ -133,13 +172,12 @@ export default function NovoProdutoPage() {
     const hasColors = selColors.length > 0
     const hasSizes  = selSizes.length > 0
 
-    if (!hasColors && !hasSizes) {
-      toast.error('Selecione ao menos uma cor ou tamanho')
-      return
-    }
+    // Produto sem Cor nem Tamanho é um caso válido (lubrificante, óleo de
+    // massagem) — gera uma única linha neutra, não bloqueia mais. Segue
+    // pra baixo em vez de retornar cedo.
 
-    if (!tipo || !modelo) {
-      toast.error('Preencha o Tipo e o Modelo do produto antes de gerar SKUs')
+    if (!tipo) {
+      toast.error('Selecione o Tipo do produto antes de gerar SKUs')
       return
     }
 
@@ -159,7 +197,14 @@ export default function NovoProdutoPage() {
     function previewSku(corCode: string | null | undefined, tamanhoCode: string | null | undefined): string {
       if (corCode === null || tamanhoCode === null) return '(gerado ao salvar)'
       try {
-        return generateSKUFromCodes({ tipo, modelo, corCode: corCode ?? undefined, tamanhoCode: tamanhoCode ?? undefined, ano })
+        if (modeloOptions.governed) {
+          // Caminho dinâmico: prévia simples por concatenação (mesma forma
+          // final TTMMCCTTAA) — o SKU real é sempre recalculado no servidor.
+          const modeloValue = modeloOptions.values.find(v => v.id === modeloValueId)
+          if (!modeloOptions.tipoSkuCode || !modeloValue?.sku_code || !corCode || !tamanhoCode) return '(gerado ao salvar)'
+          return `${modeloOptions.tipoSkuCode}${modeloValue.sku_code}${corCode}${tamanhoCode}${ano?.slice(-2) ?? ''}`
+        }
+        return generateSKUFromCodes({ tipo, modelo: modelo!, corCode: corCode ?? undefined, tamanhoCode: tamanhoCode ?? undefined, ano })
       } catch {
         return '(gerado ao salvar)'
       }
@@ -195,7 +240,7 @@ export default function NovoProdutoPage() {
           initial_stock:  0,
         })
       })
-    } else {
+    } else if (hasSizes) {
       selSizes.forEach(size => {
         rows.push({
           sku_variation:  previewSku(undefined, size.sku_code),
@@ -208,12 +253,26 @@ export default function NovoProdutoPage() {
           initial_stock:  0,
         })
       })
+    } else {
+      // Produto simples — sem Cor nem Tamanho (lubrificante, óleo de
+      // massagem). Uma única variação interna com códigos neutros ('00'),
+      // nunca aparece como Cor/Tamanho falso na interface.
+      rows.push({
+        sku_variation:  previewSku(undefined, undefined),
+        color_value_id: null,
+        size_value_id:  null,
+        color_label:    undefined,
+        size_label:     undefined,
+        price_override: null,
+        cost_override:  null,
+        initial_stock:  0,
+      })
     }
 
     replace(rows)
     setGenerated(true)
     toast.success(`${rows.length} variante${rows.length > 1 ? 's' : ''} gerada${rows.length > 1 ? 's' : ''}`)
-  }, [selColors, selSizes, tipo, modelo, ano, replace, corRequired, tamanhoRequired])
+  }, [selColors, selSizes, tipo, modelo, modeloValueId, modeloOptions, ano, replace, corRequired, tamanhoRequired])
 
   function toggleColor(v: VariationValue) {
     setSelColors(prev => prev.find(c => c.id === v.id) ? prev.filter(c => c.id !== v.id) : [...prev, v])
@@ -368,20 +427,40 @@ export default function NovoProdutoPage() {
               <option value="">Selecione...</option>
               {Object.keys(SKU_TIPO).map(k => <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>)}
             </Select>
-            <Select label="Modelo" required error={errors.modelo?.message} {...register('modelo')} disabled={!tipo}>
-              <option value="">Selecione...</option>
-              {tipo ? (
-                (() => {
-                  const tt = SKU_TIPO[tipo as keyof typeof SKU_TIPO]
-                  const models = SKU_MODELO[tt]
-                  if (!models) return <option value="" disabled>Sem modelos disponíveis para este tipo</option>
-                  
-                  return Object.keys(models).map(k => (
-                    <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>
-                  ))
-                })()
-              ) : null}
-            </Select>
+            {modeloOptions.governed ? (
+              // Caminho dinâmico (Fase G acelerada — hoje só Calcinha): valores
+              // vêm de variation_values via type_attributes, não do mapa
+              // estático. modelo_value_id é o que o servidor usa pra resolver
+              // o segmento MM do SKU; "modelo" (texto) fica de fora do form.
+              <Select
+                label="Modelo"
+                required={modeloOptions.required}
+                error={errors.modelo?.message}
+                disabled={!tipo}
+                value={watch('modelo_value_id') ?? ''}
+                onChange={e => setValue('modelo_value_id', e.target.value ? Number(e.target.value) : undefined)}
+              >
+                <option value="">Selecione...</option>
+                {modeloOptions.values.map(v => (
+                  <option key={v.id} value={v.id}>{v.value}</option>
+                ))}
+              </Select>
+            ) : (
+              <Select label="Modelo" required error={errors.modelo?.message} {...register('modelo')} disabled={!tipo}>
+                <option value="">Selecione...</option>
+                {tipo ? (
+                  (() => {
+                    const tt = SKU_TIPO[tipo as keyof typeof SKU_TIPO]
+                    const models = SKU_MODELO[tt]
+                    if (!models) return <option value="" disabled>Sem modelos disponíveis para este tipo</option>
+
+                    return Object.keys(models).map(k => (
+                      <option key={k} value={k}>{k.charAt(0).toUpperCase() + k.replace(/_/g, ' ').slice(1)}</option>
+                    ))
+                  })()
+                ) : null}
+              </Select>
+            )}
             <Select label="Ano" required error={errors.ano?.message} {...register('ano')}>
               <option value="">Selecione...</option>
               <option value="2023">2023</option>
@@ -394,7 +473,7 @@ export default function NovoProdutoPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Select label="Categoria" required error={errors.category_id?.message} {...register('category_id')}>
               <option value="">Selecione a categoria</option>
-              {categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {visibleCategories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </Select>
             <Select label="Fornecedor" {...register('supplier_id')}>
               <option value="">Sem fornecedor</option>
@@ -580,10 +659,9 @@ export default function NovoProdutoPage() {
 
           {/* Botão gerar */}
           <div className="flex items-center gap-3 pt-2">
-            <Button type="button" variant="secondary" onClick={generateVariants}
-              disabled={selColors.length === 0 && selSizes.length === 0}>
+            <Button type="button" variant="secondary" onClick={generateVariants} disabled={!tipo}>
               <RefreshCw className="w-4 h-4" />
-              {generated ? 'Regerar Matriz' : 'Gerar Matriz de Variantes'}
+              {generated ? 'Regerar Matriz' : selColors.length === 0 && selSizes.length === 0 ? 'Gerar Produto Simples' : 'Gerar Matriz de Variantes'}
             </Button>
             {generated && (
               <span className="text-sm text-text-muted">{fields.length} variante{fields.length > 1 ? 's' : ''} • clique em "Regerar" para atualizar após mudar seleção</span>
@@ -623,6 +701,9 @@ export default function NovoProdutoPage() {
                           )}
                           {field.size_label && (
                             <span className="px-2 py-0.5 rounded-full bg-bg-overlay border border-border text-text-secondary text-xs font-medium">{field.size_label}</span>
+                          )}
+                          {!field.color_label && !field.size_label && (
+                            <span className="text-xs text-text-muted italic">Produto simples (sem variação)</span>
                           )}
                         </div>
                       </td>

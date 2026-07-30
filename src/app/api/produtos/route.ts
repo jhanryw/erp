@@ -10,6 +10,7 @@ import { ncmFieldSchema, cestFieldSchema, origemFieldSchema } from '@/lib/valida
 import { generateParentSKU, generateSKUFromCodes } from '@/lib/sku/sku-map'
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
+import { resolveDynamicModeloContext, loadModeloValue, buildDynamicSkuBase } from '@/lib/sku/sku-modelo-dynamic'
 import { initializeStock } from '@/services/estoque.service'
 
 const variantSchema = z.object({
@@ -20,10 +21,19 @@ const variantSchema = z.object({
   initial_stock: z.coerce.number().int().min(0).default(0),
 })
 
+// modelo_value_id (opcional): quando presente, ativa o caminho dinâmico de
+// SKU (Fase G acelerada — hoje só Calcinha tem Modelo governado em
+// type_attributes). "tipo" continua sempre obrigatório (mesmo select de
+// sempre) — é usado tanto pro caminho legado quanto pra resolver o Tipo no
+// caminho dinâmico. Só "modelo" (texto livre) vira opcional quando
+// modelo_value_id está presente — o servidor deriva o texto a partir do
+// valor de Modelo escolhido, nunca aceita os dois desacoplados (é esse
+// descolamento que causou o bug de categorização original).
 const schema = z.object({
   name: z.string().min(2),
   tipo: z.string().min(1),
-  modelo: z.string().min(1),
+  modelo: z.string().min(1).optional(),
+  modelo_value_id: z.coerce.number().int().positive().optional(),
   ano: z.string().min(1),
   category_id: z.coerce.number().int().positive(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
@@ -37,6 +47,10 @@ const schema = z.object({
   cest: cestFieldSchema(),
   origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN').optional(),
+}).superRefine((data, ctx) => {
+  if (!data.modelo_value_id && !data.modelo) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['modelo'], message: 'Modelo é obrigatório.' })
+  }
 })
 
 export async function POST(request: Request) {
@@ -52,7 +66,51 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   const admin = createAdminClient()
-  const { variants, ...productData } = parsed.data
+  const { variants, modelo_value_id, ...productData } = parsed.data
+
+  // Caminho dinâmico de SKU: ativa pra qualquer Tipo com Modelo governado em
+  // type_attributes (hoje Calcinha e Sex Shop) — resolvido pelo slug de Tipo
+  // já selecionado (mesmo campo "tipo" de sempre) + company_id, não por
+  // categoria (categories.product_type_id ainda não foi backfillado pra toda
+  // categoria existente). Sempre resolve o contexto, mesmo sem
+  // modelo_value_id — um Tipo dinâmico com Modelo opcional (Sex Shop) pode
+  // legitimamente não ter um Modelo escolhido; nesse caso MM vira '00' e o
+  // texto legado grava um marcador explícito ('sem_modelo'), nunca aceito
+  // como texto livre do cliente.
+  const resolvedTipo = productData.tipo
+  let resolvedModelo = productData.modelo
+  let skuScheme: 'legacy' | 'dynamic' = 'legacy'
+  let dynamicTipoSkuCode: string | null = null
+  let dynamicModeloVariationTypeId: number | null = null
+  let dynamicModeloValueId: number | null = null
+  let dynamicModeloSkuCode: string | undefined = undefined
+
+  const dynamicContext = await resolveDynamicModeloContext(resolvedTipo, user.company_id, admin)
+
+  if (dynamicContext) {
+    skuScheme = 'dynamic'
+    dynamicTipoSkuCode = dynamicContext.tipoSkuCode
+    dynamicModeloVariationTypeId = dynamicContext.modeloVariationTypeId
+
+    if (modelo_value_id) {
+      const modeloValue = await loadModeloValue(modelo_value_id, dynamicContext, admin)
+      if (!modeloValue) {
+        return NextResponse.json({ error: 'Modelo inválido para este Tipo.' }, { status: 422 })
+      }
+      resolvedModelo = modeloValue.value
+      dynamicModeloValueId = modeloValue.id
+      dynamicModeloSkuCode = modeloValue.skuCode
+    } else {
+      // Modelo é opcional para este Tipo (ex.: Sex Shop) — sem escolha,
+      // MM vira '00' e o texto legado grava um marcador explícito, nunca
+      // vazio silencioso (products.modelo é NOT NULL).
+      resolvedModelo = 'sem_modelo'
+    }
+  } else if (!resolvedModelo) {
+    // Caminho legado (Tipo sem Modelo dinâmico) — modelo texto continua
+    // obrigatório, como sempre foi.
+    return NextResponse.json({ error: 'Modelo é obrigatório.' }, { status: 422 })
+  }
 
   // Verificar duplicata antes de inserir — retorna 409 com id do existente
   const { data: existingProduct } = (await admin
@@ -60,8 +118,8 @@ export async function POST(request: Request) {
     .select('id, name')
     .eq('company_id', user.company_id)
     .ilike('name', productData.name.trim())
-    .eq('tipo', productData.tipo)
-    .eq('modelo', productData.modelo)
+    .eq('tipo', resolvedTipo)
+    .eq('modelo', resolvedModelo)
     .eq('ano', productData.ano)
     .maybeSingle()) as unknown as { data: { id: number; name: string } | null }
 
@@ -75,13 +133,18 @@ export async function POST(request: Request) {
     )
   }
 
-  const parentSku = generateParentSKU(productData.tipo, productData.modelo, productData.ano)
+  const parentSku = skuScheme === 'dynamic'
+    ? buildDynamicSkuBase({ tipoSkuCode: dynamicTipoSkuCode!, modeloSkuCode: dynamicModeloSkuCode, ano: productData.ano })
+    : generateParentSKU(resolvedTipo, resolvedModelo, productData.ano)
 
   const { data: product, error: productError } = (await (admin as any)
     .from('products')
     .insert({
       ...productData,
+      tipo: resolvedTipo,
+      modelo: resolvedModelo,
       sku: parentSku,
+      sku_scheme: skuScheme,
       supplier_id: productData.supplier_id ?? null,
       brand_id: productData.brand_id ?? null,
       subcategory_id: null,
@@ -98,6 +161,22 @@ export async function POST(request: Request) {
         : productError.message
 
     return NextResponse.json({ error: msg }, { status: 500 })
+  }
+
+  // Grava o atributo Modelo do produto-pai (product_attribute_values) —
+  // só no caminho dinâmico. Falha aqui não deveria acontecer (mesma
+  // transação lógica da criação do produto), mas se acontecer o produto já
+  // foi criado sem o vínculo; log de erro em vez de rollback, já que o
+  // produto em si é válido e o vínculo pode ser corrigido manualmente.
+  if (skuScheme === 'dynamic' && product && dynamicModeloVariationTypeId && dynamicModeloValueId) {
+    const { error: pavError } = await (admin as any).from('product_attribute_values').insert({
+      product_id: product.id,
+      variation_type_id: dynamicModeloVariationTypeId,
+      variation_value_id: dynamicModeloValueId,
+    })
+    if (pavError) {
+      console.error('[POST /api/produtos] Falha ao gravar product_attribute_values (Modelo)', pavError)
+    }
   }
 
   // 2. Criar variantes (se houver)
@@ -143,13 +222,21 @@ export async function POST(request: Request) {
           }
         }
 
-        const baseSku = generateSKUFromCodes({
-          tipo:         productData.tipo,
-          modelo:       productData.modelo,
-          corCode:      colorSkuCode,
-          tamanhoCode:  sizeSkuCode,
-          ano:          productData.ano,
-        })
+        const baseSku = skuScheme === 'dynamic'
+          ? buildDynamicSkuBase({
+              tipoSkuCode:   dynamicTipoSkuCode!,
+              modeloSkuCode: dynamicModeloSkuCode,
+              corCode:       colorSkuCode,
+              tamanhoCode:   sizeSkuCode,
+              ano:           productData.ano,
+            })
+          : generateSKUFromCodes({
+              tipo:         resolvedTipo,
+              modelo:       resolvedModelo,
+              corCode:      colorSkuCode,
+              tamanhoCode:  sizeSkuCode,
+              ano:          productData.ano,
+            })
 
         // Insere com desvio automático de sufixo + retry por race condition
         const insertResult = await insertVariationWithRetry(
