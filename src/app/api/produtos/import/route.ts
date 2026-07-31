@@ -275,7 +275,7 @@ export async function POST(request: Request) {
       base_cost:                 rawProductData.base_cost,
       base_price:                rawProductData.base_price,
       active:                    rawProductData.active,
-      sku:                       parentSku,
+      sku_base:                  parentSku,
       sku_scheme:                skuScheme,
       modelo_variation_type_id:  skuScheme === 'dynamic' && resolved.modeloValueId ? modeloVariationTypeId : null,
       modelo_value_id:           resolved.modeloValueId ?? null,
