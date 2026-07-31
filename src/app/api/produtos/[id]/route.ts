@@ -128,7 +128,18 @@ export async function PUT(
 
   const parsed = putSchema.safeParse(body)
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
+    const flat = parsed.error.flatten()
+    // parsed.error.flatten() é um OBJETO ({formErrors, fieldErrors}) — nunca
+    // devolver isso direto como `error` (frontend espera string; um objeto
+    // aí vira "Erro desconhecido" na tela, escondendo a causa real).
+    const summary = [
+      ...flat.formErrors,
+      ...Object.entries(flat.fieldErrors).flatMap(
+        ([field, msgs]) => (msgs ?? []).map((m) => `${field}: ${m}`)
+      ),
+    ].join(' | ') || 'Dados inválidos.'
+    console.error('[produtos][PUT] validação zod falhou', { produtoId: productId, body, flat })
+    return NextResponse.json({ error: summary, details: flat }, { status: 422 })
   }
 
   const { variations_to_delete, variations_to_add, ...patch } = parsed.data
@@ -313,7 +324,7 @@ export async function PUT(
       )
     }
 
-    for (const v of variations_to_add) {
+    for (const [variationIdx, v] of variations_to_add.entries()) {
 
       // Resolver sku_code de cor e tamanho a partir dos IDs
       let colorSkuCode: string | undefined
@@ -322,11 +333,29 @@ export async function PUT(
       const attrs: { product_variation_id: number; variation_type_id: number; variation_value_id: number }[] = []
 
       if (v.color_value_id) {
-        const { data: colorType } = await admin
+        const { data: colorType, error: colorLookupError } = await admin
           .from('variation_values')
           .select('variation_type_id, value, sku_code')
           .eq('id', v.color_value_id)
-          .single() as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
+          .single() as unknown as {
+            data: { variation_type_id: number; value: string; sku_code: string | null } | null
+            error: { code: string; message: string; details?: string | null; hint?: string | null } | null
+          }
+
+        // Erro de consulta real (não "não encontrado") nunca deve ser
+        // tratado silenciosamente como "sem cor" — isso geraria um SKU
+        // errado sem avisar ninguém.
+        if (colorLookupError) {
+          console.error('[produtos][PUT] erro ao buscar cor da variação', {
+            produtoId: productId, variationIdx, color_value_id: v.color_value_id, error: colorLookupError,
+          })
+          return NextResponse.json({
+            error:   `Erro ao buscar cor da variação #${variationIdx + 1}: ${colorLookupError.message}`,
+            code:    colorLookupError.code    ?? null,
+            details: colorLookupError.details ?? null,
+            hint:    colorLookupError.hint    ?? null,
+          }, { status: 500 })
+        }
 
         if (colorType) {
           colorSkuCode = colorType.sku_code ?? await getOrCreateColorSkuCode(colorType.value, admin)
@@ -339,11 +368,26 @@ export async function PUT(
       }
 
       if (v.size_value_id) {
-        const { data: sizeType } = await admin
+        const { data: sizeType, error: sizeLookupError } = await admin
           .from('variation_values')
           .select('variation_type_id, value, sku_code')
           .eq('id', v.size_value_id)
-          .single() as unknown as { data: { variation_type_id: number; value: string; sku_code: string | null } | null }
+          .single() as unknown as {
+            data: { variation_type_id: number; value: string; sku_code: string | null } | null
+            error: { code: string; message: string; details?: string | null; hint?: string | null } | null
+          }
+
+        if (sizeLookupError) {
+          console.error('[produtos][PUT] erro ao buscar tamanho da variação', {
+            produtoId: productId, variationIdx, size_value_id: v.size_value_id, error: sizeLookupError,
+          })
+          return NextResponse.json({
+            error:   `Erro ao buscar tamanho da variação #${variationIdx + 1}: ${sizeLookupError.message}`,
+            code:    sizeLookupError.code    ?? null,
+            details: sizeLookupError.details ?? null,
+            hint:    sizeLookupError.hint    ?? null,
+          }, { status: 500 })
+        }
 
         if (sizeType) {
           sizeSkuCode = sizeType.sku_code ?? await getOrCreateSizeSkuCode(sizeType.value, admin)
@@ -366,11 +410,23 @@ export async function PUT(
           ano:          productMeta.ano,
         })
       } catch (err) {
+        console.error('[produtos][PUT] erro ao gerar SKU', {
+          produtoId: productId, variationIdx,
+          color_value_id: v.color_value_id, size_value_id: v.size_value_id,
+          colorSkuCode, sizeSkuCode,
+          erro: err instanceof Error ? err.message : String(err),
+        })
         return NextResponse.json(
-          { error: `Erro ao gerar SKU da variação: ${err instanceof Error ? err.message : String(err)}` },
+          { error: `Erro ao gerar SKU da variação #${variationIdx + 1}: ${err instanceof Error ? err.message : String(err)}` },
           { status: 422 }
         )
       }
+
+      console.info('[produtos][PUT] SKU gerado para nova variação', {
+        produtoId: productId, variationIdx,
+        color_value_id: v.color_value_id, size_value_id: v.size_value_id,
+        colorSkuCode, sizeSkuCode, baseSku,
+      })
 
       // Inserir com desvio automático de sufixo + retry por race condition
       const insertResult = await insertVariationWithRetry(
@@ -385,8 +441,16 @@ export async function PUT(
       )
 
       if (!insertResult.ok) {
+        console.error('[produtos][PUT] falha ao inserir variação', {
+          produtoId: productId, variationIdx, baseSku, insertResult,
+        })
         return NextResponse.json(
-          { error: insertResult.message },
+          {
+            error:   `Falha ao salvar variação #${variationIdx + 1} (SKU base "${baseSku}"): ${insertResult.message}`,
+            code:    insertResult.code    ?? null,
+            details: insertResult.details ?? null,
+            hint:    insertResult.hint    ?? null,
+          },
           { status: insertResult.fatal ? 422 : 500 },
         )
       }

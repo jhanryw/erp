@@ -31,7 +31,7 @@ type VariationRow = {
   product_variation_attributes: AttributeRow[]
 }
 
-type VariationValue = { id: number; value: string; slug: string }
+type VariationValue = { id: number; value: string; slug: string; sku_code?: string | null }
 
 type VariationType = {
   id: number
@@ -242,40 +242,82 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     if (toDelete.length > 0) payload.variations_to_delete = toDelete
     if (toAdd.length > 0)    payload.variations_to_add    = toAdd.map(({ key: _key, ...v }) => v)
 
+    // Log de diagnóstico ANTES do fetch — sku_variation digitado é ignorado
+    // pelo servidor (gerado lá a partir de tipo/modelo/ano + cor/tamanho),
+    // por isso aqui também resolvemos o sku_code real de cada cor/tamanho
+    // selecionado, para comparar com o SKU final logado no servidor.
+    if (toAdd.length > 0) {
+      console.info('[produtos/editar] enviando novas variações', {
+        produtoId: params.id,
+        variacoes: toAdd.map(v => ({
+          key: v.key,
+          skuDigitadoIgnoradoPeloServidor: v.sku_variation,
+          color_value_id: v.color_value_id,
+          size_value_id:  v.size_value_id,
+          corCodigo:      colorType?.variation_values.find(vv => vv.id === v.color_value_id)?.sku_code ?? null,
+          tamanhoCodigo:  sizeType?.variation_values.find(vv => vv.id === v.size_value_id)?.sku_code ?? null,
+          price_override: v.price_override,
+          cost_override:  v.cost_override,
+        })),
+      })
+    }
+
+    // Leitura robusta da resposta: nunca assume JSON válido. Cobre corpo
+    // vazio, HTML (erro de framework antes da rota montar o JSON), e as
+    // formas conhecidas de erro: {error: string}, {error: object}, {message},
+    // ou erro cru do Supabase {code, message, details, hint}.
     let res: Response
-    let json: any
+    let rawResponse = ''
+    let responseData: any = null
     try {
       res = await fetch(`/api/produtos/${params.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       })
-      json = await res.json()
+      rawResponse = await res.text()
+      try {
+        responseData = rawResponse ? JSON.parse(rawResponse) : null
+      } catch {
+        responseData = null
+      }
     } catch (e) {
-      console.error('[produtos/editar] falha ao salvar', {
-        produtoId:  params.id,
-        operacao:   'update',
-        variacoes:  { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
-        mensagem:   e instanceof Error ? e.message : String(e),
+      console.error('[produtos/editar] falha de rede ao salvar', {
+        produtoId: params.id,
+        operacao:  'update',
+        variacoes: { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
+        mensagem:  e instanceof Error ? e.message : String(e),
       })
       toast.error('Não foi possível salvar as alterações do produto.', {
-        description: 'Falha de rede ou resposta inesperada do servidor.',
+        description: 'Falha de rede ao enviar os dados.',
       })
       return
     }
 
     if (!res.ok) {
+      const errorMessage =
+        (typeof responseData?.error === 'string' && responseData.error) ||
+        (typeof responseData?.message === 'string' && responseData.message) ||
+        (responseData?.error && typeof responseData.error === 'object'
+          ? JSON.stringify(responseData.error)
+          : null) ||
+        (rawResponse && !responseData ? rawResponse.slice(0, 300) : null) ||
+        `Erro HTTP ${res.status}`
+
       console.error('[produtos/editar] erro ao salvar', {
-        produtoId: params.id,
-        operacao:  'update',
-        variacoes: { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
-        mensagem:  json?.error,
-        code:      json?.code    ?? null,
-        details:   json?.details ?? null,
-        hint:      json?.hint    ?? null,
+        produtoId:   params.id,
+        operacao:    'update',
+        variacoes:   { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
+        status:      res.status,
+        statusText:  res.statusText,
+        rawResponse,
+        responseData,
+        code:        responseData?.code    ?? null,
+        details:     responseData?.details ?? null,
+        hint:        responseData?.hint    ?? null,
       })
       toast.error('Não foi possível salvar as alterações do produto.', {
-        description: typeof json?.error === 'string' ? json.error : 'Erro desconhecido.',
+        description: errorMessage,
       })
       return
     }

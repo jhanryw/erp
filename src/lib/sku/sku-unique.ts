@@ -81,6 +81,9 @@ export interface VariationInsertError {
   message: string
   /** true se o erro NÃO é 23505 (erros estruturais que não devem ser retentados) */
   fatal:   boolean
+  code?:    string | null
+  details?: string | null
+  hint?:    string | null
 }
 
 // ─── Insert com desvio automático + retry de race condition ──────────────────
@@ -103,11 +106,15 @@ export async function insertVariationWithRetry(
   maxAttempts = 3,
 ): Promise<VariationInsertResult | VariationInsertError> {
   let varSku = baseSku
-  let lastError: { code: string; message: string } | null = null
+  let lastError: { code: string; message: string; details?: string | null; hint?: string | null } | null = null
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     // Cada tentativa re-consulta o banco para refletir escritas concorrentes
     varSku = await generateUniqueSkuVariation(baseSku, admin)
+
+    console.info('[sku-unique] tentando inserir variação', {
+      baseSku, varSku, attempt: attempt + 1, product_id: payload.product_id,
+    })
 
     const { data: pv, error } = (await admin
       .from('product_variations')
@@ -115,7 +122,7 @@ export async function insertVariationWithRetry(
       .select('id')
       .single()) as unknown as {
         data: { id: number } | null
-        error: { code: string; message: string } | null
+        error: { code: string; message: string; details?: string | null; hint?: string | null } | null
       }
 
     if (!error && pv) {
@@ -126,10 +133,16 @@ export async function insertVariationWithRetry(
 
     // Erro que não é conflito de unicidade → não adianta retentar
     if (error?.code !== '23505') {
+      console.error('[sku-unique] erro fatal ao inserir variação', {
+        baseSku, varSku, product_id: payload.product_id, error,
+      })
       return {
         ok:      false,
         message: error?.message ?? 'Erro desconhecido ao inserir variação.',
         fatal:   true,
+        code:    error?.code    ?? null,
+        details: error?.details ?? null,
+        hint:    error?.hint    ?? null,
       }
     }
 
@@ -140,10 +153,15 @@ export async function insertVariationWithRetry(
     )
   }
 
+  console.error('[sku-unique] esgotou tentativas', { baseSku, product_id: payload.product_id, lastError })
+
   return {
     ok:      false,
     message: `Não foi possível inserir variação após ${maxAttempts} tentativas ` +
              `(base: "${baseSku}"). Tente novamente.`,
     fatal:   false,
+    code:    lastError?.code    ?? null,
+    details: lastError?.details ?? null,
+    hint:    lastError?.hint    ?? null,
   }
 }
