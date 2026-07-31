@@ -28,7 +28,11 @@ const variantToAddSchema = z.object({
 // A unicidade obrigatória é product_variations.sku_variation, não products.sku.
 const putSchema = z.object({
   name: z.string().min(2).optional(),
-  sku: z.string().regex(/^\d{10}$/, 'SKU deve conter exatamente 10 dígitos numéricos').optional(),
+  // SKU é texto livre — aceita letras, números, hífen, zeros à esquerda e
+  // qualquer tamanho (mesma regra do cadastro manual em productSchema).
+  // Nunca converter para número em nenhum ponto deste fluxo: SKUs como
+  // "09", "722-G2" ou "ST-722-09" são válidos e não devem virar 9/722.
+  sku: z.string().min(2, 'SKU obrigatório').max(50).optional(),
   category_id: z.coerce.number().int().positive().optional(),
   supplier_id: z.coerce.number().int().positive().nullable().optional(),
   brand_id: z.coerce.number().int().positive().nullable().optional(),
