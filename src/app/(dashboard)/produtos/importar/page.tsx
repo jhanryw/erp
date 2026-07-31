@@ -236,9 +236,15 @@ export default function ImportarProdutosPage() {
         // 422 ou 500: erro inesperado
         const errorMsg  = json.error ?? 'Erro desconhecido'
         const extraList: string[] = json.validationErrors ?? []
-        const fullMsg   = extraList.length > 0
-          ? `${errorMsg}\n${extraList.join('\n')}`
-          : errorMsg
+        // TEMPORÁRIO (diagnóstico de "numeric field overflow") — mostra
+        // code/details/hint do Postgres na tela, não só no console do
+        // servidor. Remover junto com o resto da instrumentação.
+        const pgDebugLines = [
+          json.code    ? `code: ${json.code}`       : null,
+          json.details ? `details: ${json.details}` : null,
+          json.hint    ? `hint: ${json.hint}`        : null,
+        ].filter(Boolean)
+        const fullMsg   = [errorMsg, ...extraList, ...pgDebugLines].join('\n')
 
         setImportResult({ imported: 0, serverError: fullMsg })
         toast.error('Importação bloqueada pelo servidor', { description: errorMsg })

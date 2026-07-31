@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback, useId, useRef } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
@@ -92,10 +93,14 @@ function ProductSearchInput({
   products,
   value,
   onChange,
+  onFocusRevalidate,
 }: {
   products: ProductMeta[]
   value: number | null
   onChange: (id: number | null) => void
+  /** Chamado quando o campo de busca recebe foco — dá à página a chance de
+   * revalidar a lista de produtos (ex.: produto criado em outra aba). */
+  onFocusRevalidate?: () => void
 }) {
   const [query, setQuery] = useState('')
   const [open, setOpen]   = useState(false)
@@ -163,7 +168,7 @@ function ProductSearchInput({
             value={query}
             autoComplete="off"
             onChange={e => { setQuery(e.target.value); setOpen(true) }}
-            onFocus={() => setOpen(true)}
+            onFocus={() => { setOpen(true); onFocusRevalidate?.() }}
           />
         </div>
       )}
@@ -202,6 +207,7 @@ function ProductBlockCard({
   onUnitCostChange,
   onToggleCollapse,
   onRemove,
+  onSearchFocus,
 }: {
   block: ProductBlock
   products: ProductMeta[]
@@ -211,6 +217,7 @@ function ProductBlockCard({
   onUnitCostChange: (blockId: string, value: string) => void
   onToggleCollapse: (blockId: string) => void
   onRemove: (blockId: string) => void
+  onSearchFocus: () => void
 }) {
   const { colors, sizes, lookup } = useMemo(() => buildGrid(block.variations), [block.variations])
   const hasBoth = colors.length > 0 && sizes.length > 0
@@ -270,6 +277,7 @@ function ProductBlockCard({
               products={products}
               value={block.productId}
               onChange={(id) => onProductChange(block.blockId, id)}
+              onFocusRevalidate={onSearchFocus}
             />
             <Input
               label="Custo Unitário (R$) *"
@@ -438,6 +446,10 @@ function newBlockId() {
   return `block-${++_blockCounter}`
 }
 
+// Chave estável da query de produtos ativos — usada tanto pelo useQuery
+// quanto pela invalidação manual (foco do campo de busca).
+const PRODUCTS_QUERY_KEY = ['estoque-entrada-lote', 'produtos-ativos'] as const
+
 function createEmptyBlock(): ProductBlock {
   return {
     blockId: newBlockId(),
@@ -453,10 +465,32 @@ function createEmptyBlock(): ProductBlock {
 export default function EstoqueEntradaLotePage() {
   const router = useRouter()
   const supabase = createClient()
+  const queryClient = useQueryClient()
   const uid = useId()
 
   // ── Dados base ──────────────────────────────────────────────────────────────
-  const [products, setProducts]   = useState<ProductMeta[]>([])
+  // Produtos ativos vêm de React Query (não de estado carregado uma única vez
+  // no mount) — precisa ficar reativo a produtos criados em outra aba/fluxo
+  // enquanto esta página (com o formulário de lote já preenchido) permanece
+  // aberta. staleTime curto + refetchOnWindowFocus cobre "voltei de outra
+  // aba"; invalidação explícita no foco do campo de busca (ver
+  // handleSearchFocus) cobre "abri a busca de novo sem trocar de aba".
+  const { data: productsData } = useQuery({
+    queryKey: PRODUCTS_QUERY_KEY,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, sku')
+        .eq('active', true)
+        .order('name')
+      if (error) throw error
+      return (data ?? []) as ProductMeta[]
+    },
+    staleTime: 15_000,
+    refetchOnWindowFocus: true,
+  })
+  const products = productsData ?? []
+
   const [suppliers, setSuppliers] = useState<SupplierMeta[]>([])
   const [locations, setLocations] = useState<LocationMeta[]>([])
 
@@ -474,10 +508,10 @@ export default function EstoqueEntradaLotePage() {
 
   const [submitting, setSubmitting] = useState(false)
 
-  // ── Carga inicial ────────────────────────────────────────────────────────────
+  // ── Carga inicial (fornecedores e locais — não mudam com a frequência que
+  // produtos mudam, então continuam num fetch único no mount) ─────────────────
   useEffect(() => {
     Promise.all([
-      supabase.from('products').select('id, name, sku').eq('active', true).order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
       (supabase as any)
         .from('stock_locations')
@@ -485,13 +519,19 @@ export default function EstoqueEntradaLotePage() {
         .eq('active', true)
         .order('is_main_store', { ascending: false })
         .order('priority', { ascending: true }),
-    ]).then(([prods, supps, locs]) => {
-      setProducts(prods.data ?? [])
+    ]).then(([supps, locs]) => {
       setSuppliers(supps.data ?? [])
       setLocations((locs.data ?? []) as LocationMeta[])
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Foco no campo de busca de produto → revalida a lista na hora, sem
+  // depender do refetchOnWindowFocus (cobre reabrir a busca sem trocar de
+  // aba). invalidateQueries força o refetch mesmo dentro do staleTime.
+  const handleSearchFocus = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY })
+  }, [queryClient])
 
   // ── Handlers ─────────────────────────────────────────────────────────────────
 
@@ -823,6 +863,7 @@ export default function EstoqueEntradaLotePage() {
           onUnitCostChange={handleUnitCostChange}
           onToggleCollapse={handleToggleCollapse}
           onRemove={handleRemove}
+          onSearchFocus={handleSearchFocus}
         />
       ))}
 

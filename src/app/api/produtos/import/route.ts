@@ -309,6 +309,25 @@ export async function POST(request: Request) {
       : null,
   })
 
+  // TEMPORÁRIO (diagnóstico de "numeric field overflow") — valores
+  // numéricos reais enviados à RPC para o primeiro produto/variante do
+  // lote. Nomes de campo iguais aos do payload (ver payloadProducts.push
+  // acima) — nunca loga o payload inteiro nem dados de outros produtos.
+  const firstProductLog  = payloadProducts[0] as Record<string, unknown> | undefined
+  const firstVariantLog  = (firstProductLog?.variants as Record<string, unknown>[] | undefined)?.[0]
+  console.info('[IMPORT] valores numericos', {
+    produto: firstProductLog
+      ? { base_cost: firstProductLog.base_cost, base_price: firstProductLog.base_price }
+      : null,
+    primeiraVariacao: firstVariantLog
+      ? {
+          cost_override:  firstVariantLog.cost_override,
+          price_override: firstVariantLog.price_override,
+          initial_stock:  firstVariantLog.initial_stock,
+        }
+      : null,
+  })
+
   console.info('[IMPORT] chamando RPC', { idempotencyKey: idempotencyKey ?? null })
 
   const { data: rpcResult, error: rpcError } = await (admin as any).rpc('rpc_import_products_batch', {
@@ -318,7 +337,7 @@ export async function POST(request: Request) {
     p_idempotency_key: idempotencyKey ?? null,
   }) as unknown as {
     data: { imported: number; products: unknown[] } | null
-    error: { code: string; message: string } | null
+    error: { code: string; message: string; details?: string | null; hint?: string | null } | null
   }
 
   if (rpcError) {
@@ -327,6 +346,14 @@ export async function POST(request: Request) {
     // deste lote foi salvo, sem depender de DELETE compensatório.
     return NextResponse.json({
       error: `${rpcError.message} Importação cancelada. Nenhum produto foi salvo porque a transação foi revertida pelo banco.`,
+      // TEMPORÁRIO (diagnóstico de "numeric field overflow") — expõe
+      // code/details/hint do erro Postgres pro frontend. Nenhum destes
+      // campos carrega segredo (não é payload, não é credencial) — só
+      // detalhe técnico do erro (ex.: precisão/escala da coluna que
+      // estourou). Remover depois do diagnóstico.
+      code:    rpcError.code ?? null,
+      details: rpcError.details ?? null,
+      hint:    rpcError.hint ?? null,
       imported: 0,
     }, { status: rpcError.code === 'P0001' ? 400 : 500 })
   }
