@@ -65,7 +65,9 @@ function buildGrid(variations: Variation[]) {
   for (const v of variations) {
     let colorId = 0
     let sizeId = 0
-    for (const attr of v.product_variation_attributes) {
+    // product_variation_attributes vem null/undefined (não []) quando a
+    // variação não tem nenhum atributo (ex.: criada sem cor nem tamanho).
+    for (const attr of v.product_variation_attributes ?? []) {
       if (attr.variation_types?.slug === 'cor') {
         colorId = attr.variation_value_id
         colorMap.set(attr.variation_value_id, attr.variation_values.value)
@@ -405,7 +407,7 @@ function ProductBlockCard({
                   </div>
                   {block.variations.map((v) => {
                     const label =
-                      v.product_variation_attributes
+                      (v.product_variation_attributes ?? [])
                         .map((a) => a.variation_values?.value)
                         .filter(Boolean)
                         .join(' / ') || v.sku_variation

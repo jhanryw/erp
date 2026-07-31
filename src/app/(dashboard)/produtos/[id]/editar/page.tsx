@@ -54,7 +54,11 @@ type CategoryAttributeLink = { required: boolean; active: boolean; variation_typ
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function attrLabel(v: VariationRow): string {
-  return v.product_variation_attributes
+  // product_variation_attributes vem null/undefined (não []) quando a
+  // variação não tem nenhum atributo (ex.: criada sem cor nem tamanho) —
+  // mesmo padrão já tratado em outros 8+ pontos do projeto que consomem
+  // este embed do Supabase.
+  return (v.product_variation_attributes ?? [])
     .map((a) => a.variation_values?.value)
     .filter(Boolean)
     .join(' / ') || '—'
@@ -238,16 +242,41 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     if (toDelete.length > 0) payload.variations_to_delete = toDelete
     if (toAdd.length > 0)    payload.variations_to_add    = toAdd.map(({ key: _key, ...v }) => v)
 
-    const res = await fetch(`/api/produtos/${params.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-
-    const json = await res.json()
+    let res: Response
+    let json: any
+    try {
+      res = await fetch(`/api/produtos/${params.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      json = await res.json()
+    } catch (e) {
+      console.error('[produtos/editar] falha ao salvar', {
+        produtoId:  params.id,
+        operacao:   'update',
+        variacoes:  { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
+        mensagem:   e instanceof Error ? e.message : String(e),
+      })
+      toast.error('Não foi possível salvar as alterações do produto.', {
+        description: 'Falha de rede ou resposta inesperada do servidor.',
+      })
+      return
+    }
 
     if (!res.ok) {
-      toast.error('Erro ao atualizar produto', { description: json.error })
+      console.error('[produtos/editar] erro ao salvar', {
+        produtoId: params.id,
+        operacao:  'update',
+        variacoes: { toDelete, toAdd: toAdd.map(v => v.sku_variation) },
+        mensagem:  json?.error,
+        code:      json?.code    ?? null,
+        details:   json?.details ?? null,
+        hint:      json?.hint    ?? null,
+      })
+      toast.error('Não foi possível salvar as alterações do produto.', {
+        description: typeof json?.error === 'string' ? json.error : 'Erro desconhecido.',
+      })
       return
     }
 

@@ -199,13 +199,20 @@ export async function PUT(
       unidade_med: productFields.unidade_med,
       ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
-    .eq('id', productId) as { error: { code: string; message: string } | null }
+    .eq('id', productId) as {
+      error: { code: string; message: string; details?: string | null; hint?: string | null } | null
+    }
 
   if (updateError) {
     const msg =
       updateError.code === '23503' ? 'Categoria ou fornecedor inválido.' :
       updateError.message
-    return NextResponse.json({ error: msg }, { status: 500 })
+    return NextResponse.json({
+      error:   msg,
+      code:    updateError.code    ?? null,
+      details: updateError.details ?? null,
+      hint:    updateError.hint    ?? null,
+    }, { status: 500 })
   }
 
   // ── 2. Remover variações ────────────────────────────────────────────────────

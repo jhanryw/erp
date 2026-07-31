@@ -232,7 +232,11 @@ export default async function ProdutoDetalhePage({
 
               <TableBody>
                 {variations.map((v) => {
-                  const attrs = v.product_variation_attributes
+                  // product_variation_attributes vem null/undefined (não [])
+                  // quando a variação não tem nenhum atributo (ex.: criada
+                  // sem cor nem tamanho) — mesmo padrão já tratado em outros
+                  // 8+ pontos do projeto que consomem este embed.
+                  const attrs = (v.product_variation_attributes ?? [])
                     .map((a) => a.variation_values?.value)
                     .filter(Boolean)
                     .join(' / ')
