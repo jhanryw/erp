@@ -345,12 +345,13 @@ export async function POST(request: Request) {
     // A transação foi revertida pelo próprio Postgres — nenhum produto
     // deste lote foi salvo, sem depender de DELETE compensatório.
     return NextResponse.json({
+      // rpcError.message já vem com contexto de qual produto do lote
+      // falhou (ver rpc_import_products_batch, migration 202607302700) —
+      // "Falha ao importar produto "X" (client_index=N): <erro original>".
       error: `${rpcError.message} Importação cancelada. Nenhum produto foi salvo porque a transação foi revertida pelo banco.`,
-      // TEMPORÁRIO (diagnóstico de "numeric field overflow") — expõe
-      // code/details/hint do erro Postgres pro frontend. Nenhum destes
-      // campos carrega segredo (não é payload, não é credencial) — só
-      // detalhe técnico do erro (ex.: precisão/escala da coluna que
-      // estourou). Remover depois do diagnóstico.
+      // code/details/hint do Postgres original (nunca escondidos) — não
+      // carregam segredo, só detalhe técnico do erro (ex.: precisão/escala
+      // da coluna que estourou).
       code:    rpcError.code ?? null,
       details: rpcError.details ?? null,
       hint:    rpcError.hint ?? null,
