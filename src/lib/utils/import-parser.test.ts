@@ -37,50 +37,78 @@ function row(over: Partial<ImportRow>): ImportRow {
   }
 }
 
-describe('parseImportRows — detecção de conflito de SKU-pai no CSV', () => {
-  it('detecta dois produtos com nomes diferentes mas mesmo Tipo+Modelo+Ano (mesmo SKU-pai)', () => {
+describe('parseImportRows — múltiplos produtos com o mesmo sku_base (ledger product_sku_identities)', () => {
+  it('aceita produtos diferentes com o mesmo Tipo+Modelo+Ano sem reportar conflito de SKU', () => {
+    // Desde o ledger product_sku_identities, vários produtos comerciais
+    // podem legitimamente compartilhar o mesmo sku_base — cada um recebe
+    // um discriminator diferente, resolvido pela RPC. A prévia não deve
+    // mais bloquear isso.
     const rows: ImportRow[] = [
       row({ nome_produto: 'Calcinha Fio Dourado', cor: 'Dourado' }),
       row({ nome_produto: 'Calcinha Fio Prateado', cor: 'Prateado' }),
     ]
 
-    const { issues, hasErrors } = parseImportRows(rows, baseDbData)
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
 
-    expect(hasErrors).toBe(true)
-    const conflict = issues.find(i => i.message.includes('Conflito de SKU'))
-    expect(conflict).toBeDefined()
-    expect(conflict!.type).toBe('error')
-    expect(conflict!.message).toContain('Calcinha Fio Dourado')
-    expect(conflict!.message).toContain('Calcinha Fio Prateado')
-    expect(conflict!.message).toContain('Tipo: calcinha')
-    expect(conflict!.message).toContain('Modelo: fio_dental')
-    expect(conflict!.message).toContain('Ano: 2026')
-    expect(conflict!.message).toContain('Cor: Dourado')
-    expect(conflict!.message).toContain('Cor: Prateado')
-    expect(conflict!.message).toMatch(/linha 2/)
-    expect(conflict!.message).toMatch(/linha 3/)
+    expect(issues.some(i => i.message.includes('Conflito de SKU'))).toBe(false)
+    expect(hasErrors).toBe(false)
+    expect(parsedProducts).toHaveLength(2)
+    expect(parsedProducts.map(p => p.name).sort()).toEqual(['Calcinha Fio Dourado', 'Calcinha Fio Prateado'])
+    expect(parsedProducts.every(p => p.tipo === 'calcinha' && p.modelo === 'fio_dental' && p.ano === '2026')).toBe(true)
   })
 
-  it('NÃO reporta conflito para variantes (cor/tamanho) do MESMO produto', () => {
+  it('aceita 3+ produtos diferentes compartilhando o mesmo Tipo+Modelo+Ano (base histórica com vários produtos)', () => {
+    const rows: ImportRow[] = [
+      row({ nome_produto: 'Calcinha Fio A', cor: 'Dourado' }),
+      row({ nome_produto: 'Calcinha Fio B', cor: 'Prateado' }),
+      row({ nome_produto: 'Calcinha Fio C', cor: 'Dourado', tamanho: 'M' }),
+    ]
+
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
+
+    expect(issues.some(i => i.message.includes('Conflito de SKU'))).toBe(false)
+    expect(hasErrors).toBe(false)
+    expect(parsedProducts).toHaveLength(3)
+  })
+
+  it('continua agrupando variantes (cor/tamanho) do MESMO produto numa única entrada', () => {
     const rows: ImportRow[] = [
       row({ nome_produto: 'Calcinha Fio Dourado', cor: 'Dourado', tamanho: 'P' }),
       row({ nome_produto: 'Calcinha Fio Dourado', cor: 'Dourado', tamanho: 'M' }),
     ]
 
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues).toHaveLength(0)
+    expect(parsedProducts).toHaveLength(1)
+    expect(parsedProducts[0].variants).toHaveLength(2)
+  })
+
+  it('continua rejeitando cor+tamanho duplicados dentro do MESMO produto', () => {
+    const rows: ImportRow[] = [
+      row({ nome_produto: 'Calcinha Fio Dourado', cor: 'Dourado', tamanho: 'P' }),
+      row({ nome_produto: 'Calcinha Fio Dourado', cor: 'Dourado', tamanho: 'P' }),
+    ]
+
     const { issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(true)
+    expect(issues.some(i => i.message.includes('cor+tamanho duplicados'))).toBe(true)
+  })
+
+  it('produtos com Modelo diferente continuam sendo tratados como produtos distintos', () => {
+    const rows: ImportRow[] = [
+      row({ nome_produto: 'Calcinha Fio Dourado', modelo: 'fio_dental' }),
+      row({ nome_produto: 'Calcinha Renda Preta', modelo: 'renda', cor: 'Prateado' }),
+    ]
+
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
 
     expect(issues.some(i => i.message.includes('Conflito de SKU'))).toBe(false)
     expect(hasErrors).toBe(false)
-  })
-
-  it('não conflita produtos com Modelo diferente (SKU-pai diferente)', () => {
-    const rows: ImportRow[] = [
-      row({ nome_produto: 'Calcinha Fio Dourado', modelo: 'fio_dental' }),
-      row({ nome_produto: 'Calcinha Renda Preta', modelo: 'renda' }),
-    ]
-
-    const { issues } = parseImportRows(rows, baseDbData)
-
-    expect(issues.some(i => i.message.includes('Conflito de SKU'))).toBe(false)
+    expect(parsedProducts).toHaveLength(2)
+    expect(parsedProducts.find(p => p.name === 'Calcinha Fio Dourado')?.modelo).toBe('fio_dental')
+    expect(parsedProducts.find(p => p.name === 'Calcinha Renda Preta')?.modelo).toBe('renda')
   })
 })

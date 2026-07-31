@@ -45,13 +45,25 @@ const importRequestSchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
-  if (unauth) return unauth
+  console.info('[IMPORT] request chegou')
 
-  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+  const { user, response: unauth } = await requireRole('gerente')
+  if (unauth) {
+    console.warn('[IMPORT] bloqueado', 'auth: requireRole(gerente) negou acesso')
+    return unauth
+  }
+
+  if (!user.company_id) {
+    console.warn('[IMPORT] bloqueado', 'usuario sem company_id')
+    return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
+  }
 
   let body: unknown
-  try { body = await request.json() } catch {
+  try {
+    body = await request.json()
+  } catch (e) {
+    console.warn('[IMPORT] bloqueado', 'JSON invalido no corpo da requisicao')
+    console.error('[IMPORT] erro ao parsear body', e)
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
   }
 
@@ -59,15 +71,19 @@ export async function POST(request: Request) {
   const normalizedBody = Array.isArray(body) ? { products: body } : body
   const parsedBody = importRequestSchema.safeParse(normalizedBody)
   if (!parsedBody.success) {
+    console.warn('[IMPORT] bloqueado', 'validacao zod falhou', parsedBody.error.flatten())
     return NextResponse.json({ error: 'Dados inválidos.', details: parsedBody.error.flatten() }, { status: 422 })
   }
   const { products: items, idempotency_key: idempotencyKey } = parsedBody.data
 
   if (items.length === 0) {
+    console.warn('[IMPORT] bloqueado', 'nenhum produto no payload (items.length === 0)')
     return NextResponse.json({ error: 'Nenhum produto para importar.' }, { status: 400 })
   }
 
   const admin = createAdminClient()
+
+  console.info('[IMPORT] preflight iniciou', { idempotencyKey: idempotencyKey ?? null, quantidade: items.length })
 
   // ─── Fase 1: resolução e pré-validação — nenhuma escrita no banco ────────────
   const preflight: string[] = []
@@ -123,6 +139,8 @@ export async function POST(request: Request) {
   }
 
   if (fetchError) {
+    console.warn('[IMPORT] bloqueado', 'erro ao buscar produtos existentes no ERP')
+    console.error('[IMPORT] erro fetch existingProducts', fetchError)
     return NextResponse.json({ error: 'Erro ao verificar produtos existentes no ERP.' }, { status: 500 })
   }
 
@@ -142,6 +160,7 @@ export async function POST(request: Request) {
   })
 
   if (preflight.length > 0) {
+    console.warn('[IMPORT] bloqueado', 'preflight com erros', { quantidade: preflight.length, primeiros: preflight.slice(0, 3) })
     return NextResponse.json({
       error: 'O CSV contém erros que impedem a importação. Nenhum produto foi salvo.',
       validationErrors: preflight,
@@ -283,6 +302,15 @@ export async function POST(request: Request) {
     })
   }
 
+  console.info('[IMPORT] payload pronto', {
+    quantidade: payloadProducts.length,
+    primeiroProduto: payloadProducts[0]
+      ? { nome: payloadProducts[0].name, sku_base: payloadProducts[0].sku_base }
+      : null,
+  })
+
+  console.info('[IMPORT] chamando RPC', { idempotencyKey: idempotencyKey ?? null })
+
   const { data: rpcResult, error: rpcError } = await (admin as any).rpc('rpc_import_products_batch', {
     p_company_id:      user.company_id,
     p_system_user_id:  user.id,
@@ -294,6 +322,7 @@ export async function POST(request: Request) {
   }
 
   if (rpcError) {
+    console.error('[IMPORT] erro RPC', rpcError)
     // A transação foi revertida pelo próprio Postgres — nenhum produto
     // deste lote foi salvo, sem depender de DELETE compensatório.
     return NextResponse.json({
@@ -302,7 +331,13 @@ export async function POST(request: Request) {
     }, { status: rpcError.code === 'P0001' ? 400 : 500 })
   }
 
+  console.info('[IMPORT] RPC retornou', {
+    imported:           rpcResult?.imported,
+    produtosRetornados: Array.isArray(rpcResult?.products) ? rpcResult!.products.length : null,
+  })
+
   const imported = rpcResult?.imported ?? 0
+  const products = rpcResult?.products ?? []
 
   auditLog({
     userId:   user.id,
@@ -315,5 +350,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     message:  `${imported} produto${imported !== 1 ? 's' : ''} importado${imported !== 1 ? 's' : ''} com sucesso.`,
     imported,
+    products,
   }, { status: 201 })
 }

@@ -1,6 +1,4 @@
 import { resolveTipoModelo, type ProductTypeCandidate, type ModeloGovernance } from '@/lib/sku/resolve-taxonomy'
-import { buildDynamicSkuBase } from '@/lib/sku/sku-modelo-dynamic'
-import { generateParentSKU } from '@/lib/sku/sku-map'
 
 export type ImportRow = {
   nome_produto?: string
@@ -69,15 +67,6 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
   const newIssues: ErrorWarning[] = []
   const productMap = new Map<string, ParsedProduct>()
 
-  // Diagnóstico de conflito de SKU-pai dentro do próprio CSV — não gera SKU
-  // nenhum aqui (reaproveita generateParentSKU/buildDynamicSkuBase como já
-  // usados no cadastro manual e na importação definitiva, nenhuma lógica
-  // nova). O SKU-pai é TT+MM+'00'+'00'+AA — Cor/Tamanho nunca entram nesse
-  // cálculo — então dois produtos com nomes diferentes mas mesmo
-  // Tipo+Modelo+Ano geram o mesmo SKU-pai e a RPC rejeita o lote inteiro.
-  // Detectado aqui, na prévia, antes de chegar no servidor.
-  const skuConflictTracking = new Map<string, { mapKey: string; rowNum: number; corStr: string; tamanhoStr: string }[]>()
-
   // Build a set of existing ERP product keys for fast lookup
   const existingKeys = new Set(
     dbData.existingProducts.map(p =>
@@ -123,24 +112,6 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
       return
     }
     const { tipo: resolvedTipo, modelo: resolvedModelo } = tipoModeloResolution.result
-
-    // Calcula o SKU-pai prospectivo (mesmas funções usadas no cadastro
-    // manual e na importação definitiva — nenhuma lógica de geração nova)
-    // só para agrupar e detectar conflito entre produtos diferentes do
-    // próprio CSV. Ano inválido é reportado em outro lugar — aqui só
-    // deixa essa linha fora da checagem de conflito.
-    try {
-      const r = tipoModeloResolution.result
-      const prospectiveSku = r.productTypeId
-        ? buildDynamicSkuBase({ tipoSkuCode: r.tipoSkuCode!, modeloSkuCode: r.modeloSkuCode, ano })
-        : generateParentSKU(r.tipo, r.modelo, ano)
-      const rows = skuConflictTracking.get(prospectiveSku) ?? []
-      rows.push({ mapKey: nome_produto.trim().toLowerCase(), rowNum, corStr, tamanhoStr })
-      skuConflictTracking.set(prospectiveSku, rows)
-    } catch {
-      // Ano fora do mapa oficial ou outro erro de geração — já reportado
-      // via validação própria; não participa da checagem de conflito.
-    }
 
     if (isNaN(pPreco) || pPreco <= 0) newIssues.push({ row: rowNum, message: 'Preço inválido ou vazio', type: 'error' })
     if (isNaN(pCusto) || pCusto < 0)  newIssues.push({ row: rowNum, message: 'Custo inválido', type: 'error' })
@@ -240,37 +211,12 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     }
   })
 
-  // Reporta cada grupo de SKU-pai conflitante (2+ produtos DIFERENTES do
-  // CSV gerando o mesmo SKU-pai) — mesmo produto com várias variantes
-  // (cores/tamanhos) sempre bate no mesmo SKU-pai de propósito, isso não é
-  // conflito.
-  for (const [sku, rows] of skuConflictTracking) {
-    const distinctMapKeys = new Set(rows.map(r => r.mapKey))
-    if (distinctMapKeys.size <= 1) continue
-
-    const byProduct = new Map<string, { rowNum: number; corStr: string; tamanhoStr: string }[]>()
-    for (const r of rows) {
-      const list = byProduct.get(r.mapKey) ?? []
-      list.push({ rowNum: r.rowNum, corStr: r.corStr, tamanhoStr: r.tamanhoStr })
-      byProduct.set(r.mapKey, list)
-    }
-
-    const details = Array.from(byProduct.entries()).map(([mapKey, variantRows]) => {
-      const product = productMap.get(mapKey)!
-      const rowsDesc = variantRows
-        .map(v => `linha ${v.rowNum} (Cor: ${v.corStr || '—'}, Tamanho: ${v.tamanhoStr || '—'})`)
-        .join(', ')
-      return `"${product.name}" [Tipo: ${product.tipo}, Modelo: ${product.modelo}, Ano: ${product.ano}] — ${rowsDesc}`
-    }).join(' | ')
-
-    const firstRow = Math.min(...rows.map(r => r.rowNum))
-
-    newIssues.push({
-      row: firstRow,
-      message: `Conflito de SKU: o SKU-pai '${sku}' seria gerado por ${distinctMapKeys.size} produtos diferentes no CSV — ${details}. Produtos com o mesmo Tipo+Modelo+Ano geram o mesmo SKU-pai (Cor/Tamanho não entram nesse cálculo; renomear o produto não resolve, pois o nome não participa do SKU-pai) — ajuste Tipo, Modelo ou Ano antes de importar.`,
-      type: 'error',
-    })
-  }
+  // Conflito de SKU-pai entre produtos diferentes do CSV NÃO é mais
+  // validado aqui: desde a introdução do ledger product_sku_identities,
+  // vários produtos podem legitimamente compartilhar o mesmo sku_base —
+  // cada um recebe um discriminator diferente, resolvido pela RPC
+  // (rpc_import_products_batch → _resolve_product_sku_identity). Bloquear
+  // isso na prévia seria rejeitar um caso agora válido.
 
   const hasErrors = newIssues.some(i => i.type === 'error')
 

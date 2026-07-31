@@ -181,10 +181,13 @@ export default function ImportarProdutosPage() {
   async function handleImport() {
     if (hasErrors || parsedProducts.length === 0) return
 
+    console.info('[IMPORT] botao clicado', { quantidade: parsedProducts.length, idempotencyKey })
+
     setImporting(true)
     setImportResult(null)
 
     try {
+      console.info('[IMPORT] enviando fetch')
       const res  = await fetch('/api/produtos/import', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -192,11 +195,42 @@ export default function ImportarProdutosPage() {
       })
       const json = await res.json()
 
-      if (res.ok) {
-        setImportResult({ imported: json.imported ?? parsedProducts.length })
-        toast.success(`${json.imported} produto${json.imported !== 1 ? 's' : ''} importado${json.imported !== 1 ? 's' : ''} com sucesso!`)
+      console.info('[IMPORT] resposta recebida', {
+        status:             res.status,
+        ok:                 res.ok,
+        imported:           json.imported,
+        produtosRetornados: Array.isArray(json.products) ? json.products.length : null,
+      })
+
+      // Nunca tratar como sucesso só por causa de res.ok — a RPC pode
+      // devolver 2xx num replay idempotente ou com imported=0/inconsistente.
+      // Só é sucesso real se imported for um número positivo E vier
+      // acompanhado da lista de produtos criados, com a MESMA contagem.
+      const importedCount    = json.imported
+      const returnedProducts = json.products
+      const isConfirmedSuccess =
+        res.ok &&
+        typeof importedCount === 'number' &&
+        importedCount > 0 &&
+        Array.isArray(returnedProducts) &&
+        returnedProducts.length === importedCount
+
+      if (isConfirmedSuccess) {
+        setImportResult({ imported: importedCount })
+        toast.success(`${importedCount} produto${importedCount !== 1 ? 's' : ''} importado${importedCount !== 1 ? 's' : ''} com sucesso!`)
         router.push('/produtos')
         router.refresh()
+      } else if (res.ok) {
+        // Resposta 2xx porém sem confirmação válida de persistência —
+        // nunca mostrar como sucesso.
+        console.warn('[IMPORT] resposta ok porem sem confirmacao valida', {
+          imported: importedCount,
+          produtosRetornados: returnedProducts,
+        })
+        const errorMsg = json.error
+          ?? `O servidor respondeu sem confirmar a importação (imported=${JSON.stringify(importedCount)}).`
+        setImportResult({ imported: 0, serverError: errorMsg })
+        toast.error('Importação não confirmada pelo servidor', { description: errorMsg })
       } else {
         // 400: validação backend falhou (produto criado depois da validação frontend, por ex.)
         // 422 ou 500: erro inesperado
@@ -209,7 +243,8 @@ export default function ImportarProdutosPage() {
         setImportResult({ imported: 0, serverError: fullMsg })
         toast.error('Importação bloqueada pelo servidor', { description: errorMsg })
       }
-    } catch {
+    } catch (e) {
+      console.error('[IMPORT] excecao no fetch', e)
       setImportResult({ imported: 0, serverError: 'Falha de rede ao enviar os dados.' })
       toast.error('Falha inesperada ao importar')
     } finally {
