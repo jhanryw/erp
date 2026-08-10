@@ -6,19 +6,24 @@
  * estoque, fornecedores, financeiro ou sugestão de compras (V1
  * deliberadamente isolada dessas integrações).
  *
- * Objetivo: comparar comprar à vista, a prazo ou de forma mista,
- * considerando não só o custo nominal, mas a liquidez preservada, a
- * geração operacional projetada e a capacidade de assumir nova parcela
- * dentro de uma política de risco (folga mínima) definida pelo usuário.
+ * PRINCÍPIO ECONÔMICO (revisado): a calculadora não assume mais que
+ * "se cabe à vista, deve pagar à vista". A decisão pondera custo do
+ * crédito, valor da liquidez preservada, retorno potencial conservador
+ * do uso alternativo desse caixa, giro, capacidade de serviço da dívida
+ * e reserva mínima — nessa ordem de prioridade, com a capacidade
+ * financeira sempre como trava obrigatória (retorno econômico nunca
+ * fabrica capacidade).
  *
  * Toda a matemática mora aqui — nenhuma fórmula deve ser recalculada no
  * componente visual.
  */
 
-import { formatCurrency } from '@/lib/utils/currency'
+import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { COMFORTABLE_COVERAGE_MULTIPLIER } from '@/lib/constants/purchaseCalculator'
 
 // ─── Tipos de entrada ───────────────────────────────────────────────────────────
+
+export type PreservedCashUse = 'RESERVE' | 'REINVEST_IN_INVENTORY'
 
 export interface PurchaseCalculatorInputs {
   // A. Compra
@@ -50,21 +55,37 @@ export interface PurchaseCalculatorInputs {
 
   // D. Política de risco
   minimumCoverageRatio: number
+
+  // E. Destino do caixa preservado (só relevante quando FINANCED/MIXED
+  // preservam caixa frente a CASH). Os 4 campos "alternative*" só são
+  // validados/usados quando preservedCashUse = REINVEST_IN_INVENTORY —
+  // sob RESERVE, nenhum retorno é inventado (ver seção 7 do pedido).
+  preservedCashUse: PreservedCashUse
+  alternativeInventoryMarkup: number
+  alternativeInventoryTurnoverDays: number
+  reinvestmentPct: number
+  alternativeReturnRealizationPct: number
 }
 
 export type ValidationErrors = Partial<Record<keyof PurchaseCalculatorInputs, string>>
 
-// ─── Validação (seção 14) ───────────────────────────────────────────────────────
+// ─── Validação (seção 14 do pedido original + seção 8 desta correção) ──────────
 
 function isValidNonNegative(n: number): boolean {
   return Number.isFinite(n) && n >= 0
+}
+
+function isValidPercentRange(n: number): boolean {
+  return Number.isFinite(n) && n >= 0 && n <= 100
 }
 
 /**
  * Campos monetários e de caixa podem ser zero (compra sem histórico de
  * vendas, caixa zerado, sem parcelas existentes etc.) — só bloqueia
  * valores não numéricos ou negativos, e as regras específicas de
- * markup/parcelas/prazo/folga descritas na seção 14 do pedido.
+ * markup/parcelas/prazo/folga. Os campos de reinvestimento só são
+ * exigidos quando preservedCashUse = REINVEST_IN_INVENTORY — sob RESERVE
+ * eles não são usados, então não bloqueiam o cálculo mesmo vazios/zerados.
  */
 export function validatePurchaseCalculatorInputs(
   inputs: PurchaseCalculatorInputs,
@@ -111,6 +132,21 @@ export function validatePurchaseCalculatorInputs(
     errors.minimumCoverageRatio = 'Folga mínima deve ser maior que zero.'
   }
 
+  if (inputs.preservedCashUse === 'REINVEST_IN_INVENTORY') {
+    if (!Number.isFinite(inputs.alternativeInventoryMarkup) || inputs.alternativeInventoryMarkup <= 0) {
+      errors.alternativeInventoryMarkup = 'Markup da compra adicional deve ser maior que zero.'
+    }
+    if (!Number.isFinite(inputs.alternativeInventoryTurnoverDays) || inputs.alternativeInventoryTurnoverDays <= 0) {
+      errors.alternativeInventoryTurnoverDays = 'Prazo de giro da compra adicional deve ser maior que zero.'
+    }
+    if (!isValidPercentRange(inputs.reinvestmentPct)) {
+      errors.reinvestmentPct = 'Percentual de reinvestimento deve estar entre 0 e 100.'
+    }
+    if (!isValidPercentRange(inputs.alternativeReturnRealizationPct)) {
+      errors.alternativeReturnRealizationPct = 'Percentual de realização conservadora deve estar entre 0 e 100.'
+    }
+  }
+
   return errors
 }
 
@@ -130,6 +166,89 @@ function meetsCoverage(ratio: number | null, minimum: number): boolean {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000
+}
+
+// ─── Seção 5 — taxa efetiva implícita do parcelamento ──────────────────────────
+
+/**
+ * Fator de valor presente de uma anuidade de `periods` parcelas iguais,
+ * a uma taxa mensal `rate` (primeira parcela em t=1, demais a cada 30
+ * dias — premissa explícita desta V1).
+ */
+function annuityPresentValueFactor(rate: number, periods: number): number {
+  if (rate === 0) return periods
+  return (1 - Math.pow(1 + rate, -periods)) / rate
+}
+
+/** installment * fatorAnuidade(rate, periods) - presentValue — raiz em rate é a taxa implícita. */
+function annuityNetPresentValueDiff(
+  rate: number,
+  presentValue: number,
+  installment: number,
+  periods: number,
+): number {
+  return installment * annuityPresentValueFactor(rate, periods) - presentValue
+}
+
+/**
+ * Resolve por bisseção a taxa mensal `r` tal que:
+ *   presentValue = Σ installment / (1+r)^t,  t = 1..periods
+ *
+ * A função é estritamente decrescente em r (para r > -1): quanto maior a
+ * taxa, menor o valor presente do fluxo de parcelas. Isso garante no
+ * máximo uma raiz, e ela sempre existe em (-1, +∞) quando presentValue e
+ * installment são ambos positivos — a busca expande o limite superior
+ * exponencialmente até capturar a raiz, depois bissecta.
+ *
+ * Retorna null (nunca NaN/Infinity) quando a taxa não tem sentido
+ * (presentValue <= 0, installment <= 0 sem presentValue correspondente,
+ * ou falha de convergência).
+ */
+export function solveImplicitMonthlyRate(
+  presentValue: number,
+  installment: number,
+  periods: number,
+): number | null {
+  if (!Number.isFinite(presentValue) || !Number.isFinite(installment) || !Number.isInteger(periods) || periods < 1) {
+    return null
+  }
+  if (presentValue <= 0) return null // nada preservado — taxa implícita não tem sentido
+  if (installment <= 0) return null // sem desembolso parcelado — taxa não tem sentido
+
+  const f = (r: number) => annuityNetPresentValueDiff(r, presentValue, installment, periods)
+
+  let lo = -0.99
+  let hi = 1
+  let guard = 0
+  while (f(hi) > 0 && guard < 60) {
+    hi *= 2
+    guard++
+  }
+
+  // Sem troca de sinal no intervalo => não há convergência segura (não deveria
+  // acontecer com entradas válidas, mas é uma saída segura em vez de NaN).
+  if (f(lo) < 0 || f(hi) > 0) return null
+
+  let rate = (lo + hi) / 2
+  for (let i = 0; i < 100; i++) {
+    rate = (lo + hi) / 2
+    const value = f(rate)
+    if (Math.abs(value) < 1e-9 || hi - lo < 1e-12) break
+    if (value > 0) lo = rate
+    else hi = rate
+  }
+
+  return Number.isFinite(rate) ? round4(rate) : null
+}
+
+function implicitAnnualEffectiveRate(monthlyRate: number | null): number | null {
+  if (monthlyRate === null) return null
+  const annual = Math.pow(1 + monthlyRate, 12) - 1
+  return Number.isFinite(annual) ? round4(annual) : null
 }
 
 // ─── Tipos de saída ─────────────────────────────────────────────────────────────
@@ -160,6 +279,9 @@ export interface MixedScenario {
   meetsCoveragePolicy: boolean
   /** addsValue && fitsCapacity && meetsCoveragePolicy && reservePreserved */
   viable: boolean
+
+  /** financedCost (puro) - mixed.totalCost — sempre >= 0. Economia financeira de contribuir com safeCashContribution em vez de financiar tudo. */
+  financialSavings: number
 }
 
 export interface PurchaseDecision {
@@ -181,6 +303,11 @@ export interface ComparisonColumn {
   reservePreserved: boolean
   additionalFinancialCost: number
   isRecommended: boolean
+
+  // Seção 17 — só populados para 'financed' (e 'mixed', proporcionalmente); null para 'cash'.
+  implicitMonthlyRate: number | null
+  conservativeAlternativeReturn: number | null
+  netLiquidityBenefit: number | null
 }
 
 export interface PurchaseCalculatorResult {
@@ -191,6 +318,7 @@ export interface PurchaseCalculatorResult {
   financedCost: number
   monthlyInstallment: number
   liquidityCost: number
+  /** = liquidityCost / cashCost. É o "effectiveLiquidityPremiumPct" pedido — mesmo indicador, sem duplicar campo. */
   liquidityCostPct: number | null
 
   // 4.4 / 4.5 / 4.6
@@ -226,10 +354,25 @@ export interface PurchaseCalculatorResult {
   // 9
   mixed: MixedScenario
 
-  // 10 / 11
+  // Taxa implícita do parcelamento puro (seção 5 desta correção)
+  implicitMonthlyRate: number | null
+  implicitAnnualEffectiveRate: number | null
+
+  // Retorno do caixa preservado (seções 9-13 desta correção)
+  preservedCash: number
+  capitalReinvested: number
+  alternativePotentialRevenue: number
+  alternativeGrossMargin: number
+  financingHorizonDays: number
+  turnoverFraction: number
+  alternativeGrossMarginWithinFinancingHorizon: number
+  conservativeAlternativeReturn: number
+  netLiquidityBenefit: number
+
+  // 10 / 11 / 15
   decision: PurchaseDecision
 
-  // 13
+  // 17
   comparison: ComparisonColumn[]
 }
 
@@ -262,6 +405,11 @@ export function calculatePurchaseDecision(
     expectedMerchandiseSales,
     expectedTurnoverDays,
     minimumCoverageRatio,
+    preservedCashUse,
+    alternativeInventoryMarkup,
+    alternativeInventoryTurnoverDays,
+    reinvestmentPct,
+    alternativeReturnRealizationPct,
   } = inputs
 
   // ── 4.1 / 4.2 / 4.3 — custo à vista, a prazo e da liquidez ──────────────────
@@ -279,16 +427,9 @@ export function calculatePurchaseDecision(
   const cashAfterCashPurchase = round2(freeCashBeforePurchase - cashCost)
   const protectedCashAfterCashPurchase = round2(cashAfterCashPurchase - minimumCashReserve)
 
-  // ── 5 — geração operacional em 30 dias (markup > 0 já garantido pela
-  // validação). Usa SOMENTE expectedStoreSales30d — faturamento da loja
-  // em 30 dias — nunca a venda esperada da mercadoria (horizonte de giro
-  // diferente). Corrige a inconsistência de horizontes temporais da V1
-  // (venda da mercadoria em N dias de giro sendo usada como se fosse
-  // faturamento mensal da loja).
+  // ── 5 — geração operacional em 30 dias ───────────────────────────────────────
   const projectedStoreCOGS30d = round2(expectedStoreSales30d / markup)
   const projectedStoreGrossMargin30d = round2(expectedStoreSales30d - projectedStoreCOGS30d)
-  // Deliberadamente NÃO desconta existingInstallments30d aqui — parcelas
-  // entram só no serviço da dívida (seção 6/7), não na geração operacional.
   const projectedOperatingGeneration30d = round2(
     expectedStoreSales30d - projectedStoreCOGS30d - operatingCosts30d - otherOutflows30d,
   )
@@ -304,13 +445,46 @@ export function calculatePurchaseDecision(
   const totalInstallmentsAfterPurchase = round2(existingInstallments30d + monthlyInstallment)
   const postPurchaseCoverageRatio = safeDiv(projectedOperatingGeneration30d, totalInstallmentsAfterPurchase)
 
-  // ── 8 — autopagamento estimado da parcela. Usa SOMENTE
-  // expectedMerchandiseSales / expectedTurnoverDays — a velocidade de
-  // giro desta mercadoria específica, nunca o faturamento da loja.
+  // ── 8 — autopagamento estimado da parcela ────────────────────────────────────
   const expectedMerchandiseDailySales = round2(expectedMerchandiseSales / expectedTurnoverDays)
   const expectedMerchandiseDailyCOGSRecovery = round2(expectedMerchandiseDailySales / markup)
   const expectedCOGSRecovered30d = round2(expectedMerchandiseDailyCOGSRecovery * 30)
   const installmentSelfPaymentRatio = safeDiv(expectedCOGSRecovered30d, monthlyInstallment)
+
+  // ── Taxa implícita do parcelamento puro (seção 5) ────────────────────────────
+  const implicitMonthlyRate = solveImplicitMonthlyRate(cashCost, monthlyInstallment, installmentsCount)
+  const implicitAnnualRate = implicitAnnualEffectiveRate(implicitMonthlyRate)
+
+  // ── Retorno do caixa preservado (seções 6-13) ────────────────────────────────
+  const preservedCash = cashCost
+  const financingHorizonDays = installmentsCount * 30
+
+  let capitalReinvested = 0
+  let alternativePotentialRevenue = 0
+  let alternativeGrossMargin = 0
+  let turnoverFraction = 0
+  let alternativeGrossMarginWithinFinancingHorizon = 0
+  let conservativeAlternativeReturn = 0
+
+  if (preservedCashUse === 'REINVEST_IN_INVENTORY') {
+    capitalReinvested = round2(preservedCash * (reinvestmentPct / 100))
+    alternativePotentialRevenue = round2(capitalReinvested * alternativeInventoryMarkup)
+    alternativeGrossMargin = round2(alternativePotentialRevenue - capitalReinvested)
+    // Aproximação gerencial, não previsão contábil: fração do giro da
+    // compra alternativa que efetivamente ocorre dentro do horizonte do
+    // financiamento desta compra. Sem compor múltiplos giros nesta V1.
+    turnoverFraction = Math.min(1, financingHorizonDays / alternativeInventoryTurnoverDays)
+    alternativeGrossMarginWithinFinancingHorizon = round2(alternativeGrossMargin * turnoverFraction)
+    // Heurística gerencial explícita: só uma fração conservadora da
+    // margem teoricamente gerada é considerada "aproveitável" para esta
+    // decisão — nunca 100% da margem bruta potencial.
+    conservativeAlternativeReturn = round2(
+      alternativeGrossMarginWithinFinancingHorizon * (alternativeReturnRealizationPct / 100),
+    )
+  }
+  // Sob RESERVE: tudo acima permanece 0 — "não inventar retorno" (seção 7).
+
+  const netLiquidityBenefit = round2(conservativeAlternativeReturn - liquidityCost)
 
   // ── 9 — modalidade mista ─────────────────────────────────────────────────────
   const mixed = computeMixedScenario({
@@ -320,6 +494,7 @@ export function calculatePurchaseDecision(
     installmentsCount,
     protectedExcessCash,
     cashCost,
+    financedCost,
     freeCashBeforePurchase,
     minimumCashReserve,
     existingInstallments30d,
@@ -328,16 +503,23 @@ export function calculatePurchaseDecision(
     maximumNewInstallmentCapacity,
   })
 
-  // ── 10 — motor de decisão ────────────────────────────────────────────────────
+  // ── Viabilidade (Passo 1) ─────────────────────────────────────────────────────
   const cashFitsReserve = cashCost <= protectedExcessCash
   const financedFitsCapacity = monthlyInstallment <= maximumNewInstallmentCapacity
   const financedMeetsCoverage = meetsCoverage(postPurchaseCoverageRatio, minimumCoverageRatio)
   const financedViable = financedFitsCapacity && financedMeetsCoverage
 
+  // Retorno alternativo "sacrificado" proporcional à fração de caixa que o
+  // misto de fato compromete agora (safeCashContribution), nunca o valor
+  // cheio de conservativeAlternativeReturn (que pressupõe cashCost inteiro).
+  const mixedForegoneAlternativeReturn =
+    cashCost > 0 ? round2(conservativeAlternativeReturn * (mixed.safeCashContribution / cashCost)) : 0
+
   const decision = decidePurchase({
     cashFitsReserve,
     financedViable,
-    mixedViable: mixed.viable,
+    mixed,
+    mixedForegoneAlternativeReturn,
     cashCost,
     protectedExcessCash,
     financedCost,
@@ -347,7 +529,10 @@ export function calculatePurchaseDecision(
     maximumNewInstallmentCapacityDisplay,
     postPurchaseCoverageRatio,
     minimumCoverageRatio,
-    mixed,
+    preservedCashUse,
+    conservativeAlternativeReturn,
+    netLiquidityBenefit,
+    implicitMonthlyRate,
   })
 
   const comparison = buildComparison({
@@ -355,7 +540,6 @@ export function calculatePurchaseDecision(
     financedCost,
     monthlyInstallment,
     freeCashBeforePurchase,
-    minimumCashReserve,
     currentCoverageRatio,
     postPurchaseCoverageRatio,
     liquidityCost,
@@ -363,6 +547,10 @@ export function calculatePurchaseDecision(
     protectedExcessCash,
     mixed,
     decisionType: decision.type,
+    implicitMonthlyRate,
+    conservativeAlternativeReturn,
+    netLiquidityBenefit,
+    mixedForegoneAlternativeReturn,
   })
 
   return {
@@ -393,13 +581,24 @@ export function calculatePurchaseDecision(
       expectedCOGSRecovered30d,
       installmentSelfPaymentRatio,
       mixed,
+      implicitMonthlyRate,
+      implicitAnnualEffectiveRate: implicitAnnualRate,
+      preservedCash,
+      capitalReinvested,
+      alternativePotentialRevenue,
+      alternativeGrossMargin,
+      financingHorizonDays,
+      turnoverFraction,
+      alternativeGrossMarginWithinFinancingHorizon,
+      conservativeAlternativeReturn,
+      netLiquidityBenefit,
       decision,
       comparison,
     },
   }
 }
 
-// ─── Seção 9 — modalidade mista ─────────────────────────────────────────────────
+// ─── Seção 9 (pedido anterior) — modalidade mista ───────────────────────────────
 
 function computeMixedScenario(ctx: {
   supplierAcceptsMixed: boolean
@@ -408,6 +607,7 @@ function computeMixedScenario(ctx: {
   installmentsCount: number
   protectedExcessCash: number
   cashCost: number
+  financedCost: number
   freeCashBeforePurchase: number
   minimumCashReserve: number
   existingInstallments30d: number
@@ -422,6 +622,7 @@ function computeMixedScenario(ctx: {
     installmentsCount,
     protectedExcessCash,
     cashCost,
+    financedCost,
     freeCashBeforePurchase,
     minimumCashReserve,
     existingInstallments30d,
@@ -436,10 +637,10 @@ function computeMixedScenario(ctx: {
   const remainingBaseToFinance = round2(Math.max(0, baseCost - safeCashContribution))
   // Assume explicitamente que o fornecedor aplica o acréscimo do prazo só
   // sobre o saldo financiado — não há regra diferente documentada nem
-  // suportada pelos dados desta V1 (ver seção 9 do pedido).
-  const financedCost = round2(remainingBaseToFinance * (1 + installmentSurchargePct / 100))
-  const monthlyInstallment = round2(financedCost / installmentsCount)
-  const totalCost = round2(safeCashContribution + financedCost)
+  // suportada pelos dados desta V1.
+  const mixedFinancedCost = round2(remainingBaseToFinance * (1 + installmentSurchargePct / 100))
+  const monthlyInstallment = round2(mixedFinancedCost / installmentsCount)
+  const totalCost = round2(safeCashContribution + mixedFinancedCost)
 
   const cashAfterInitialPayment = round2(freeCashBeforePurchase - safeCashContribution)
   const protectedCashAfterInitialPayment = round2(cashAfterInitialPayment - minimumCashReserve)
@@ -449,7 +650,7 @@ function computeMixedScenario(ctx: {
   const postPurchaseCoverageRatio = safeDiv(projectedOperatingGeneration30d, totalInstallmentsAfterPurchase)
 
   // addsValue: fora dessa faixa o misto equivale, na prática, a um dos
-  // dois extremos (à vista puro ou financiado puro) — ver seção 9.
+  // dois extremos (à vista puro ou financiado puro).
   const addsValue = safeCashContribution > 0 && safeCashContribution < cashCost
   const fitsCapacity = monthlyInstallment <= maximumNewInstallmentCapacity
   const meetsCoveragePolicy = meetsCoverage(postPurchaseCoverageRatio, minimumCoverageRatio)
@@ -457,12 +658,16 @@ function computeMixedScenario(ctx: {
   const viable =
     supplierAcceptsMixed && addsValue && fitsCapacity && meetsCoveragePolicy && reservePreserved
 
+  // financedCost(puro) - totalCost(misto) = safeCashContribution * surcharge —
+  // sempre >= 0: quanto menos se financia, menos juros nominal se paga.
+  const financialSavings = round2(financedCost - totalCost)
+
   return {
     applicable: supplierAcceptsMixed,
     addsValue: supplierAcceptsMixed && addsValue,
     safeCashContribution,
     remainingBaseToFinance,
-    financedCost,
+    financedCost: mixedFinancedCost,
     monthlyInstallment,
     totalCost,
     cashAfterInitialPayment,
@@ -473,15 +678,17 @@ function computeMixedScenario(ctx: {
     fitsCapacity,
     meetsCoveragePolicy,
     viable,
+    financialSavings,
   }
 }
 
-// ─── Seção 10/11 — motor de decisão + justificativa ─────────────────────────────
+// ─── Novo motor de decisão (seções 3, 14, 15 desta correção) ────────────────────
 
 function decidePurchase(ctx: {
   cashFitsReserve: boolean
   financedViable: boolean
-  mixedViable: boolean
+  mixed: MixedScenario
+  mixedForegoneAlternativeReturn: number
   cashCost: number
   protectedExcessCash: number
   financedCost: number
@@ -491,25 +698,93 @@ function decidePurchase(ctx: {
   maximumNewInstallmentCapacityDisplay: number
   postPurchaseCoverageRatio: number | null
   minimumCoverageRatio: number
-  mixed: MixedScenario
+  preservedCashUse: PreservedCashUse
+  conservativeAlternativeReturn: number
+  netLiquidityBenefit: number
+  implicitMonthlyRate: number | null
 }): PurchaseDecision {
   const {
     cashFitsReserve,
     financedViable,
-    mixedViable,
+    mixed,
+    mixedForegoneAlternativeReturn,
     cashCost,
     protectedExcessCash,
+    financedCost,
     liquidityCost,
     protectedCashAfterCashPurchase,
     monthlyInstallment,
     maximumNewInstallmentCapacityDisplay,
     postPurchaseCoverageRatio,
     minimumCoverageRatio,
-    mixed,
+    preservedCashUse,
+    conservativeAlternativeReturn,
+    netLiquidityBenefit,
+    implicitMonthlyRate,
   } = ctx
 
-  // 10.1 — acima da capacidade: nem à vista, nem a prazo, nem misto cabem.
-  if (!cashFitsReserve && !financedViable && !mixedViable) {
+  const ratioLabel = (ratio: number | null) => (ratio !== null ? `${ratio.toFixed(2)}x` : 'sem parcelas restantes')
+  const rateLabel = (rate: number | null) => (rate !== null ? formatPercent(rate * 100, 2) : 'não aplicável')
+
+  // ── Passo 2 — crédito gratuito ou vantajoso: financiar é tão bom ou
+  // melhor que pagar à vista, e cabe na capacidade. Ganha de CASH mesmo
+  // que CASH também seja confortável — não há razão econômica para
+  // antecipar caixa quando o prazo não custa nada (ou custa menos).
+  if (financedViable && financedCost <= cashCost) {
+    const justification =
+      financedCost < cashCost
+        ? `O parcelamento custa ${formatCurrency(cashCost - financedCost)} a menos que o pagamento à vista e ` +
+          `preserva liquidez. Como as parcelas cabem na capacidade financeira estimada e mantêm folga de ` +
+          `${ratioLabel(postPurchaseCoverageRatio)}, não há motivo para antecipar o desembolso.`
+        : `O parcelamento não possui custo adicional e preserva liquidez. Como as parcelas cabem na ` +
+          `capacidade financeira informada (folga de ${ratioLabel(postPurchaseCoverageRatio)}), não há ` +
+          `vantagem econômica em antecipar o desembolso.`
+    return {
+      type: 'FINANCED',
+      title: 'A prazo',
+      justification,
+      attentionLevel: attentionFor(postPurchaseCoverageRatio, minimumCoverageRatio),
+    }
+  }
+
+  // ── Passo 3 — à vista viola a reserva ────────────────────────────────────────
+  if (!cashFitsReserve) {
+    const mixedIsBetter =
+      mixed.viable && mixed.financialSavings > mixedForegoneAlternativeReturn
+
+    if (mixedIsBetter) {
+      const ratio = mixed.postPurchaseCoverageRatio
+      const justification =
+        `É possível usar ${formatCurrency(mixed.safeCashContribution)} de caixa sem romper a reserva e ` +
+        `financiar apenas o restante (${formatCurrency(mixed.remainingBaseToFinance)}). Isso reduz o custo ` +
+        `financeiro em ${formatCurrency(mixed.financialSavings)} frente ao financiamento total` +
+        (mixedForegoneAlternativeReturn > 0
+          ? `, mais do que compensando o retorno alternativo conservador (${formatCurrency(mixedForegoneAlternativeReturn)}) que se abriria mão sobre esse valor`
+          : '') +
+        `, e mantém a nova parcela de ${formatCurrency(mixed.monthlyInstallment)} dentro da capacidade ` +
+        `projetada, com folga de ${ratioLabel(ratio)}.`
+      return {
+        type: 'MIXED',
+        title: 'Misto — parte à vista, parte financiada',
+        justification,
+        attentionLevel: attentionFor(ratio, minimumCoverageRatio),
+      }
+    }
+
+    if (financedViable) {
+      const justification =
+        `Comprar à vista consumiria ${formatCurrency(cashCost)}, mas o caixa excedente protegido é de apenas ` +
+        `${formatCurrency(protectedExcessCash)}. A nova parcela de ${formatCurrency(monthlyInstallment)} cabe ` +
+        `na capacidade mensal estimada de ${formatCurrency(maximumNewInstallmentCapacityDisplay)} e mantém ` +
+        `folga de ${ratioLabel(postPurchaseCoverageRatio)}.`
+      return {
+        type: 'FINANCED',
+        title: 'A prazo',
+        justification,
+        attentionLevel: attentionFor(postPurchaseCoverageRatio, minimumCoverageRatio),
+      }
+    }
+
     const justification =
       `Esta compra está acima da capacidade financeira definida pelas premissas atuais. ` +
       `O pagamento à vista consumiria ${formatCurrency(cashCost)}, mas o caixa excedente protegido é de ` +
@@ -519,37 +794,52 @@ function decidePurchase(ctx: {
     return { type: 'OVER_CAPACITY', title: 'Acima da capacidade financeira', justification, attentionLevel: 'critico' }
   }
 
-  // 10.2 — à vista, preferido por padrão sempre que cabe (10.5: empate CASH x FINANCED -> CASH).
-  if (cashFitsReserve) {
+  // ── Passo 4 — à vista E a prazo cabem, e financiar já não é grátis/vantajoso
+  // (passo 2 já teria capturado esse caso) — decide pelo destino do caixa. ──────
+
+  // A prazo nem sequer é viável dentro da capacidade/folga: à vista é a
+  // única opção real, independente do destino do caixa. A capacidade
+  // financeira é trava obrigatória — nenhum retorno alternativo a supera.
+  if (!financedViable) {
     const justification =
-      liquidityCost > 0
-        ? `O pagamento à vista economiza ${formatCurrency(liquidityCost)} e, após a compra, ainda permanecem ` +
-          `${formatCurrency(protectedCashAfterCashPurchase)} acima da reserva mínima. Não há necessidade ` +
-          `financeira de pagar o prêmio pelo parcelamento.`
-        : `O pagamento à vista cabe integralmente no caixa excedente protegido, mantendo ` +
-          `${formatCurrency(protectedCashAfterCashPurchase)} acima da reserva mínima após a compra.`
+      `A parcela de ${formatCurrency(monthlyInstallment)} não cabe confortavelmente na capacidade financeira ` +
+      `projetada (folga exigida de ${minimumCoverageRatio.toFixed(2)}x). Como o pagamento à vista cabe no ` +
+      `caixa excedente protegido e mantém ${formatCurrency(protectedCashAfterCashPurchase)} acima da reserva, ` +
+      `é a opção segura.`
     return { type: 'CASH', title: 'À vista', justification, attentionLevel: 'ok' }
   }
 
-  // 10.4 — misto preferido sobre financiado puro quando viável (reduz custo financeiro sem violar reserva).
-  if (mixedViable) {
-    const savings = round2(ctx.financedCost - mixed.totalCost)
-    const ratioLabel = mixed.postPurchaseCoverageRatio !== null ? `${mixed.postPurchaseCoverageRatio.toFixed(2)}x` : 'sem parcelas restantes'
+  if (preservedCashUse === 'RESERVE') {
+    // liquidityCost > 0 aqui sempre — o caso <= 0 já foi resolvido no passo 2.
     const justification =
-      `É possível usar ${formatCurrency(mixed.safeCashContribution)} de caixa sem romper a reserva e financiar ` +
-      `apenas o restante (${formatCurrency(mixed.remainingBaseToFinance)}). Isso reduz o custo financeiro em ` +
-      `${formatCurrency(savings)} frente ao financiamento total e mantém a nova parcela de ` +
-      `${formatCurrency(mixed.monthlyInstallment)} dentro da capacidade projetada, com folga de ${ratioLabel}.`
-    return { type: 'MIXED', title: 'Misto — parte à vista, parte financiada', justification, attentionLevel: attentionFor(mixed.postPurchaseCoverageRatio, minimumCoverageRatio) }
+      `O parcelamento custa ${formatCurrency(liquidityCost)} a mais que o pagamento à vista. Como o caixa ` +
+      `preservado ficaria apenas em reserva (sem uso alternativo informado), não há retorno que justifique ` +
+      `pagar esse prêmio. O pagamento à vista cabe no caixa excedente protegido, mantendo ` +
+      `${formatCurrency(protectedCashAfterCashPurchase)} acima da reserva mínima.`
+    return { type: 'CASH', title: 'À vista', justification, attentionLevel: 'ok' }
   }
 
-  // 10.3 — financiado puro.
-  const ratioLabel = postPurchaseCoverageRatio !== null ? `${postPurchaseCoverageRatio.toFixed(2)}x` : 'sem parcelas restantes'
+  // REINVEST_IN_INVENTORY: compara retorno conservador vs. custo do crédito.
+  if (conservativeAlternativeReturn > liquidityCost) {
+    const justification =
+      `Mesmo pagando ${formatCurrency(liquidityCost)} pelo prazo (taxa implícita de ${rateLabel(implicitMonthlyRate)} a.m.), ` +
+      `o retorno alternativo conservador estimado do capital preservado (${formatCurrency(conservativeAlternativeReturn)}) ` +
+      `supera esse custo — benefício líquido de ${formatCurrency(netLiquidityBenefit)}. As parcelas permanecem ` +
+      `dentro da capacidade financeira, com folga de ${ratioLabel(postPurchaseCoverageRatio)}.`
+    return {
+      type: 'FINANCED',
+      title: 'A prazo',
+      justification,
+      attentionLevel: attentionFor(postPurchaseCoverageRatio, minimumCoverageRatio),
+    }
+  }
+
   const justification =
-    `Comprar à vista consumiria ${formatCurrency(cashCost)}, mas o caixa excedente protegido é de apenas ` +
-    `${formatCurrency(protectedExcessCash)}. A nova parcela de ${formatCurrency(monthlyInstallment)} cabe na ` +
-    `capacidade mensal estimada de ${formatCurrency(maximumNewInstallmentCapacityDisplay)} e mantém folga de ${ratioLabel}.`
-  return { type: 'FINANCED', title: 'A prazo', justification, attentionLevel: attentionFor(postPurchaseCoverageRatio, minimumCoverageRatio) }
+    `Embora o parcelamento preserve caixa, o retorno alternativo conservador informado ` +
+    `(${formatCurrency(conservativeAlternativeReturn)}) não compensa o custo adicional de ` +
+    `${formatCurrency(liquidityCost)} do prazo (benefício líquido de ${formatCurrency(netLiquidityBenefit)}). ` +
+    `Como o pagamento à vista preserva a reserva mínima, a opção à vista é economicamente superior.`
+  return { type: 'CASH', title: 'À vista', justification, attentionLevel: 'ok' }
 }
 
 function attentionFor(ratio: number | null, minimum: number): AttentionLevel {
@@ -558,14 +848,13 @@ function attentionFor(ratio: number | null, minimum: number): AttentionLevel {
   return 'atencao'
 }
 
-// ─── Seção 13 — comparador de cenários ───────────────────────────────────────────
+// ─── Seção 17 — comparador de cenários ───────────────────────────────────────────
 
 function buildComparison(ctx: {
   cashCost: number
   financedCost: number
   monthlyInstallment: number
   freeCashBeforePurchase: number
-  minimumCashReserve: number
   currentCoverageRatio: number | null
   postPurchaseCoverageRatio: number | null
   liquidityCost: number
@@ -573,6 +862,10 @@ function buildComparison(ctx: {
   protectedExcessCash: number
   mixed: MixedScenario
   decisionType: PurchaseDecisionType
+  implicitMonthlyRate: number | null
+  conservativeAlternativeReturn: number
+  netLiquidityBenefit: number
+  mixedForegoneAlternativeReturn: number
 }): ComparisonColumn[] {
   const {
     cashCost,
@@ -585,6 +878,10 @@ function buildComparison(ctx: {
     protectedExcessCash,
     mixed,
     decisionType,
+    implicitMonthlyRate,
+    conservativeAlternativeReturn,
+    netLiquidityBenefit,
+    mixedForegoneAlternativeReturn,
   } = ctx
 
   const cashColumn: ComparisonColumn = {
@@ -593,13 +890,15 @@ function buildComparison(ctx: {
     immediateOutlay: cashCost,
     totalCost: cashCost,
     monthlyInstallment: null,
-    // "Caixa preservado hoje": quanto do custo à vista deixou de ser gasto agora (0 aqui — tudo é gasto agora).
     cashPreservedToday: 0,
     cashAfterInitialOutlay: round2(freeCashBeforePurchase - cashCost),
     installmentSlack: ctx.currentCoverageRatio,
     reservePreserved: protectedCashAfterCashPurchase >= 0,
     additionalFinancialCost: 0,
     isRecommended: decisionType === 'CASH',
+    implicitMonthlyRate: null,
+    conservativeAlternativeReturn: null,
+    netLiquidityBenefit: null,
   }
 
   const financedColumn: ComparisonColumn = {
@@ -608,17 +907,27 @@ function buildComparison(ctx: {
     immediateOutlay: 0,
     totalCost: financedCost,
     monthlyInstallment,
-    cashPreservedToday: cashCost, // nada pago agora: preserva o equivalente ao custo à vista inteiro
+    cashPreservedToday: cashCost,
     cashAfterInitialOutlay: freeCashBeforePurchase,
     installmentSlack: postPurchaseCoverageRatio,
     reservePreserved: protectedExcessCash >= 0,
     additionalFinancialCost: liquidityCost,
     isRecommended: decisionType === 'FINANCED',
+    implicitMonthlyRate,
+    conservativeAlternativeReturn,
+    netLiquidityBenefit,
   }
 
   const columns: ComparisonColumn[] = [cashColumn, financedColumn]
 
   if (mixed.applicable) {
+    const mixedImplicitRate = solveImplicitMonthlyRate(
+      mixed.safeCashContribution > 0 ? mixed.safeCashContribution : 0,
+      mixed.monthlyInstallment,
+      // periods vem implícito no monthlyInstallment/financedCost já calculados;
+      // reaproveita o mesmo número de parcelas do cenário puro via razão financedCost/monthlyInstallment.
+      monthlyInstallment > 0 ? Math.round(financedCost / monthlyInstallment) : 1,
+    )
     columns.push({
       key: 'mixed',
       label: 'Misto',
@@ -631,6 +940,9 @@ function buildComparison(ctx: {
       reservePreserved: mixed.reservePreserved,
       additionalFinancialCost: round2(mixed.totalCost - cashCost),
       isRecommended: decisionType === 'MIXED',
+      implicitMonthlyRate: mixedImplicitRate,
+      conservativeAlternativeReturn: round2(conservativeAlternativeReturn - mixedForegoneAlternativeReturn),
+      netLiquidityBenefit: round2(mixed.financialSavings - mixedForegoneAlternativeReturn),
     })
   }
 

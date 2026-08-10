@@ -19,13 +19,18 @@ import {
   type PurchaseCalculatorResult,
   type PurchaseDecisionType,
   type AttentionLevel,
+  type PreservedCashUse,
 } from '@/services/purchaseCalculator'
 import { DEFAULT_MINIMUM_COVERAGE_RATIO } from '@/lib/constants/purchaseCalculator'
 
 // ─── Estado do formulário (strings — permite digitar livremente, inclusive vazio) ──
 
-type FormState = Record<Exclude<keyof PurchaseCalculatorInputs, 'supplierAcceptsMixed'>, string> & {
+type FormState = Record<
+  Exclude<keyof PurchaseCalculatorInputs, 'supplierAcceptsMixed' | 'preservedCashUse'>,
+  string
+> & {
   supplierAcceptsMixed: boolean
+  preservedCashUse: PreservedCashUse
 }
 
 const DEFAULT_FORM: FormState = {
@@ -48,6 +53,12 @@ const DEFAULT_FORM: FormState = {
   expectedTurnoverDays: '90',
 
   minimumCoverageRatio: String(DEFAULT_MINIMUM_COVERAGE_RATIO),
+
+  preservedCashUse: 'RESERVE',
+  alternativeInventoryMarkup: '3',
+  alternativeInventoryTurnoverDays: '90',
+  reinvestmentPct: '100',
+  alternativeReturnRealizationPct: '50',
 }
 
 function toNumber(raw: string): number {
@@ -77,6 +88,12 @@ function toInputs(form: FormState): PurchaseCalculatorInputs {
     expectedTurnoverDays: toNumber(form.expectedTurnoverDays),
 
     minimumCoverageRatio: toNumber(form.minimumCoverageRatio),
+
+    preservedCashUse: form.preservedCashUse,
+    alternativeInventoryMarkup: toNumber(form.alternativeInventoryMarkup),
+    alternativeInventoryTurnoverDays: toNumber(form.alternativeInventoryTurnoverDays),
+    reinvestmentPct: toNumber(form.reinvestmentPct),
+    alternativeReturnRealizationPct: toNumber(form.alternativeReturnRealizationPct),
   }
 }
 
@@ -98,6 +115,15 @@ const FIELD_LABELS: Partial<Record<keyof PurchaseCalculatorInputs, string>> = {
   expectedMerchandiseSales: 'Venda total esperada desta mercadoria',
   expectedTurnoverDays: 'Prazo estimado para girar esta compra (dias)',
   minimumCoverageRatio: 'Folga mínima desejada',
+  alternativeInventoryMarkup: 'Markup da compra adicional',
+  alternativeInventoryTurnoverDays: 'Prazo de giro da compra adicional (dias)',
+  reinvestmentPct: 'Percentual do caixa preservado a reinvestir',
+  alternativeReturnRealizationPct: 'Percentual de realização conservadora',
+}
+
+const PRESERVED_CASH_USE_LABELS: Record<PreservedCashUse, string> = {
+  RESERVE: 'Manter em reserva',
+  REINVEST_IN_INVENTORY: 'Reinvestir em mercadoria',
 }
 
 const DECISION_LABELS: Record<PurchaseDecisionType, string> = {
@@ -127,6 +153,11 @@ function ratioLabel(ratio: number | null): string {
 
 function daysLabel(days: number): string {
   return `${Math.round(days)} dias`
+}
+
+function rateLabel(rate: number | null, digits = 2): string {
+  if (rate === null) return 'não aplicável'
+  return formatPercent(rate * 100, digits)
 }
 
 function MetricCard({
@@ -290,6 +321,74 @@ export function PurchaseCalculator() {
               hint="Geração operacional conservadora deve ser N vezes o total mensal das parcelas" />
           </div>
         </Card>
+
+        {/* E. Destino do caixa preservado */}
+        <Card>
+          <CardHeader>
+            <h3 className="text-sm font-semibold text-text-primary">E. Destino do caixa preservado</h3>
+          </CardHeader>
+          <div className="p-5 pt-4 space-y-3">
+            <div>
+              <label className="label-base">Se eu parcelar, o que pretendo fazer com o caixa preservado?</label>
+              <div className="flex gap-2">
+                {(Object.keys(PRESERVED_CASH_USE_LABELS) as PreservedCashUse[]).map((use) => (
+                  <button
+                    key={use}
+                    type="button"
+                    onClick={() => set('preservedCashUse', use)}
+                    className={`flex-1 text-sm px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                      form.preservedCashUse === use
+                        ? 'bg-brand/15 border-brand/50 text-brand'
+                        : 'bg-transparent border-border text-text-muted hover:border-text-muted'
+                    }`}
+                  >
+                    {PRESERVED_CASH_USE_LABELS[use]}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-text-muted">
+                {form.preservedCashUse === 'RESERVE'
+                  ? 'Nenhum retorno é presumido — o caixa preservado só é considerado valioso pela folga e capacidade que garante.'
+                  : 'Estimativa gerencial conservadora do retorno de usar o caixa preservado em outra compra — não representa lucro garantido.'}
+              </p>
+            </div>
+
+            {form.preservedCashUse === 'REINVEST_IN_INVENTORY' && (
+              <>
+                <Input
+                  label={FIELD_LABELS.alternativeInventoryMarkup}
+                  type="number" min="0.01" step="0.1"
+                  value={form.alternativeInventoryMarkup}
+                  onChange={(e) => set('alternativeInventoryMarkup', e.target.value)}
+                  hint="Por padrão, reaproveita o markup informado na seção C"
+                />
+                <Input
+                  label={FIELD_LABELS.alternativeInventoryTurnoverDays}
+                  type="number" min="1" step="1"
+                  value={form.alternativeInventoryTurnoverDays}
+                  onChange={(e) => set('alternativeInventoryTurnoverDays', e.target.value)}
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <Input
+                    label={FIELD_LABELS.reinvestmentPct}
+                    type="number" min="0" max="100" step="1"
+                    value={form.reinvestmentPct}
+                    onChange={(e) => set('reinvestmentPct', e.target.value)}
+                    suffix="%"
+                  />
+                  <Input
+                    label={FIELD_LABELS.alternativeReturnRealizationPct}
+                    type="number" min="0" max="100" step="1"
+                    value={form.alternativeReturnRealizationPct}
+                    onChange={(e) => set('alternativeReturnRealizationPct', e.target.value)}
+                    suffix="%"
+                    hint="Fração conservadora da margem potencial considerada aproveitável"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </Card>
       </div>
 
       {/* ── Resultado ──────────────────────────────────────────────────────── */}
@@ -345,6 +444,19 @@ function ResultPanel({ result: r }: { result: PurchaseCalculatorResult }) {
         </div>
       </Card>
 
+      {r.existingInstallmentsExceedPolicy && (
+        <Card>
+          <div className="p-4 flex items-start gap-2 text-sm text-error border-l-4 border-error">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <p>
+              As parcelas já contratadas atualmente excedem a política de folga configurada
+              ({r.inputs.minimumCoverageRatio.toFixed(2)}x) — a capacidade adicional de parcela já nasce
+              negativa, antes mesmo desta compra.
+            </p>
+          </div>
+        </Card>
+      )}
+
       {/* Custo da compra */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <MetricCard label="Custo à vista" value={formatCurrency(r.cashCost)} />
@@ -372,6 +484,43 @@ function ResultPanel({ result: r }: { result: PurchaseCalculatorResult }) {
           sub="já descontada a reserva"
         />
       </div>
+
+      {/* Taxa implícita e retorno do caixa preservado (seções 5-13) */}
+      <Card>
+        <CardHeader>
+          <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-info" /> Custo do crédito e retorno da liquidez
+          </h3>
+        </CardHeader>
+        <div className="p-5 pt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <MetricCard
+            label="Taxa implícita do parcelamento"
+            value={rateLabel(r.implicitMonthlyRate)}
+            sub={r.implicitAnnualEffectiveRate !== null ? `${rateLabel(r.implicitAnnualEffectiveRate)} a.a.` : undefined}
+          />
+          <MetricCard label="Custo para preservar o caixa" value={formatCurrency(r.liquidityCost)} />
+          <MetricCard
+            label="Retorno alternativo conservador"
+            value={formatCurrency(r.conservativeAlternativeReturn)}
+            sub={r.inputs.preservedCashUse === 'RESERVE' ? 'sem uso alternativo informado' : undefined}
+          />
+          <MetricCard
+            label="Benefício líquido estimado da liquidez"
+            value={formatCurrency(r.netLiquidityBenefit)}
+            tone={r.netLiquidityBenefit >= 0 ? 'success' : undefined}
+          />
+        </div>
+        {r.inputs.preservedCashUse === 'REINVEST_IN_INVENTORY' && (
+          <p className="px-5 pb-4 text-xs text-text-muted leading-relaxed">
+            Estimativa gerencial: capital reinvestido {formatCurrency(r.capitalReinvested)} → margem bruta
+            potencial {formatCurrency(r.alternativeGrossMargin)} → considerando o giro dentro do horizonte de
+            financiamento de {daysLabel(r.financingHorizonDays)} ({(r.turnoverFraction * 100).toFixed(0)}% do giro) →{' '}
+            {formatCurrency(r.alternativeGrossMarginWithinFinancingHorizon)} → aplicado o percentual de realização
+            conservadora ({r.inputs.alternativeReturnRealizationPct}%) → {formatCurrency(r.conservativeAlternativeReturn)}.
+            Isso é uma estimativa gerencial, não representa lucro garantido.
+          </p>
+        )}
+      </Card>
 
       {/* Geração operacional — capacidade financeira da LOJA em 30 dias.
           Nunca misturado com os números da mercadoria (bloco seguinte). */}
@@ -481,6 +630,15 @@ function ComparisonTable({ result: r }: { result: PurchaseCalculatorResult }) {
         ),
     },
     { label: 'Custo financeiro adicional', render: (c) => formatCurrency(c.additionalFinancialCost) },
+    { label: 'Taxa implícita mensal', render: (c) => rateLabel(c.implicitMonthlyRate) },
+    {
+      label: 'Retorno alternativo conservador',
+      render: (c) => (c.conservativeAlternativeReturn !== null ? formatCurrency(c.conservativeAlternativeReturn) : '—'),
+    },
+    {
+      label: 'Benefício líquido de liquidez',
+      render: (c) => (c.netLiquidityBenefit !== null ? formatCurrency(c.netLiquidityBenefit) : '—'),
+    },
   ]
 
   return (

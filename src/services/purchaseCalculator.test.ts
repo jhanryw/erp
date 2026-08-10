@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   calculatePurchaseDecision,
   validatePurchaseCalculatorInputs,
+  solveImplicitMonthlyRate,
   type PurchaseCalculatorInputs,
 } from './purchaseCalculator'
 
@@ -26,6 +27,16 @@ function baseInputs(overrides: Partial<PurchaseCalculatorInputs> = {}): Purchase
     expectedTurnoverDays: 90,
 
     minimumCoverageRatio: 1.5,
+
+    // Default RESERVE preserva o comportamento pré-existente dos cenários
+    // A-I (CASH quando cabe e não há retorno alternativo informado) —
+    // os testes desta correção que precisam de REINVEST sobrescrevem isso.
+    preservedCashUse: 'RESERVE',
+    alternativeInventoryMarkup: 3,
+    alternativeInventoryTurnoverDays: 90,
+    reinvestmentPct: 100,
+    alternativeReturnRealizationPct: 50,
+
     ...overrides,
   }
 }
@@ -302,5 +313,215 @@ describe('comparador de cenários — seção 13', () => {
     const recommended = r.comparison.filter((c) => c.isRecommended)
     expect(recommended.length).toBe(1)
     expect(recommended[0].key).toBe(r.decision.type === 'CASH' ? 'cash' : r.decision.type === 'FINANCED' ? 'financed' : 'mixed')
+  })
+})
+
+describe('novo motor econômico — crédito gratuito e retorno alternativo (seções 3-15)', () => {
+  // A. Crédito gratuito, parcelas cabem -> FINANCED mesmo com CASH confortável
+  it('A: financedCost = cashCost e parcelas cabem -> FINANCED', () => {
+    const r = expectValid(
+      baseInputs({
+        cashDiscountPct: 0,
+        installmentSurchargePct: 0,
+        installmentsCount: 4, // cashCost=10000, financedCost=10000, parcela=2500
+        cashOnHand: 50000,
+        minimumCashReserve: 5000, // protectedExcessCash=45000 — CASH também caberia confortavelmente
+        expectedStoreSales30d: 30000,
+        markup: 3, // generation30d = 30000-10000-0-0 = 20000; capacidade = 13333 >= 2500
+      }),
+    )
+    expect(r.financedCost).toBe(r.cashCost)
+    expect(r.monthlyInstallment).toBeLessThanOrEqual(r.maximumNewInstallmentCapacity)
+    expect(r.decision.type).toBe('FINANCED')
+  })
+
+  // B. Crédito gratuito, mas parcela não cabe -> NÃO recomendar FINANCED só por ser grátis
+  it('B: financedCost = cashCost mas parcela excede a capacidade -> não recomenda FINANCED', () => {
+    const r = expectValid(
+      baseInputs({
+        cashDiscountPct: 0,
+        installmentSurchargePct: 0,
+        installmentsCount: 4, // parcela=2500
+        cashOnHand: 50000,
+        minimumCashReserve: 5000, // CASH cabe confortavelmente
+        expectedStoreSales30d: 1000,
+        operatingCosts30d: 1000,
+        markup: 3, // generation30d pequena/negativa -> capacidade bem abaixo de 2500
+      }),
+    )
+    expect(r.financedCost).toBe(r.cashCost)
+    expect(r.monthlyInstallment).toBeGreaterThan(r.maximumNewInstallmentCapacity)
+    expect(r.decision.type).not.toBe('FINANCED')
+    expect(r.decision.type).toBe('CASH')
+  })
+
+  // C. Juros + reinvestimento compensa -> FINANCED
+  it('C: retorno alternativo conservador > custo da liquidez, parcelas cabem -> FINANCED', () => {
+    const r = expectValid(
+      baseInputs({
+        cashDiscountPct: 0,
+        installmentSurchargePct: 5,
+        installmentsCount: 3, // cashCost=10000, financedCost=10500, liquidityCost=500
+        cashOnHand: 50000,
+        minimumCashReserve: 5000, // CASH cabe confortavelmente
+        expectedStoreSales30d: 30000,
+        markup: 3, // generation30d=20000, capacidade=13333 >= parcela(3500)
+        preservedCashUse: 'REINVEST_IN_INVENTORY',
+        alternativeInventoryMarkup: 3,
+        alternativeInventoryTurnoverDays: 90, // == horizonte (3x30) -> turnoverFraction=1
+        reinvestmentPct: 100,
+        alternativeReturnRealizationPct: 50,
+        // capitalReinvested=10000; potentialRevenue=30000; grossMargin=20000;
+        // withinHorizon=20000*1=20000; conservativeReturn=20000*0.5=10000 > 500
+      }),
+    )
+    expect(r.liquidityCost).toBe(500)
+    expect(r.conservativeAlternativeReturn).toBeGreaterThan(r.liquidityCost)
+    expect(r.decision.type).toBe('FINANCED')
+  })
+
+  // D. Juros + reinvestimento NÃO compensa -> CASH
+  it('D: retorno alternativo conservador < custo da liquidez, CASH cabe -> CASH', () => {
+    const r = expectValid(
+      baseInputs({
+        cashDiscountPct: 0,
+        installmentSurchargePct: 10,
+        installmentsCount: 3, // cashCost=10000, financedCost=11000, liquidityCost=1000
+        cashOnHand: 50000,
+        minimumCashReserve: 5000,
+        expectedStoreSales30d: 30000,
+        markup: 3,
+        preservedCashUse: 'REINVEST_IN_INVENTORY',
+        alternativeInventoryMarkup: 1.12,
+        alternativeInventoryTurnoverDays: 90,
+        reinvestmentPct: 100,
+        alternativeReturnRealizationPct: 50,
+        // capitalReinvested=10000; potentialRevenue=11200; grossMargin=1200;
+        // turnoverFraction=1; withinHorizon=1200; conservativeReturn=600 < 1000
+      }),
+    )
+    expect(r.liquidityCost).toBe(1000)
+    expect(r.conservativeAlternativeReturn).toBeCloseTo(600, 2)
+    expect(r.conservativeAlternativeReturn).toBeLessThan(r.liquidityCost)
+    expect(r.decision.type).toBe('CASH')
+  })
+
+  // E. Mesmo acréscimo, prazos diferentes -> taxa implícita mensal de 6x menor que a de 2x
+  it('E: +5% em 2x tem taxa implícita mensal maior que +5% em 6x', () => {
+    const r2x = expectValid(baseInputs({ cashDiscountPct: 0, installmentSurchargePct: 5, installmentsCount: 2 }))
+    const r6x = expectValid(baseInputs({ cashDiscountPct: 0, installmentSurchargePct: 5, installmentsCount: 6 }))
+    expect(r2x.implicitMonthlyRate).not.toBeNull()
+    expect(r6x.implicitMonthlyRate).not.toBeNull()
+    expect(r2x.implicitMonthlyRate!).toBeGreaterThan(r6x.implicitMonthlyRate!)
+  })
+
+  // F. RESERVE -> não inventar retorno
+  it('F: preservedCashUse = RESERVE -> todo o retorno alternativo é zero', () => {
+    const r = expectValid(
+      baseInputs({
+        preservedCashUse: 'RESERVE',
+        installmentSurchargePct: 20, // mesmo com juro alto, sem retorno inventado
+      }),
+    )
+    expect(r.capitalReinvested).toBe(0)
+    expect(r.alternativePotentialRevenue).toBe(0)
+    expect(r.alternativeGrossMargin).toBe(0)
+    expect(r.alternativeGrossMarginWithinFinancingHorizon).toBe(0)
+    expect(r.conservativeAlternativeReturn).toBe(0)
+  })
+
+  // G. Retorno alto mas dívida não cabe -> NÃO recomendar FINANCED
+  it('G: retorno alternativo altíssimo não fabrica capacidade financeira -> não recomenda FINANCED', () => {
+    const r = expectValid(
+      baseInputs({
+        cashDiscountPct: 0,
+        installmentSurchargePct: 5,
+        installmentsCount: 3,
+        cashOnHand: 50000,
+        minimumCashReserve: 5000, // CASH cabe
+        expectedStoreSales30d: 1000,
+        operatingCosts30d: 1000,
+        markup: 3, // generation30d negativa -> capacidade negativa -> financedViable = false
+        preservedCashUse: 'REINVEST_IN_INVENTORY',
+        alternativeInventoryMarkup: 10,
+        alternativeInventoryTurnoverDays: 90,
+        reinvestmentPct: 100,
+        alternativeReturnRealizationPct: 100, // retorno conservador gigante de propósito
+      }),
+    )
+    expect(r.monthlyInstallment).toBeGreaterThan(r.maximumNewInstallmentCapacity)
+    expect(r.conservativeAlternativeReturn).toBeGreaterThan(10000) // retorno "gigante"
+    expect(r.decision.type).not.toBe('FINANCED')
+    expect(r.decision.type).toBe('CASH')
+  })
+
+  // H. Giro mais lento -> retorno alternativo conservador menor, mesmo horizonte financeiro
+  it('H: giro de 180 dias produz retorno alternativo conservador menor que giro de 90 dias (mesmo horizonte)', () => {
+    const commonOverrides: Partial<PurchaseCalculatorInputs> = {
+      cashDiscountPct: 0,
+      installmentSurchargePct: 5,
+      installmentsCount: 3, // horizonte = 90 dias
+      preservedCashUse: 'REINVEST_IN_INVENTORY' as const,
+      alternativeInventoryMarkup: 3,
+      reinvestmentPct: 100,
+      alternativeReturnRealizationPct: 100,
+    }
+    const giro90 = expectValid(baseInputs({ ...commonOverrides, alternativeInventoryTurnoverDays: 90 }))
+    const giro180 = expectValid(baseInputs({ ...commonOverrides, alternativeInventoryTurnoverDays: 180 }))
+    expect(giro90.turnoverFraction).toBeGreaterThan(giro180.turnoverFraction)
+    expect(giro90.conservativeAlternativeReturn).toBeGreaterThan(giro180.conservativeAlternativeReturn)
+  })
+
+  // I. Realização conservadora -> 50% produz metade do retorno de 100%
+  it('I: alternativeReturnRealizationPct = 50 produz metade do retorno de 100%, tudo mais igual', () => {
+    const commonOverrides: Partial<PurchaseCalculatorInputs> = {
+      cashDiscountPct: 0,
+      installmentSurchargePct: 5,
+      installmentsCount: 3,
+      preservedCashUse: 'REINVEST_IN_INVENTORY' as const,
+      alternativeInventoryMarkup: 3,
+      alternativeInventoryTurnoverDays: 90,
+      reinvestmentPct: 100,
+    }
+    const realizacao50 = expectValid(baseInputs({ ...commonOverrides, alternativeReturnRealizationPct: 50 }))
+    const realizacao100 = expectValid(baseInputs({ ...commonOverrides, alternativeReturnRealizationPct: 100 }))
+    expect(realizacao50.conservativeAlternativeReturn).toBeCloseTo(realizacao100.conservativeAlternativeReturn / 2, 2)
+  })
+
+  // J. Zero juros -> taxa implícita aproximadamente 0, sem NaN/Infinity
+  it('J: financiamento gratuito -> implicitMonthlyRate ~ 0%, sem NaN/Infinity', () => {
+    const r = expectValid(
+      baseInputs({ cashDiscountPct: 0, installmentSurchargePct: 0, installmentsCount: 4 }),
+    )
+    expect(r.implicitMonthlyRate).not.toBeNull()
+    expect(r.implicitMonthlyRate!).toBeCloseTo(0, 6)
+    expect(r.implicitAnnualEffectiveRate).not.toBeNull()
+    expect(r.implicitAnnualEffectiveRate!).toBeCloseTo(0, 6)
+    expect(Number.isNaN(r.implicitMonthlyRate!)).toBe(false)
+    expect(Number.isFinite(r.implicitMonthlyRate!)).toBe(true)
+  })
+})
+
+describe('solveImplicitMonthlyRate — função pura isolada', () => {
+  it('presentValue <= 0 -> null, nunca NaN/Infinity', () => {
+    expect(solveImplicitMonthlyRate(0, 1000, 3)).toBeNull()
+    expect(solveImplicitMonthlyRate(-100, 1000, 3)).toBeNull()
+  })
+
+  it('installment <= 0 -> null', () => {
+    expect(solveImplicitMonthlyRate(1000, 0, 3)).toBeNull()
+    expect(solveImplicitMonthlyRate(1000, -50, 3)).toBeNull()
+  })
+
+  it('crédito gratuito exato (presentValue = installment * periods) -> taxa ~ 0', () => {
+    const rate = solveImplicitMonthlyRate(9000, 3000, 3)
+    expect(rate).not.toBeNull()
+    expect(rate!).toBeCloseTo(0, 4)
+  })
+
+  it('financiamento mais caro que o presente -> taxa positiva', () => {
+    const rate = solveImplicitMonthlyRate(9500, 3500, 3) // financedCost=10500 > cashCost=9500
+    expect(rate).not.toBeNull()
+    expect(rate!).toBeGreaterThan(0)
   })
 })
