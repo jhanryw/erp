@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ShieldAlert, Calculator, ShoppingCart, ArrowRight } from 'lucide-react'
+import { BarChart3, TrendingUp, Warehouse, Palette, Truck, Users, Brain, ShieldAlert, Calculator, ShoppingCart, ArrowRight, Scale } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
@@ -67,6 +67,13 @@ const MODULES = [
     title: 'Compras Inteligentes',
     description: 'Sugestões de reposição por variação. Rupturas, cobertura, fornecedor mais barato e custo estimado.',
     color: 'text-warning bg-warning/10',
+  },
+  {
+    href: '/inteligencia/calculadora-compras',
+    icon: Scale,
+    title: 'Calculadora de Compra e Alavancagem',
+    description: 'Compare à vista, a prazo e misto considerando caixa, obrigações e giro esperado da mercadoria.',
+    color: 'text-info bg-info/10',
   },
 ]
 
