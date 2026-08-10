@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getUserProfile } from '@/lib/auth/getProfile'
 import { getDashboardData } from '@/services/dashboard'
+import { getRevenueTrend } from '@/services/revenueTrend'
 import { getSellerDashboardData } from '@/services/sellerDashboard'
 import { SellerDashboard } from '@/app/(dashboard)/_components/seller-dashboard'
 import { StatCard } from '@/components/ui/stat-card'
@@ -131,6 +132,11 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
 
   const data = await getDashboardData(role, dateFrom, dateTo)
 
+  // Série de tendência (MM7/MM30) é independente do range da página: busca
+  // o histórico completo da empresa e o próprio gráfico recorta a
+  // exibição (7D/30D/90D/6M/1A/Tudo) sem recalcular as médias móveis.
+  const revenueTrend = profile?.company_id ? await getRevenueTrend(profile.company_id) : []
+
   const todayAvgTicket =
     data.today.orders > 0 ? data.today.revenue / data.today.orders : 0
 
@@ -206,13 +212,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
         )}
       </div>
 
-      {/* ── Gráfico de faturamento diário ──────────────────────────── */}
+      {/* ── Gráfico de tendência de faturamento (MM7/MM30) ───────────
+          Período próprio (7D/30D/90D/6M/1A/Tudo), independente do
+          seletor de período da página acima — este gráfico sempre
+          trabalha sobre o histórico completo para que as médias móveis
+          nunca sejam distorcidas por um recorte curto. */}
       <Card>
         <CardHeader>
-          <h2 className="text-lg font-semibold">Faturamento — {periodLabel}</h2>
+          <h2 className="text-lg font-semibold">Tendência de Faturamento</h2>
+          <p className="text-sm text-muted-foreground">
+            Faturamento diário com médias móveis de 7 e 30 dias
+          </p>
         </CardHeader>
         <CardContent>
-          <DailySalesChart data={data.dailySeries} />
+          <DailySalesChart data={revenueTrend} />
         </CardContent>
       </Card>
 
