@@ -1,38 +1,22 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
-import { createAdminClient } from '@/lib/supabase/admin'
 import Link from 'next/link'
 import { ArrowLeft, ShoppingCart, Info, AlertTriangle, ClipboardList } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
-import { ComprasTable, type PurchaseSuggestion } from './_components/compras-table'
+import { ComprasTable } from './_components/compras-table'
+import { getEnrichedPurchaseSuggestions, summarizeByCurve } from '@/services/purchaseSuggestions'
+import { CURVE_LABELS } from '@/lib/constants/purchasePolicy'
 
 export const dynamic = 'force-dynamic'
-
-async function getPurchaseSuggestions(): Promise<PurchaseSuggestion[]> {
-  const admin = createAdminClient()
-  const { data, error } = await (admin as any)
-    .from('vw_purchase_suggestions')
-    .select('*') as unknown as { data: PurchaseSuggestion[] | null; error: any }
-
-  if (error) console.error('vw_purchase_suggestions error:', error.message)
-  return data ?? []
-}
 
 export default async function ComprasPage() {
   await requirePageRole('gerente')
 
-  const suggestions = await getPurchaseSuggestions()
+  const suggestions = await getEnrichedPurchaseSuggestions()
+  const summary = summarizeByCurve(suggestions)
 
-  const criticas     = suggestions.filter(s => s.urgency === 'critica').length
-  const alta         = suggestions.filter(s => s.urgency === 'alta').length
-  const parados      = suggestions.filter(s => s.is_dead_stock).length
-  const custoUrgente = suggestions
-    .filter(s => s.urgency === 'critica' || s.urgency === 'alta')
-    .reduce((sum, s) => sum + parseFloat(s.estimated_restock_cost ?? '0'), 0)
-  // Valor imobilizado em dead stock: current_qty × unit_cost_estimate (campos já na view)
-  const valorParado  = suggestions
-    .filter(s => s.is_dead_stock)
-    .reduce((sum, s) => sum + s.current_qty * parseFloat(s.unit_cost_estimate ?? '0'), 0)
+  // Ruptura ativa = estoque zero com alguma venda recente (qualquer curva) — para o alerta no topo.
+  const rupturasAtivas = suggestions.filter((s) => s.availableStock === 0 && s.vmdProjetada > 0).length
 
   return (
     <div className="space-y-5">
@@ -46,7 +30,9 @@ export default async function ComprasPage() {
             <ShoppingCart className="w-5 h-5 text-warning" />
             <div>
               <h2 className="text-lg font-semibold text-text-primary">Compras Inteligentes</h2>
-              <p className="text-sm text-text-muted">Sugestões de reposição por variação com base em estoque, vendas e fornecedor</p>
+              <p className="text-sm text-text-muted">
+                Cobertura-alvo por Curva ABC — quanto comprar hoje para levar cada SKU até a cobertura da sua curva
+              </p>
             </div>
           </div>
         </div>
@@ -59,61 +45,82 @@ export default async function ComprasPage() {
         </Link>
       </div>
 
-      {/* Alerta de rupturas críticas */}
-      {criticas > 0 && (
+      {/* Alerta de rupturas ativas */}
+      {rupturasAtivas > 0 && (
         <div className="flex items-start gap-2 p-3 rounded-lg bg-error/8 border border-error/30 text-sm text-error">
           <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
           <span>
-            Existem <strong>{criticas} variações</strong> com ruptura crítica.
+            Existem <strong>{rupturasAtivas} variações</strong> com estoque zerado e venda recente.
             Priorize a reposição antes de comprar produtos novos.
           </span>
         </div>
       )}
 
-      {/* Aviso lead time */}
+      {/* Aviso de política e limitações conhecidas */}
       <div className="flex items-start gap-2 p-3 rounded-lg bg-info/8 border border-info/20 text-xs text-info">
         <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
         <span>
-          O lead time exibido é <strong>estimado</strong> com base no intervalo histórico entre lotes de compra.
-          Para variações com menos de 2 lotes, assume-se 30 dias. Ajuste conforme acordos com seus fornecedores.
+          Cobertura-alvo: Curva A = 90 dias, Curva B = 30 dias, produtos novos/sem histórico = 30 dias,
+          Curva C = reposição mínima ao zerar. Não desconta mercadoria em trânsito/comprada e ainda não recebida —
+          esse dado não existe hoje no sistema. O lead time e a grade mínima (MOQ) da Curva C ainda são estimados.
         </span>
       </div>
 
-      {/* Cards de resumo */}
+      {/* Cards de resumo por curva */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className={`card p-4 ${criticas > 0 ? 'border-error/40' : ''}`}>
-          <p className="text-xs text-text-muted mb-1">Rupturas críticas</p>
-          <p className={`text-2xl font-bold ${criticas > 0 ? 'text-error' : 'text-text-primary'}`}>
-            {criticas}
-          </p>
-          <p className="text-xs text-text-muted mt-0.5">estoque zero, produto vende</p>
-        </div>
-
-        <div className={`card p-4 ${alta > 0 ? 'border-warning/40' : ''}`}>
-          <p className="text-xs text-text-muted mb-1">Urgência alta</p>
-          <p className={`text-2xl font-bold ${alta > 0 ? 'text-warning' : 'text-text-primary'}`}>
-            {alta}
-          </p>
-          <p className="text-xs text-text-muted mt-0.5">cobertura &lt; lead time</p>
-        </div>
-
-        <div className="card p-4">
-          <p className="text-xs text-text-muted mb-1">Custo estimado</p>
-          <p className="text-2xl font-bold text-text-primary">
-            {formatCurrency(custoUrgente)}
-          </p>
-          <p className="text-xs text-text-muted mt-0.5">para repor críticos + altos</p>
-        </div>
-
-        <div className="card p-4">
-          <p className="text-xs text-text-muted mb-1">Produtos parados</p>
-          <p className="text-2xl font-bold text-text-primary">{parados}</p>
+        <div className="card p-4 border-error/30">
+          <p className="text-xs text-text-muted mb-1">Curva A — 90 dias</p>
+          <p className="text-2xl font-bold text-text-primary">{formatCurrency(summary.byCurve.A.estimatedCost)}</p>
           <p className="text-xs text-text-muted mt-0.5">
-            sem venda em 90 dias
-            {valorParado > 0 && (
-              <> · <span className="text-warning">{formatCurrency(valorParado)} imob.</span></>
-            )}
+            {summary.byCurve.A.skuWithSuggestionCount} SKUs com compra sugerida · {summary.byCurve.A.ruptureCount} em ruptura
           </p>
+        </div>
+
+        <div className="card p-4 border-warning/30">
+          <p className="text-xs text-text-muted mb-1">Curva B — 30 dias</p>
+          <p className="text-2xl font-bold text-text-primary">{formatCurrency(summary.byCurve.B.estimatedCost)}</p>
+          <p className="text-xs text-text-muted mt-0.5">
+            {summary.byCurve.B.skuWithSuggestionCount} SKUs com compra sugerida
+          </p>
+        </div>
+
+        <div className="card p-4">
+          <p className="text-xs text-text-muted mb-1">Curva C — mínimo</p>
+          <p className="text-2xl font-bold text-text-primary">{formatCurrency(summary.byCurve.C.estimatedCost)}</p>
+          <p className="text-xs text-text-muted mt-0.5">
+            {summary.byCurve.C.skuCount - summary.byCurve.C.skuWithSuggestionCount} SKUs sem reposição
+          </p>
+        </div>
+
+        <div className="card p-4 border-brand/30">
+          <p className="text-xs text-text-muted mb-1">Compra total recomendada</p>
+          <p className="text-2xl font-bold text-brand">{formatCurrency(summary.totalEstimatedCost)}</p>
+          <p className="text-xs text-text-muted mt-0.5">
+            {summary.totalSuggestedUnits} unidades · inclui {CURVE_LABELS.NEW} ({formatCurrency(summary.byCurve.NEW.estimatedCost)})
+          </p>
+        </div>
+      </div>
+
+      {/* Estoque atual x compra recomendada — apenas soma, não é projeção de vendas futuras */}
+      <div className="card p-4">
+        <p className="text-xs text-text-muted mb-2">
+          Estoque atual a custo + compra recomendada (não é projeção após vendas futuras — apenas soma dos dois valores)
+        </p>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <div>
+            <p className="text-[11px] text-text-muted">Estoque atual a custo</p>
+            <p className="text-lg font-semibold text-text-primary">{formatCurrency(summary.currentStockValueAtCost)}</p>
+          </div>
+          <span className="text-text-muted">+</span>
+          <div>
+            <p className="text-[11px] text-text-muted">Compra recomendada</p>
+            <p className="text-lg font-semibold text-text-primary">{formatCurrency(summary.totalEstimatedCost)}</p>
+          </div>
+          <span className="text-text-muted">=</span>
+          <div>
+            <p className="text-[11px] text-text-muted">Estoque teórico após compra</p>
+            <p className="text-lg font-semibold text-brand">{formatCurrency(summary.theoreticalStockValueAfterPurchase)}</p>
+          </div>
         </div>
       </div>
 

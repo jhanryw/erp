@@ -1,73 +1,55 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, Fragment } from 'react'
 import Link from 'next/link'
 import { Card, CardHeader } from '@/components/ui/card'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, ChevronDown, ChevronRight } from 'lucide-react'
+import {
+  CURVE_LABELS,
+  URGENCY_LABELS,
+  type PolicyCurve,
+  type PolicyUrgency,
+} from '@/lib/constants/purchasePolicy'
+import {
+  sortBySuggestedPriority,
+  type EnrichedPurchaseSuggestion,
+} from '@/services/purchaseSuggestions'
 
-export type PurchaseSuggestion = {
-  product_id: number
-  product_name: string
-  sku: string
-  product_variation_id: number
-  sku_variation: string
-  color: string | null
-  size: string | null
-  current_qty: number
-  qty_sold_30d: number
-  qty_sold_90d: number
-  daily_velocity: string
-  coverage_days: number | null
-  estimated_lead_time_days: number
-  min_stock_suggested: number
-  suggested_purchase_qty: number
-  recommended_supplier_id: number | null
-  recommended_supplier_name: string | null
-  recommended_avg_cost_per_unit: string | null
-  estimated_restock_cost: string
-  urgency: 'critica' | 'alta' | 'media' | 'baixa'
-  is_rupture: boolean
-  is_dead_stock: boolean
-  is_overstock: boolean
-  target_stock_days: number
-  margin_pct: number
-  selling_price: number
-  unit_cost_estimate: string
-  last_purchase_date?: string | null
-}
-
-const URGENCY_ORDER: Record<string, number> = { critica: 0, alta: 1, media: 2, baixa: 3 }
-
-const URGENCY_LABELS: Record<string, string> = {
-  critica: 'Crítica',
-  alta:    'Alta',
-  media:   'Média',
-  baixa:   'Baixa',
-}
-
-const URGENCY_VARIANTS: Record<string, 'error' | 'warning' | 'info' | 'default'> = {
+const URGENCY_VARIANTS: Record<PolicyUrgency, 'error' | 'warning' | 'info' | 'default' | 'success' | 'brand'> = {
   critica: 'error',
-  alta:    'warning',
-  media:   'info',
-  baixa:   'default',
+  alta: 'warning',
+  media: 'info',
+  baixa: 'default',
+  ok: 'success',
+  reposicao_minima: 'brand',
+  nao_repor: 'default',
+}
+
+const CURVE_VARIANTS: Record<PolicyCurve, 'error' | 'warning' | 'info' | 'default' | 'brand'> = {
+  A: 'error',
+  B: 'warning',
+  C: 'default',
+  NEW: 'info',
+  NO_ABC: 'default',
 }
 
 type FilterButtonProps = {
   active: boolean
   onClick: () => void
-  color?: 'critica' | 'alta' | 'media' | 'brand'
+  variant?: 'error' | 'warning' | 'info' | 'brand' | 'default'
   children: React.ReactNode
 }
 
-function FilterButton({ active, onClick, color = 'brand', children }: FilterButtonProps) {
+function FilterButton({ active, onClick, variant = 'default', children }: FilterButtonProps) {
   const activeClass =
-    color === 'critica' ? 'bg-error/15 border-error/50 text-error' :
-    color === 'alta'    ? 'bg-warning/15 border-warning/50 text-warning' :
-    color === 'media'   ? 'bg-info/15 border-info/50 text-info' :
-                          'bg-brand/15 border-brand/50 text-brand'
+    variant === 'error'   ? 'bg-error/15 border-error/50 text-error' :
+    variant === 'warning' ? 'bg-warning/15 border-warning/50 text-warning' :
+    variant === 'info'    ? 'bg-info/15 border-info/50 text-info' :
+    variant === 'brand'   ? 'bg-brand/15 border-brand/50 text-brand' :
+                             'bg-bg-overlay border-border text-text-secondary'
   return (
     <button
       onClick={onClick}
@@ -80,60 +62,83 @@ function FilterButton({ active, onClick, color = 'brand', children }: FilterButt
   )
 }
 
-type SituacaoKey = 'ruptura' | 'parado' | 'overstock'
-
-const SITUACAO_LABELS: Record<SituacaoKey, string> = {
-  ruptura:  'Ruptura',
-  parado:   'Parado',
-  overstock: 'Excesso',
+function formatDays(days: number | null): string {
+  if (days === null) return '—'
+  return `${Math.round(days)}d`
 }
 
-export function ComprasTable({ suggestions }: { suggestions: PurchaseSuggestion[] }) {
-  const [filterUrgency,  setFilterUrgency]  = useState('all')
-  const [filterSituacao, setFilterSituacao] = useState<SituacaoKey | 'all'>('all')
+function coverageColor(days: number | null, targetDays: number | null): string {
+  if (days === null) return 'text-text-muted'
+  if (targetDays === null) return 'text-text-primary' // Curva C não tem target de dias
+  if (days <= targetDays * 0.25) return 'text-error'
+  if (days <= targetDays * 0.6) return 'text-warning'
+  return 'text-text-primary'
+}
+
+export function ComprasTable({ suggestions }: { suggestions: EnrichedPurchaseSuggestion[] }) {
+  const [filterCurve, setFilterCurve] = useState<PolicyCurve | 'all'>('all')
+  const [filterUrgency, setFilterUrgency] = useState<PolicyUrgency | 'all'>('all')
   const [filterSupplier, setFilterSupplier] = useState('all')
-  const [search,         setSearch]         = useState('')
+  const [filterCategory, setFilterCategory] = useState('all')
+  const [onlyBuyNow, setOnlyBuyNow] = useState(false)
+  const [search, setSearch] = useState('')
+  const [expanded, setExpanded] = useState<Set<number>>(new Set())
+
+  function toggleExpanded(id: number) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const supplierOptions = useMemo(() => {
     const names = suggestions
-      .map(s => s.recommended_supplier_name)
-      .filter((n): n is string => n !== null && n !== '')
+      .map((s) => s.recommendedSupplierName)
+      .filter((n): n is string => !!n)
+    return [...new Set(names)].sort()
+  }, [suggestions])
+
+  const categoryOptions = useMemo(() => {
+    const names = suggestions
+      .map((s) => s.categoryName)
+      .filter((n): n is string => !!n)
     return [...new Set(names)].sort()
   }, [suggestions])
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return suggestions
-      .filter(s => filterUrgency === 'all' || s.urgency === filterUrgency)
-      .filter(s => {
-        if (filterSituacao === 'all')      return true
-        if (filterSituacao === 'ruptura')  return s.is_rupture
-        if (filterSituacao === 'parado')   return s.is_dead_stock
-        if (filterSituacao === 'overstock') return s.is_overstock
-        return true
-      })
-      .filter(s => filterSupplier === 'all' || s.recommended_supplier_name === filterSupplier)
-      .filter(s => !q ||
-        s.product_name.toLowerCase().includes(q) ||
-        s.sku_variation.toLowerCase().includes(q) ||
-        s.sku.toLowerCase().includes(q)
+    const rows = suggestions
+      .filter((s) => filterCurve === 'all' || s.policyCurve === filterCurve)
+      .filter((s) => filterUrgency === 'all' || s.urgency === filterUrgency)
+      .filter((s) => filterSupplier === 'all' || s.recommendedSupplierName === filterSupplier)
+      .filter((s) => filterCategory === 'all' || s.categoryName === filterCategory)
+      .filter((s) => !onlyBuyNow || s.suggestedQty > 0)
+      .filter(
+        (s) =>
+          !q ||
+          s.productName.toLowerCase().includes(q) ||
+          s.skuVariation.toLowerCase().includes(q) ||
+          s.sku.toLowerCase().includes(q),
       )
-      .sort((a, b) => {
-        const u = (URGENCY_ORDER[a.urgency] ?? 9) - (URGENCY_ORDER[b.urgency] ?? 9)
-        if (u !== 0) return u
-        if (a.coverage_days === null) return 1
-        if (b.coverage_days === null) return -1
-        return a.coverage_days - b.coverage_days
-      })
-  }, [suggestions, filterUrgency, filterSituacao, filterSupplier, search])
+    return sortBySuggestedPriority(rows)
+  }, [suggestions, filterCurve, filterUrgency, filterSupplier, filterCategory, onlyBuyNow, search])
 
-  const hasFilters = filterUrgency !== 'all' || filterSituacao !== 'all' ||
-    filterSupplier !== 'all' || search !== ''
+  const hasFilters =
+    filterCurve !== 'all' ||
+    filterUrgency !== 'all' ||
+    filterSupplier !== 'all' ||
+    filterCategory !== 'all' ||
+    onlyBuyNow ||
+    search !== ''
 
   function clearFilters() {
+    setFilterCurve('all')
     setFilterUrgency('all')
-    setFilterSituacao('all')
     setFilterSupplier('all')
+    setFilterCategory('all')
+    setOnlyBuyNow(false)
     setSearch('')
   }
 
@@ -150,33 +155,43 @@ export function ComprasTable({ suggestions }: { suggestions: PurchaseSuggestion[
         </div>
 
         <div className="flex flex-col gap-3 mt-3">
-          {/* Busca */}
-          <input
-            type="text"
-            placeholder="Buscar por produto ou SKU…"
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            className="input-base text-sm w-full sm:w-72"
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              placeholder="Buscar por produto ou SKU…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="input-base text-sm w-full sm:w-72"
+            />
+            <FilterButton active={onlyBuyNow} onClick={() => setOnlyBuyNow((v) => !v)} variant="brand">
+              Só comprar agora
+            </FilterButton>
+          </div>
 
           <div className="flex flex-wrap gap-x-5 gap-y-2">
+            {/* Curva */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-text-muted">Curva:</span>
+              <FilterButton active={filterCurve === 'all'} onClick={() => setFilterCurve('all')}>Todas</FilterButton>
+              <FilterButton active={filterCurve === 'A'} onClick={() => setFilterCurve('A')} variant="error">A</FilterButton>
+              <FilterButton active={filterCurve === 'B'} onClick={() => setFilterCurve('B')} variant="warning">B</FilterButton>
+              <FilterButton active={filterCurve === 'C'} onClick={() => setFilterCurve('C')}>C</FilterButton>
+              <FilterButton active={filterCurve === 'NEW'} onClick={() => setFilterCurve('NEW')} variant="info">Novo</FilterButton>
+              <FilterButton active={filterCurve === 'NO_ABC'} onClick={() => setFilterCurve('NO_ABC')}>Sem ABC</FilterButton>
+            </div>
+
             {/* Urgência */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-xs text-text-muted">Urgência:</span>
-              <FilterButton active={filterUrgency === 'all'}     onClick={() => setFilterUrgency('all')}>Todas</FilterButton>
-              <FilterButton active={filterUrgency === 'critica'} onClick={() => setFilterUrgency('critica')} color="critica">Crítica</FilterButton>
-              <FilterButton active={filterUrgency === 'alta'}    onClick={() => setFilterUrgency('alta')}    color="alta">Alta</FilterButton>
-              <FilterButton active={filterUrgency === 'media'}   onClick={() => setFilterUrgency('media')}   color="media">Média</FilterButton>
-              <FilterButton active={filterUrgency === 'baixa'}   onClick={() => setFilterUrgency('baixa')}>Baixa</FilterButton>
-            </div>
-
-            {/* Situação */}
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-text-muted">Situação:</span>
-              <FilterButton active={filterSituacao === 'all'}      onClick={() => setFilterSituacao('all')}>Todas</FilterButton>
-              {(['ruptura', 'parado', 'overstock'] as SituacaoKey[]).map(k => (
-                <FilterButton key={k} active={filterSituacao === k} onClick={() => setFilterSituacao(k)}>
-                  {SITUACAO_LABELS[k]}
+              <FilterButton active={filterUrgency === 'all'} onClick={() => setFilterUrgency('all')}>Todas</FilterButton>
+              {(['critica', 'alta', 'media', 'baixa'] as PolicyUrgency[]).map((u) => (
+                <FilterButton
+                  key={u}
+                  active={filterUrgency === u}
+                  onClick={() => setFilterUrgency(u)}
+                  variant={URGENCY_VARIANTS[u] as 'error' | 'warning' | 'info' | 'default'}
+                >
+                  {URGENCY_LABELS[u]}
                 </FilterButton>
               ))}
             </div>
@@ -187,11 +202,28 @@ export function ComprasTable({ suggestions }: { suggestions: PurchaseSuggestion[
                 <span className="text-xs text-text-muted">Fornecedor:</span>
                 <select
                   value={filterSupplier}
-                  onChange={e => setFilterSupplier(e.target.value)}
+                  onChange={(e) => setFilterSupplier(e.target.value)}
                   className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-surface text-text-secondary focus:border-brand focus:outline-none cursor-pointer"
                 >
                   <option value="all">Todos</option>
-                  {supplierOptions.map(name => (
+                  {supplierOptions.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Categoria */}
+            {categoryOptions.length > 0 && (
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-text-muted">Categoria:</span>
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="text-xs px-2.5 py-1 rounded-md border border-border bg-bg-surface text-text-secondary focus:border-brand focus:outline-none cursor-pointer"
+                >
+                  <option value="all">Todas</option>
+                  {categoryOptions.map((name) => (
                     <option key={name} value={name}>{name}</option>
                   ))}
                 </select>
@@ -216,133 +248,197 @@ export function ComprasTable({ suggestions }: { suggestions: PurchaseSuggestion[
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Urgência</TableHead>
+                <TableHead />
+                <TableHead>Prioridade</TableHead>
+                <TableHead>Curva</TableHead>
                 <TableHead>Produto / Variação</TableHead>
                 <TableHead align="right">Estoque</TableHead>
-                <TableHead align="right">Vendas 30d</TableHead>
-                <TableHead align="right">Vendas 90d</TableHead>
                 <TableHead align="right">Cobertura</TableHead>
+                <TableHead align="right">Cobertura-alvo</TableHead>
                 <TableHead align="right">Qtd sugerida</TableHead>
                 <TableHead align="right">Custo estimado</TableHead>
                 <TableHead>Fornecedor recomendado</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filtered.map(s => (
-                <TableRow key={`${s.product_variation_id}`}>
-                  {/* Urgência */}
-                  <TableCell>
-                    <Badge variant={URGENCY_VARIANTS[s.urgency] ?? 'default'} size="sm">
-                      {URGENCY_LABELS[s.urgency] ?? s.urgency}
-                    </Badge>
-                  </TableCell>
+              {filtered.map((s) => {
+                const isExpanded = expanded.has(s.productVariationId)
+                return (
+                  <Fragment key={s.productVariationId}>
+                    <TableRow>
+                      <TableCell>
+                        <button
+                          onClick={() => toggleExpanded(s.productVariationId)}
+                          className="text-text-muted hover:text-brand transition-colors"
+                          title="Ver detalhes"
+                        >
+                          {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                        </button>
+                      </TableCell>
 
-                  {/* Produto / Variação */}
-                  <TableCell>
-                    <div className="flex items-start gap-1.5">
-                      <div>
-                        <span className="text-sm font-medium text-text-primary block leading-tight">
-                          {s.product_name}
-                        </span>
-                        <span className="text-xs text-text-muted">
-                          {s.sku_variation}
-                          {s.color && ` · ${s.color}`}
-                          {s.size  && ` · ${s.size}`}
-                        </span>
-                      </div>
-                      <Link
-                        href={`/produtos/${s.product_id}`}
-                        className="shrink-0 mt-0.5 text-text-muted hover:text-brand transition-colors"
-                        title="Ver produto"
-                      >
-                        <ExternalLink className="w-3 h-3" />
-                      </Link>
-                    </div>
-                  </TableCell>
+                      {/* Prioridade / Urgência */}
+                      <TableCell>
+                        <Badge variant={URGENCY_VARIANTS[s.urgency]} size="sm">
+                          {URGENCY_LABELS[s.urgency]}
+                        </Badge>
+                      </TableCell>
 
-                  {/* Estoque atual */}
-                  <TableCell align="right">
-                    <span className={`text-sm font-medium ${s.current_qty === 0 ? 'text-error' : 'text-text-primary'}`}>
-                      {s.current_qty}
-                    </span>
-                  </TableCell>
+                      {/* Curva */}
+                      <TableCell>
+                        <Badge variant={CURVE_VARIANTS[s.policyCurve]} size="sm">
+                          {CURVE_LABELS[s.policyCurve]}
+                        </Badge>
+                      </TableCell>
 
-                  {/* Vendas 30d */}
-                  <TableCell align="right" muted>
-                    {s.qty_sold_30d}
-                  </TableCell>
-
-                  {/* Vendas 90d */}
-                  <TableCell align="right" muted>
-                    {s.qty_sold_90d}
-                  </TableCell>
-
-                  {/* Cobertura em dias */}
-                  <TableCell align="right">
-                    {s.coverage_days === null ? (
-                      <span className="text-xs text-text-muted">—</span>
-                    ) : s.coverage_days === 0 ? (
-                      <span className="text-sm font-medium text-error">0d</span>
-                    ) : (
-                      <span className={`text-sm font-medium ${
-                        s.coverage_days < s.estimated_lead_time_days     ? 'text-error' :
-                        s.coverage_days < s.estimated_lead_time_days * 2 ? 'text-warning' :
-                        'text-text-primary'
-                      }`}>
-                        {s.coverage_days}d
-                      </span>
-                    )}
-                  </TableCell>
-
-                  {/* Qtd sugerida */}
-                  <TableCell align="right">
-                    <span className={`text-sm font-semibold ${s.suggested_purchase_qty > 0 ? 'text-brand' : 'text-text-muted'}`}>
-                      {s.suggested_purchase_qty > 0 ? s.suggested_purchase_qty : '—'}
-                    </span>
-                  </TableCell>
-
-                  {/* Custo estimado */}
-                  <TableCell align="right">
-                    <span className="text-sm text-text-primary">
-                      {parseFloat(s.estimated_restock_cost) > 0
-                        ? formatCurrency(parseFloat(s.estimated_restock_cost))
-                        : <span className="text-text-muted">—</span>
-                      }
-                    </span>
-                  </TableCell>
-
-                  {/* Fornecedor recomendado */}
-                  <TableCell>
-                    {s.recommended_supplier_name ? (
-                      <div className="flex items-start gap-1.5">
-                        <div>
-                          <span className="text-sm text-text-primary block leading-tight">
-                            {s.recommended_supplier_name}
-                          </span>
-                          {s.recommended_avg_cost_per_unit && (
-                            <span className="text-xs text-text-muted">
-                              {formatCurrency(parseFloat(s.recommended_avg_cost_per_unit))}/un
+                      {/* Produto / Variação */}
+                      <TableCell>
+                        <div className="flex items-start gap-1.5">
+                          <div>
+                            <span className="text-sm font-medium text-text-primary block leading-tight">
+                              {s.productName}
                             </span>
-                          )}
-                        </div>
-                        {s.recommended_supplier_id && (
+                            <span className="text-xs text-text-muted">
+                              {s.skuVariation}
+                              {s.color && ` · ${s.color}`}
+                              {s.size && ` · ${s.size}`}
+                            </span>
+                          </div>
                           <Link
-                            href={`/fornecedores/${s.recommended_supplier_id}`}
+                            href={`/produtos/${s.productId}`}
                             className="shrink-0 mt-0.5 text-text-muted hover:text-brand transition-colors"
-                            title="Ver fornecedor"
+                            title="Ver produto"
                           >
                             <ExternalLink className="w-3 h-3" />
                           </Link>
+                        </div>
+                      </TableCell>
+
+                      {/* Estoque atual */}
+                      <TableCell align="right">
+                        <span className={`text-sm font-medium ${s.availableStock === 0 ? 'text-error' : 'text-text-primary'}`}>
+                          {s.availableStock}
+                        </span>
+                      </TableCell>
+
+                      {/* Cobertura atual */}
+                      <TableCell align="right">
+                        <span className={`text-sm font-medium ${coverageColor(s.coverageDays, s.targetDays)}`}>
+                          {formatDays(s.coverageDays)}
+                        </span>
+                      </TableCell>
+
+                      {/* Cobertura-alvo */}
+                      <TableCell align="right" muted>
+                        {s.policyCurve === 'C' ? 'Mínimo' : `${s.targetDays}d`}
+                      </TableCell>
+
+                      {/* Qtd sugerida */}
+                      <TableCell align="right">
+                        <span className={`text-sm font-semibold ${s.suggestedQty > 0 ? 'text-brand' : 'text-text-muted'}`}>
+                          {s.suggestedQty > 0 ? s.suggestedQty : '—'}
+                        </span>
+                      </TableCell>
+
+                      {/* Custo estimado */}
+                      <TableCell align="right">
+                        <span className={`text-sm ${s.estimatedCost > 0 ? 'font-semibold text-text-primary' : 'text-text-muted'}`}>
+                          {s.estimatedCost > 0 ? formatCurrency(s.estimatedCost) : '—'}
+                        </span>
+                      </TableCell>
+
+                      {/* Fornecedor recomendado */}
+                      <TableCell>
+                        {s.recommendedSupplierName ? (
+                          <div className="flex items-start gap-1.5">
+                            <div>
+                              <span className="text-sm text-text-primary block leading-tight">
+                                {s.recommendedSupplierName}
+                              </span>
+                              {s.recommendedAvgCostPerUnit !== null && (
+                                <span className="text-xs text-text-muted">
+                                  {formatCurrency(s.recommendedAvgCostPerUnit)}/un
+                                </span>
+                              )}
+                            </div>
+                            {s.recommendedSupplierId && (
+                              <Link
+                                href={`/fornecedores/${s.recommendedSupplierId}`}
+                                className="shrink-0 mt-0.5 text-text-muted hover:text-brand transition-colors"
+                                title="Ver fornecedor"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </Link>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-text-muted italic">Sem fornecedor recente (180d)</span>
                         )}
-                      </div>
-                    ) : (
-                      <span className="text-xs text-text-muted italic">
-                        Sem fornecedor recente (180d)
-                      </span>
+                      </TableCell>
+                    </TableRow>
+
+                    {isExpanded && (
+                      <TableRow>
+                        <TableCell colSpan={10}>
+                          <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-x-6 gap-y-2 py-1 text-xs">
+                            <div>
+                              <p className="text-text-muted">Vendas 30d</p>
+                              <p className="text-text-primary font-medium">{s.qtySold30d}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">Vendas 90d</p>
+                              <p className="text-text-primary font-medium">{s.qtySold90d}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">VMD 30d</p>
+                              <p className="text-text-primary font-medium">{s.vmd30.toFixed(3)}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">VMD 90d</p>
+                              <p className="text-text-primary font-medium">{s.vmd90.toFixed(3)}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">VMD projetada</p>
+                              <p className="text-text-primary font-medium">{s.vmdProjetada.toFixed(3)}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">Estoque-alvo</p>
+                              <p className="text-text-primary font-medium">{s.targetStock ?? '—'}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">Custo unitário</p>
+                              <p className="text-text-primary font-medium">{formatCurrency(s.unitCostEstimate)}</p>
+                            </div>
+                            <div>
+                              <p className="text-text-muted">Cobertura pós-compra</p>
+                              <p className="text-text-primary font-medium">{formatDays(s.postPurchaseCoverageDays)}</p>
+                            </div>
+                            {s.categoryName && (
+                              <div>
+                                <p className="text-text-muted">Categoria</p>
+                                <p className="text-text-primary font-medium">{s.categoryName}</p>
+                              </div>
+                            )}
+                            {s.isNewProduct && (
+                              <div>
+                                <p className="text-text-muted">Motivo "Novo"</p>
+                                <p className="text-text-primary font-medium">SKU com menos de 30 dias</p>
+                              </div>
+                            )}
+                            {s.policyCurve === 'NO_ABC' && (
+                              <div>
+                                <p className="text-text-muted">Motivo "Sem ABC"</p>
+                                <p className="text-text-primary font-medium">
+                                  SKU com 30+ dias sem receita registrada na Curva ABC — política conservadora
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     )}
-                  </TableCell>
-                </TableRow>
-              ))}
+                  </Fragment>
+                )
+              })}
             </TableBody>
           </Table>
         </div>
