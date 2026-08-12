@@ -5,8 +5,6 @@ import { toast } from 'sonner'
 import Image from 'next/image'
 import { ImagePlus, ImageOff, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useUserContext } from '@/components/layout/user-context'
-import { hasMinRole } from '@/types/roles'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 // Espelha o contrato JSON de GET /api/media?entity_type=&entity_id= — sem
@@ -30,12 +28,10 @@ const ACCEPTED_MIME = 'image/jpeg,image/png,image/webp'
 // de rede e seu próprio estado.
 
 export function ProductMediaManager({ productId }: { productId: number }) {
-  // Só esconde os botões de ação — é UX, não autorização. A permissão real
-  // continua sendo o backend (requireRole/hasMinRole em POST/DELETE de
-  // usages); se alguém forçar a chamada via DevTools, o 403 do servidor
-  // continua acontecendo normalmente.
-  const { userRole } = useUserContext()
-  const canManage = hasMinRole(userRole, 'gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Produtos não está bloqueado: gerenciar mídia libera para todos os roles
+  // (backend em ROLE_BY_ENTITY['product'] ajustado para 'usuario' também).
+  const canManage = true
 
   const [items, setItems] = useState<ResolvedMedia[]>([])
   const [loading, setLoading] = useState(true)

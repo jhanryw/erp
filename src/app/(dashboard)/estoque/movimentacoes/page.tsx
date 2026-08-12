@@ -1,7 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
-import { hasMinRole } from '@/types/roles'
 import Link from 'next/link'
 import { ArrowLeft, ArrowDownToLine } from 'lucide-react'
 import { Card, CardHeader } from '@/components/ui/card'
@@ -48,13 +47,12 @@ async function getLotes(companyId: number) {
 }
 
 export default async function MovimentacoesPage() {
-  // Custo por lote é sensível (mesma proteção de unit_cost) — página fica
-  // aberta para usuario (histórico operacional de entradas), mas colunas de
-  // custo só aparecem para gerente/admin.
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Estoque não está bloqueado: colunas de custo voltam a aparecer para
+  // todos os roles.
   const supabase = createClient()
   const { data: { user: authUser } } = await supabase.auth.getUser()
   const viewerProfile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
-  const isManager = hasMinRole(viewerProfile?.role ?? 'usuario', 'gerente')
 
   // company_id sempre da sessão autenticada (nunca de parâmetro do cliente).
   // Sem empresa vinculada = nenhum lote listado (fail closed).
@@ -94,8 +92,8 @@ export default async function MovimentacoesPage() {
                   <TableHead>Tipo</TableHead>
                   <TableHead>Fornecedor</TableHead>
                   <TableHead align="right">Qtd</TableHead>
-                  {isManager && <TableHead align="right">Custo/Un</TableHead>}
-                  {isManager && <TableHead align="right">Total Lote</TableHead>}
+                  <TableHead align="right">Custo/Un</TableHead>
+                  <TableHead align="right">Total Lote</TableHead>
                   <TableHead>Data</TableHead>
                 </TableRow>
               </TableHeader>
@@ -137,16 +135,12 @@ export default async function MovimentacoesPage() {
                           <span className="text-sm font-medium">{item.quantity_original}</span>
                         </div>
                       </TableCell>
-                      {isManager && (
-                        <TableCell align="right" muted>
-                          {formatCurrency(item.cost_per_unit)}
-                        </TableCell>
-                      )}
-                      {isManager && (
-                        <TableCell align="right" className="font-medium">
-                          {formatCurrency(item.total_lot_cost)}
-                        </TableCell>
-                      )}
+                      <TableCell align="right" muted>
+                        {formatCurrency(item.cost_per_unit)}
+                      </TableCell>
+                      <TableCell align="right" className="font-medium">
+                        {formatCurrency(item.total_lot_cost)}
+                      </TableCell>
                       <TableCell muted>{formatDate(item.entry_date)}</TableCell>
                     </TableRow>
                   )

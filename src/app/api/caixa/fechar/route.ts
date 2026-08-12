@@ -9,7 +9,8 @@ import { z } from 'zod'
 
 // GET /api/caixa/fechar?session_id=X — prévia do expected_cash antes de fechar
 export async function GET(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   const { searchParams } = new URL(request.url)
@@ -95,7 +96,8 @@ const schema = z.object({
 
 // POST /api/caixa/fechar — restrito a gerente/admin
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

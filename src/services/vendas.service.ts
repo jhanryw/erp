@@ -265,32 +265,35 @@ export function checkSalePrices(items: SaleItem[]): { ok: true; warnings: string
 }
 
 /**
- * Verifica se `usuario` pode atribuir a venda ao `responsible_seller_id` informado.
+ * Verifica se `responsible_seller_id` é uma atribuição válida para a venda.
  *
- * Regra: `usuario` só pode se atribuir a si mesma (sellers.user_id = seu próprio
- * auth id). `gerente`/`admin` continuam podendo escolher qualquer vendedor da
- * empresa — nenhuma mudança de comportamento para essas roles.
+ * Regra atual (ajustada — Vendas/PDV não é módulo bloqueado, usuario = admin
+ * aqui): QUALQUER role pode atribuir a venda a QUALQUER vendedor ativo da
+ * PRÓPRIA empresa. responsible_seller_id é um dado operacional da venda
+ * (quem vendeu de fato), não a identidade de quem está executando a
+ * operação — essa identidade continua vindo exclusivamente da sessão
+ * (user.id em requireRole, nunca deste campo) e é o que fica registrado
+ * como autor da venda/auditoria.
  *
- * Antes desta checagem, GET /api/sellers já devolvia a lista completa de
- * vendedores da empresa para qualquer `usuario`, e POST /api/vendas aceitava
- * qualquer responsible_seller_id da lista sem checar se pertencia a quem
- * estava logado — a única trava era no frontend (SellerPicker), nunca no servidor.
+ * O que continua bloqueado, para todos os roles: atribuir a um vendedor
+ * de OUTRA empresa (cross-tenant) ou a um vendedor inexistente/inativo.
+ *
+ * Antes (Fase 1): restringia `usuario` a se atribuir só a si mesma
+ * (sellers.user_id === userId). Essa trava foi removida por ser regressão
+ * em relação à regra de produto atual — ver correção de
+ * "seleção de vendedor responsável no PDV".
  */
 export async function assertResponsibleSellerAllowed(
   responsibleSellerId: number,
-  userId: string,
-  userRole: string,
   companyId: number
 ): Promise<ServiceOutcome> {
-  if (userRole !== 'usuario') return success(undefined)
-
   const admin = createAdminClient()
   const { data: seller, error } = await admin
     .from('sellers')
-    .select('id, user_id, company_id')
+    .select('id, company_id, active')
     .eq('id', responsibleSellerId)
     .maybeSingle() as unknown as {
-      data: { id: number; user_id: string | null; company_id: number } | null
+      data: { id: number; company_id: number; active: boolean } | null
       error: { message: string } | null
     }
 
@@ -298,8 +301,8 @@ export async function assertResponsibleSellerAllowed(
   if (!seller || seller.company_id !== companyId) {
     return failure('Vendedor responsável inválido.', 400)
   }
-  if (seller.user_id !== userId) {
-    return failure('Você só pode registrar a venda em seu próprio nome.', 403)
+  if (!seller.active) {
+    return failure('Vendedor responsável inativo.', 400)
   }
 
   return success(undefined)

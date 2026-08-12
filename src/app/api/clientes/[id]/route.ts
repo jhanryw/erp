@@ -74,8 +74,8 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 // ─── DELETE /api/clientes/[id] ────────────────────────────────────────────────
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  // Exclusão de cliente com histórico — exige gerente
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   const customerId = Number(params.id)

@@ -62,7 +62,8 @@ export async function GET(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
@@ -115,7 +116,8 @@ export async function PUT(
   request: Request,
   { params }: { params: { id: string } }
 ) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
@@ -513,7 +515,8 @@ export async function DELETE(
   _req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { user, response: unauth } = await requireRole('admin')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

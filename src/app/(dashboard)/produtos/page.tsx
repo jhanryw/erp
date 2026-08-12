@@ -7,7 +7,6 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
 import { listPrimaryMediaByEntities } from '@/services/media.service'
-import { hasMinRole } from '@/types/roles'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader } from '@/components/ui/card'
@@ -122,17 +121,14 @@ export default async function ProdutosPage({
   const serverClient = createClient()
   const { data: { user } } = await serverClient.auth.getUser()
   const profile = user ? await getUserProfile(user.id, user.email) : null
-  const isManager = hasMinRole(profile?.role ?? 'usuario', 'gerente')
 
-  if (isManager) {
-    const products = await getProductsFull(search)
-    const withImages = await resolveDisplayUrls(products, profile?.company_id ?? null)
-    return <ProdutosFullView products={withImages} search={search} />
-  }
-
-  const products = await getProductsLite(search)
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Produtos não está bloqueado, então custo/margem passam a aparecer para
+  // todos os roles (a validação server-side de venda continua autoritativa
+  // e nunca confiou nesse valor — ver resolveAuthoritativeItemCosts).
+  const products = await getProductsFull(search)
   const withImages = await resolveDisplayUrls(products, profile?.company_id ?? null)
-  return <ProdutosLiteView products={withImages} search={search} />
+  return <ProdutosFullView products={withImages} search={search} />
 }
 
 // ─── Visão completa (admin/gerente) ────────────────────────────────────────────

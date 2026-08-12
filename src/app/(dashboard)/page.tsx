@@ -1,13 +1,10 @@
-import { ShoppingCart, TrendingUp, Users, Package, BarChart2, AlertTriangle } from 'lucide-react'
+import { ShoppingCart, TrendingUp, Users, Package, BarChart2 } from 'lucide-react'
 import Link from 'next/link'
 
 import { createClient } from '@/lib/supabase/server'
-import { createAdminClient } from '@/lib/supabase/admin'
 import { getUserProfile } from '@/lib/auth/getProfile'
 import { getDashboardData } from '@/services/dashboard'
 import { getRevenueTrend } from '@/services/revenueTrend'
-import { getSellerDashboardData } from '@/services/sellerDashboard'
-import { SellerDashboard } from '@/app/(dashboard)/_components/seller-dashboard'
 import { StatCard } from '@/components/ui/stat-card'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -82,55 +79,25 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
   const profile = user ? await getUserProfile(user.id, user.email) : null
   const role = profile?.role ?? 'usuario'
 
-  // ── Bloco exclusivo role=usuario ─────────────────────────────────────────
-  // usuario NUNCA pode sair deste bloco sem um return explícito.
-  // Nenhum caminho aqui pode cair no getDashboardData abaixo.
-  if (role === 'usuario') {
-    if (!user || !profile?.company_id) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 text-center">
-          <AlertTriangle className="h-8 w-8 text-destructive" />
-          <h2 className="text-lg font-semibold">Sessão inválida</h2>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            Não foi possível identificar sua conta. Faça logout e entre novamente.
-          </p>
-        </div>
-      )
-    }
-
-    const admin = createAdminClient()
-    const { data: sellerRow } = await (admin as any)
-      .from('sellers')
-      .select('id, name')
-      .eq('user_id', user.id)
-      .eq('company_id', profile.company_id)
-      .eq('active', true)
-      .maybeSingle() as unknown as { data: { id: number; name: string } | null }
-
-    if (!sellerRow) {
-      return (
-        <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 text-center">
-          <AlertTriangle className="h-8 w-8 text-yellow-500" />
-          <h2 className="text-lg font-semibold">Vendedor não configurado</h2>
-          <p className="text-sm text-muted-foreground max-w-sm">
-            Sua conta ainda não está vinculada a um vendedor.
-            Fale com um administrador para configurar o acesso.
-          </p>
-        </div>
-      )
-    }
-
-    // Dashboard da vendedora sempre mostra apenas hoje — ignora range da URL
-    const todayStr = brazilDate()
-    const sellerData = await getSellerDashboardData(
-      sellerRow.id, sellerRow.name, profile.company_id, todayStr, todayStr,
+  if (!profile?.company_id) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[40vh] gap-4 text-center">
+        <h2 className="text-lg font-semibold">Sessão inválida</h2>
+        <p className="text-sm text-muted-foreground max-w-sm">
+          Não foi possível identificar sua empresa. Faça logout e entre novamente.
+        </p>
+      </div>
     )
-    return <SellerDashboard data={sellerData} />
   }
 
-  // ── Dashboard gerente/admin — role=usuario nunca chega aqui ──────────────
-
-  const data = await getDashboardData(role, dateFrom, dateTo)
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Dashboard não está bloqueado: usuario vê o mesmo dashboard que
+  // gerente/admin — mesmos indicadores, mesma margem, sem versão "reduzida
+  // de vendedor". company_id vem sempre da sessão (nunca do cliente);
+  // getDashboardData() usa esse company_id para isolar tenant em toda
+  // consulta (inclusive nas materialized views, que ganharam a coluna em
+  // 20260812_add_company_id_dashboard_mvs.sql).
+  const data = await getDashboardData(profile.company_id, dateFrom, dateTo)
 
   // Série de tendência (MM7/MM30) é independente do range da página: busca
   // o histórico completo da empresa e o próprio gráfico recorta a
@@ -195,7 +162,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
           icon={<Users className="h-4 w-4" />}
         />
 
-        {data.showFinancials && data.period.grossMarginPct !== null ? (
+        {data.period.grossMarginPct !== null ? (
           <StatCard
             title="Margem Bruta"
             value={`${data.period.grossMarginPct.toFixed(1)}%`}

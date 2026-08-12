@@ -5,7 +5,8 @@ import { requireRole } from '@/lib/supabase/session'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ products: [] })

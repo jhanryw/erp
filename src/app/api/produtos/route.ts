@@ -54,7 +54,8 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

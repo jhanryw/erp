@@ -2,7 +2,8 @@ export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requirePageRole } from '@/lib/auth/requirePageRole'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet, ChevronRight } from 'lucide-react'
@@ -48,8 +49,12 @@ async function getSessions(companyId: number): Promise<Session[]> {
 }
 
 export default async function HistoricoCaixaPage() {
-  const profile = await requirePageRole('gerente')
-  const sessions = await getSessions(profile.company_id!)
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Caixa não está bloqueado: histórico liberado para todos os roles.
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const sessions = profile?.company_id ? await getSessions(profile.company_id) : []
   const closed   = sessions.filter((s) => s.status === 'closed')
 
   return (

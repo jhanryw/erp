@@ -12,9 +12,11 @@ const schema = z.object({
   reason:     z.string().min(1, 'Motivo obrigatório'),
 })
 
-// POST /api/caixa/reabrir — restrito a admin
+// POST /api/caixa/reabrir
+// Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+// Caixa não está bloqueado: reabertura liberada para todos os roles.
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

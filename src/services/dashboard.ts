@@ -1,6 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import type { AppRole } from '@/types/roles'
-import { hasMinRole } from '@/types/roles'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
 import { ORIGIN_LABELS } from '@/lib/constants/origins'
 export { ORIGIN_LABELS, ORIGIN_COLORS, ALL_ORIGINS } from '@/lib/constants/origins'
@@ -62,19 +60,27 @@ export interface DashboardData {
   sellerBreakdown: SellerStat[]
   topProducts: TopProduct[]
   stockAlerts: StockAlert[]
-  showFinancials: boolean
   dateRange: { from: string; to: string }
 }
 
 // Consulta tabelas base diretamente — sem depender de materialized views
 // para garantir dados sempre atualizados.
+//
+// Tenant isolation: companyId é OBRIGATÓRIO e deve vir sempre da sessão
+// autenticada (profile.company_id em quem chama), nunca de input do
+// cliente. Toda consulta abaixo filtra por company_id — inclusive
+// mv_product_performance e mv_stock_status, que passaram a ter a coluna
+// via 20260812_add_company_id_dashboard_mvs.sql (antes eram agregados
+// globais sem isolamento nenhum).
+//
+// Conteúdo do Dashboard não depende mais de role (Dashboard não é módulo
+// bloqueado — usuario = admin aqui). showFinancials foi removido.
 export async function getDashboardData(
-  role: AppRole,
+  companyId: number,
   dateFrom?: string,
   dateTo?: string,
 ): Promise<DashboardData> {
   const supabase = createAdminClient()
-  const showFinancials = hasMinRole(role, 'gerente')
 
   const today = brazilDate()
   const from  = dateFrom ?? brazilSubDays(29)
@@ -96,6 +102,7 @@ export async function getDashboardData(
     supabase
       .from('sales')
       .select('id, total')
+      .eq('company_id', companyId)
       .eq('sale_date', today)
       .not('status', 'in', '("cancelled","returned")')
     ,
@@ -109,6 +116,7 @@ export async function getDashboardData(
         total,
         sale_items (gross_profit)
       `)
+      .eq('company_id', companyId)
       .gte('sale_date', from)
       .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
@@ -118,6 +126,7 @@ export async function getDashboardData(
     supabase
       .from('sales')
       .select('sale_date, total')
+      .eq('company_id', companyId)
       .gte('sale_date', from)
       .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
@@ -128,6 +137,7 @@ export async function getDashboardData(
     supabase
       .from('sales')
       .select('sale_date, sale_origin, total')
+      .eq('company_id', companyId)
       .gte('sale_date', from)
       .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
@@ -135,19 +145,23 @@ export async function getDashboardData(
     ,
 
     // Top produtos: usa mv_product_performance se disponível,
-    // senão usa tabelas base
+    // senão usa tabelas base. company_id agora existe na MV
+    // (20260812_add_company_id_dashboard_mvs.sql).
     supabase
       .from('mv_product_performance')
       .select('product_id, product_name, total_revenue, total_units_sold, realized_margin_pct')
+      .eq('company_id', companyId)
       .gt('total_revenue', 0)
       .order('total_revenue', { ascending: false })
       .limit(5)
     ,
 
-    // Alertas de estoque — mv_stock_status é uma VIEW normal (sempre fresca)
+    // Alertas de estoque — mv_stock_status é materializada; company_id
+    // agora existe (20260812_add_company_id_dashboard_mvs.sql).
     supabase
       .from('mv_stock_status')
       .select('product_id, product_name, current_qty, stock_value_at_price')
+      .eq('company_id', companyId)
       .lte('current_qty', 3)
       .gt('current_qty', 0)
       .order('current_qty', { ascending: true })
@@ -159,16 +173,19 @@ export async function getDashboardData(
     supabase
       .from('sales')
       .select('responsible_seller_id, subtotal, discount_amount, cashback_used')
+      .eq('company_id', companyId)
       .gte('sale_date', from)
       .lte('sale_date', to)
       .not('status', 'in', '("cancelled","returned")')
     ,
 
-    // Todos os sellers — sem filtro active, para que inativos (ex: Santtorini)
-    // apareçam nos relatórios históricos quando houver vendas atribuídas a eles
+    // Todos os sellers da empresa — sem filtro active, para que inativos
+    // (ex: Santtorini) apareçam nos relatórios históricos quando houver
+    // vendas atribuídas a eles
     supabase
       .from('sellers')
       .select('id, name')
+      .eq('company_id', companyId)
       .order('name')
     ,
   ])
@@ -194,7 +211,7 @@ export async function getDashboardData(
     const items = Array.isArray(r.sale_items) ? r.sale_items : r.sale_items ? [r.sale_items] : []
     return s + items.reduce((si, i) => si + Number(i.gross_profit ?? 0), 0)
   }, 0)
-  const grossMarginPct = showFinancials && periodRevenue > 0
+  const grossMarginPct = periodRevenue > 0
     ? (grossProfit / periodRevenue) * 100
     : null
 
@@ -269,10 +286,11 @@ export async function getDashboardData(
         gross_profit,
         product_variations!inner (
           product_id,
-          products!inner (id, name)
+          products!inner (id, name, company_id)
         ),
         sales!inner (sale_date, status)
       `)
+      .eq('product_variations.products.company_id', companyId)
       .not('sales.status', 'in', '("cancelled","returned")')
       .gte('sales.sale_date', from)
       .limit(200) as unknown as { data: any[] | null }
@@ -376,9 +394,7 @@ export async function getDashboardData(
       product_name:      row.product_name,
       total_revenue:     Number(row.total_revenue ?? 0),
       total_units_sold:  Number(row.total_units_sold ?? 0),
-      realized_margin_pct: showFinancials
-        ? (row.realized_margin_pct != null ? Number(row.realized_margin_pct) : null)
-        : null,
+      realized_margin_pct: row.realized_margin_pct != null ? Number(row.realized_margin_pct) : null,
     })),
     stockAlerts: ((stockAlertsRes.data ?? []) as any[]).map(row => ({
       product_id:          row.product_id,
@@ -386,7 +402,6 @@ export async function getDashboardData(
       current_qty:         Number(row.current_qty ?? 0),
       stock_value_at_price: Number(row.stock_value_at_price ?? 0),
     })),
-    showFinancials,
     dateRange: { from, to },
   }
 }

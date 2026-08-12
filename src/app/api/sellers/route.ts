@@ -43,10 +43,13 @@ export async function GET(): Promise<NextResponse> {
 
   const mySeller = list.find((s) => s.user_id === user.id) ?? null
 
-  // usuario só pode registrar vendas em seu próprio nome — reforçado
-  // server-side em POST /api/vendas (assertResponsibleSellerAllowed).
-  // Esta flag só controla a UI (SellerPicker); a autorização real está lá.
-  const locked = user.role === 'usuario'
+  // Vendas/PDV não é módulo bloqueado (usuario = admin aqui) — qualquer
+  // role pode atribuir a venda a qualquer vendedor ativo da própria
+  // empresa, não só a si mesmo. `locked` não restringe mais ninguém;
+  // mantido no contrato de resposta por compatibilidade com o frontend.
+  // Autorização real (tenant + ativo) é feita server-side em
+  // POST /api/vendas (assertResponsibleSellerAllowed).
+  const locked = false
 
   const response: SellersResponse = {
     sellers: list.map(({ id, name }) => ({ id, name })),

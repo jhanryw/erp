@@ -216,10 +216,12 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   try {
-    // Regra 0: usuario só pode registrar a venda em seu próprio nome
-    // (gerente/admin continuam escolhendo qualquer vendedor da empresa)
+    // Regra 0: responsible_seller_id precisa existir, estar ativo e
+    // pertencer à mesma empresa do usuário autenticado — vale para
+    // qualquer role (usuario/gerente/admin). Não é uma checagem de
+    // identidade de quem está operando (isso vem de user.id/requireRole).
     const sellerCheck = await assertResponsibleSellerAllowed(
-      parsed.data.responsible_seller_id, user.id, user.role, user.company_id
+      parsed.data.responsible_seller_id, user.company_id
     )
     if (!sellerCheck.ok) return NextResponse.json({ error: sellerCheck.error }, { status: sellerCheck.status })
 

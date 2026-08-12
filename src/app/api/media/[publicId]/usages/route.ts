@@ -26,9 +26,11 @@ function isValidPublicId(publicId: string): boolean {
 // criado pela service layer interna do CRM (chamada direta de função,
 // nunca por esta rota humana). Entrada abaixo existe só para o TypeScript
 // (Record exaustivo sobre MediaUsageEntityType).
+// Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+// Produtos não está bloqueado: gerenciar mídia de produto liberado.
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
-  product: 'gerente',
-  product_variation: 'gerente',
+  product: 'usuario',
+  product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
 }

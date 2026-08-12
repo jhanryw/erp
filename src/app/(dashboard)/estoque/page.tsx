@@ -12,9 +12,6 @@ import {
 } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
-import { getUserProfile } from '@/lib/auth/getProfile'
-import { hasMinRole } from '@/types/roles'
 import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -113,17 +110,12 @@ export default async function EstoquePage({
   const { q } = await searchParams
   const search = q?.trim() || undefined
 
-  const serverClient = createClient()
-  const { data: { user } } = await serverClient.auth.getUser()
-  const profile = user ? await getUserProfile(user.id, user.email) : null
-  const isManager = hasMinRole(profile?.role ?? 'usuario', 'gerente')
-
   const data = await getMultiStockData(search)
 
-  if (!isManager) {
-    return <EstoqueLiteView data={data} search={search} q={q} />
-  }
-
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Estoque não está bloqueado: valor em custo/estoque aparece para todos os
+  // roles (a validação server-side de venda nunca confiou nesse valor vindo
+  // do cliente — ver resolveAuthoritativeItemCosts, preservado).
   return (
     <div className="space-y-6">
       {/* Header */}

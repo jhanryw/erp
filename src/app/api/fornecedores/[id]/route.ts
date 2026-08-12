@@ -78,8 +78,9 @@ export async function PUT(request: Request, { params }: { params: { id: string }
 // ─── DELETE /api/fornecedores/[id] ───────────────────────────────────────────
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  // Exclusão de fornecedor — exige admin
-  const { user, response: unauth } = await requireRole('admin')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Fornecedores liberado integralmente, "excluir" incluso explicitamente.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   const supplierId = Number(params.id)

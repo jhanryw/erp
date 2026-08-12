@@ -66,16 +66,13 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>
 
 import { SKU_TIPO, SKU_MODELO, generateSKUFromCodes, normalizeKey } from '@/lib/sku/sku-map'
-import { hasMinRole } from '@/types/roles'
-import { useUserContext } from '@/components/layout/user-context'
 
 // ─── Componente ───────────────────────────────────────────────────────────────
+// Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+// Produtos não está bloqueado: criação liberada para todos os roles.
 
 export default function NovoProdutoPage() {
   const router = useRouter()
-  const { userRole } = useUserContext()
-  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
-  if (!hasMinRole(userRole, 'gerente')) return null
 
 
   const [categories,  setCategories]  = useState<{ id: number; name: string; product_type_id: number | null }[]>([])

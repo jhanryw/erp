@@ -47,7 +47,8 @@ const importRequestSchema = z.object({
 export async function POST(request: Request) {
   console.info('[IMPORT] request chegou')
 
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) {
     console.warn('[IMPORT] bloqueado', 'auth: requireRole(gerente) negou acesso')
     return unauth

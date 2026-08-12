@@ -27,7 +27,8 @@ const MOVEMENT_TYPES = ['entry', 'sale', 'return', 'adjust', 'initial'] as const
 type MovementType = typeof MOVEMENT_TYPES[number]
 
 export async function GET(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

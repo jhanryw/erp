@@ -24,9 +24,11 @@ function isValidPublicId(publicId: string): boolean {
 // isso o bloqueio é um guard explícito logo abaixo, não a ausência de um
 // valor em schema — ver decisão da Entrega 4 (usuário: bloqueio explícito
 // na fronteira humana, liberação só pela service layer interna do CRM).
+// Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+// Produtos não está bloqueado: gerenciar mídia de produto liberado.
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
-  product: 'gerente',
-  product_variation: 'gerente',
+  product: 'usuario',
+  product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
 }

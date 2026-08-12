@@ -3,7 +3,8 @@ export const dynamic = 'force-dynamic'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requirePageRole } from '@/lib/auth/requirePageRole'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet } from 'lucide-react'
@@ -59,10 +60,15 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
   const id = parseInt(params.id, 10)
   if (isNaN(id)) notFound()
 
-  const profile = await requirePageRole('gerente')
-  const isAdmin = profile.role === 'admin'
+  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+  // Caixa não está bloqueado: detalhe e reabertura liberados para todos os
+  // roles (autorização real é o backend — POST /api/caixa/reabrir).
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  if (!profile?.company_id) notFound()
 
-  const [session, movements] = await Promise.all([getSession(id, profile.company_id!), getMovements(id)])
+  const [session, movements] = await Promise.all([getSession(id, profile.company_id), getMovements(id)])
   if (!session) notFound()
 
   const diff = session.cash_difference ?? 0
@@ -78,7 +84,7 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {isAdmin && <ReabrirCaixaButton sessionId={id} />}
+          <ReabrirCaixaButton sessionId={id} />
           <Link href="/caixa/historico">
             <Button variant="secondary" size="sm">← Histórico</Button>
           </Link>

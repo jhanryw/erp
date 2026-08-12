@@ -21,9 +21,11 @@ function isValidPublicId(publicId: string): boolean {
 // crm_message: nunca alcançado — bodySchema abaixo não lista 'crm_message'.
 // Mensagem não tem conceito de "primary" (é role='attachment', não
 // singular) — mesmo bloqueio explícito da Entrega 4, ver usages/route.ts.
+// Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
+// Produtos não está bloqueado: gerenciar mídia de produto liberado.
 const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
-  product: 'gerente',
-  product_variation: 'gerente',
+  product: 'usuario',
+  product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
 }
