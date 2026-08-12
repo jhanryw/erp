@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -108,6 +109,7 @@ async function getTurnoverData() {
 }
 
 export default async function GiroEstoquePage() {
+  await requirePageRole('gerente')
   const items = await getTurnoverData()
 
   const parados = items.filter((i: any) => !i.last_sale_date && (i.current_qty ?? 0) > 0)

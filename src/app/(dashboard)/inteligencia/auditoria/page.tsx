@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,7 @@ async function getAuditIssues(): Promise<AuditIssue[]> {
 }
 
 export default async function AuditoriaPage() {
+  await requirePageRole('gerente')
   const issues = await getAuditIssues()
 
   const critical = issues.filter(i => i.severity === 'critical').length

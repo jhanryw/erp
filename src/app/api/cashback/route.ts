@@ -15,7 +15,8 @@ const schema = z.object({
 })
 
 export async function GET() {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — leitura da config/ledger de cashback liberada para usuario.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
@@ -32,6 +33,11 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  // Mantido em 'admin': altera rate_pct/prazos do programa de cashback para
+  // a empresa toda — é "configuração financeira", categoria explicitamente
+  // listada como bloqueada mesmo com o módulo Cashback liberado. Não fazia
+  // parte do pedido de liberação desta rodada; se a intenção for diferente,
+  // avise que eu ajusto.
   const { user, response: unauth } = await requireRole('admin')
   if (unauth) return unauth
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

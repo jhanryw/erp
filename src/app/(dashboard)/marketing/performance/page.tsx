@@ -1,7 +1,6 @@
 import Link from 'next/link'
 import { ArrowLeft, ChevronLeft, ChevronRight, Info, TrendingUp } from 'lucide-react'
 
-import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { StatCard } from '@/components/ui/stat-card'
@@ -236,8 +235,7 @@ export default async function MarketingPerformancePage({
 }: {
   searchParams: { month?: string }
 }) {
-  await requirePageRole('gerente')
-
+  // Fase 2 (revisão) — Marketing liberado para usuario (módulo completo).
   const ym        = /^\d{4}-\d{2}$/.test(searchParams.month ?? '') ? searchParams.month! : currentYM()
   const prevMonth = shiftMonth(ym, -1)
   const nextMonth = shiftMonth(ym, +1)

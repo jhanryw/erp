@@ -1,9 +1,10 @@
 export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
+import { validateAuthorizationToken } from '@/lib/auth/validateAuthorizationToken'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
-import { validateStockForSale, validateProductsActive, checkSalePrices, createSale } from '@/services/vendas.service'
+import { validateStockForSale, validateProductsActive, checkSalePrices, createSale, resolveAuthoritativeItemCosts, assertResponsibleSellerAllowed } from '@/services/vendas.service'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { sendPushNotification } from '@/lib/push/send'
@@ -215,6 +216,13 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
   try {
+    // Regra 0: usuario só pode registrar a venda em seu próprio nome
+    // (gerente/admin continuam escolhendo qualquer vendedor da empresa)
+    const sellerCheck = await assertResponsibleSellerAllowed(
+      parsed.data.responsible_seller_id, user.id, user.role, user.company_id
+    )
+    if (!sellerCheck.ok) return NextResponse.json({ error: sellerCheck.error }, { status: sellerCheck.status })
+
     // Regra 1: produtos/variações devem estar ativos (hard block para qualquer role)
     const activeCheck = await validateProductsActive(parsed.data.items, user.company_id)
     if (!activeCheck.ok) return NextResponse.json({ error: activeCheck.error }, { status: activeCheck.status })
@@ -222,6 +230,12 @@ export async function POST(request: Request) {
     // Regra 2: validar estoque disponível
     const stockCheck = await validateStockForSale(parsed.data.items, user.company_id)
     if (!stockCheck.ok) return NextResponse.json({ error: stockCheck.error }, { status: stockCheck.status })
+
+    // Resolver custo REAL de cada item no servidor — nunca confiar no
+    // unit_cost do payload (ver comentário em resolveAuthoritativeItemCosts).
+    const costResult = await resolveAuthoritativeItemCosts(parsed.data.items, user.company_id)
+    if (!costResult.ok) return NextResponse.json({ error: costResult.error }, { status: costResult.status })
+    parsed.data.items = costResult.data
 
     // Regra 3: preço abaixo do custo — bloqueia usuario, avisa gerente/admin
     const priceCheck = checkSalePrices(parsed.data.items)
@@ -239,6 +253,38 @@ export async function POST(request: Request) {
       discount_percent?: number
       discount_amount_audit?: number
     } = {}
+
+    // Se um token de autorização de desconto foi enviado no payload, ele
+    // precisa ser validado de verdade — antes, o campo era aceito e
+    // simplesmente ignorado (nunca chamava validateAuthorizationToken),
+    // ao contrário de cancelamento/devolução/troca, que sempre validam.
+    // Não existe hoje um limiar de desconto que TORNE o token obrigatório
+    // (nenhuma UI/config define isso — ver relatório de entrega); esta
+    // checagem fecha a lacuna de "campo sensível aceito sem validação" sem
+    // inventar uma regra de negócio nova.
+    if (parsed.data.discount_authorization_token_id) {
+      const tokenResult = await validateAuthorizationToken({
+        tokenId:     parsed.data.discount_authorization_token_id,
+        action:      'apply_discount',
+        requestedBy: user.id,
+        companyId:   user.company_id,
+      })
+      if (!tokenResult.ok) {
+        return NextResponse.json(
+          { error: tokenResult.error ?? 'Token de autorização de desconto inválido.' },
+          { status: 403 }
+        )
+      }
+      discountAuditFields.authorized_by = tokenResult.authorizedBy
+      discountAuditFields.authorization_token_id = parsed.data.discount_authorization_token_id
+      discountAuditFields.authorization_action = 'apply_discount'
+      if (tokenResult.authorizedDiscountPct != null) {
+        discountAuditFields.discount_percent = tokenResult.authorizedDiscountPct
+      }
+      if (tokenResult.authorizedDiscountAmount != null) {
+        discountAuditFields.discount_amount_audit = tokenResult.authorizedDiscountAmount
+      }
+    }
 
     // Derivar payment_method do método dominante (maior net_amount) quando payments[] fornecido
     let effectivePaymentMethod = parsed.data.payment_method ?? 'pix'

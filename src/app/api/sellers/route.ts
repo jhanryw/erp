@@ -43,10 +43,15 @@ export async function GET(): Promise<NextResponse> {
 
   const mySeller = list.find((s) => s.user_id === user.id) ?? null
 
+  // usuario só pode registrar vendas em seu próprio nome — reforçado
+  // server-side em POST /api/vendas (assertResponsibleSellerAllowed).
+  // Esta flag só controla a UI (SellerPicker); a autorização real está lá.
+  const locked = user.role === 'usuario'
+
   const response: SellersResponse = {
     sellers: list.map(({ id, name }) => ({ id, name })),
     my_seller: mySeller ? { id: mySeller.id, name: mySeller.name } : null,
-    locked: false,
+    locked,
   }
 
   return NextResponse.json(response)

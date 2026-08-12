@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader } from '@/components/ui/card'
 import {
   Table,
@@ -38,7 +39,7 @@ type CustomerBucket = {
   totalProfit: number
 }
 
-async function getClientData() {
+async function getClientData(companyId: number) {
   const admin = createAdminClient()
 
   const { data, error } = await admin
@@ -55,6 +56,7 @@ async function getClientData() {
         gross_profit
       )
     `)
+    .eq('company_id', companyId)
     .not('status', 'eq', 'cancelled')
     .not('status', 'eq', 'returned') as unknown as {
       data: RawSale[] | null
@@ -95,7 +97,8 @@ async function getClientData() {
 }
 
 export default async function LucroPorClientePage() {
-  const rows = await getClientData()
+  const profile = await requirePageRole('gerente')
+  const rows = await getClientData(profile.company_id!)
 
   return (
     <div className="space-y-5">

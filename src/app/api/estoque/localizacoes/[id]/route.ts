@@ -15,7 +15,8 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2: editar local de estoque não tem dado financeiro — reativado para usuario.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   const { id } = await params

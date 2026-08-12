@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic'
 
 import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet, ChevronRight } from 'lucide-react'
@@ -30,7 +31,7 @@ type Session = {
   cash_difference: number | null
 }
 
-async function getSessions(): Promise<Session[]> {
+async function getSessions(companyId: number): Promise<Session[]> {
   const admin = createAdminClient()
   const { data } = await admin
     .from('cash_register_sessions')
@@ -40,13 +41,15 @@ async function getSessions(): Promise<Session[]> {
       total_sales, total_cash, total_pix, total_credit_card, total_debit_card,
       total_sangria, total_suprimento, total_expenses, cash_difference
     `)
+    .eq('company_id', companyId)
     .order('opened_at', { ascending: false })
     .limit(60) as unknown as { data: Session[] | null }
   return data ?? []
 }
 
 export default async function HistoricoCaixaPage() {
-  const sessions = await getSessions()
+  const profile = await requirePageRole('gerente')
+  const sessions = await getSessions(profile.company_id!)
   const closed   = sessions.filter((s) => s.status === 'closed')
 
   return (

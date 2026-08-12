@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -21,6 +22,7 @@ async function getSupplierRankingData() {
 }
 
 export default async function RankingFornecedoresPage() {
+  await requirePageRole('gerente')
   const suppliers = await getSupplierRankingData()
 
   const totalRevenue = suppliers.reduce((s, sup) => s + (sup.total_revenue ?? 0), 0)

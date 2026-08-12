@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,7 @@ async function getMarginData() {
 }
 
 export default async function MargemLucroPage() {
+  await requirePageRole('gerente')
   const products = await getMarginData()
 
   const avgPlanned = products.length > 0

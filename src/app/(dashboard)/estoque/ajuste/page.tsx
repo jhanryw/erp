@@ -15,8 +15,6 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { ProductSearchCombobox, type ProductOption } from '@/components/ui/product-search-combobox'
-import { hasMinRole } from '@/types/roles'
-import { useUserContext } from '@/components/layout/user-context'
 
 const REASONS = [
   { value: 'loss',               label: 'Perda / Avaria' },
@@ -44,11 +42,9 @@ const SELECT_CLASS =
   'w-full bg-bg-input border border-border text-text-primary text-sm rounded-lg px-3 py-2 focus:outline-none focus:border-brand'
 
 export default function EstoqueAjustePage() {
+  // Fase 2: ajuste de estoque não expõe custo/margem — reativado para usuario.
+  // Autorização real é feita no servidor (POST /api/estoque/ajuste).
   const router  = useRouter()
-  const { userRole } = useUserContext()
-  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
-  if (!hasMinRole(userRole, 'gerente')) return null
-
   const supabase = createClient()
 
   const [allProducts, setAllProducts]         = useState<ProductOption[]>([])

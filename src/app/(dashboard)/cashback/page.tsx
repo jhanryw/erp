@@ -1,4 +1,3 @@
-import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
 import Link from 'next/link'
@@ -126,7 +125,7 @@ export default async function CashbackPage({
 }: {
   searchParams: { filter?: string }
 }) {
-  await requirePageRole('gerente')
+  // Fase 2 (revisão) — Cashback liberado para usuario (módulo completo).
   const supabase = createClient()
   const { data: { user: authUser } } = await supabase.auth.getUser()
   const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null

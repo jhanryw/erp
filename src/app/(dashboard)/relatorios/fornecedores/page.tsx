@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -18,6 +19,7 @@ async function getSuppliersData() {
 }
 
 export default async function RelatorioFornecedoresPage() {
+  await requirePageRole('gerente')
   const suppliers = await getSuppliersData()
 
   const totalPurchased = suppliers.reduce((s, sup) => s + (sup.total_purchased_value ?? 0), 0)

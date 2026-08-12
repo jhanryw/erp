@@ -1,4 +1,5 @@
-import { requirePageRole } from '@/lib/auth/requirePageRole'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
 import Link from 'next/link'
 import { Plus, Truck } from 'lucide-react'
 
@@ -32,12 +33,13 @@ type SupplierRow = {
 
 type PerformanceMap = Record<number, { total_purchased_value: number; total_revenue: number }>
 
-async function getSuppliers(): Promise<SupplierRow[]> {
+async function getSuppliers(companyId: number): Promise<SupplierRow[]> {
   const supabase = createAdminClient()
 
   const { data, error } = await supabase
     .from('suppliers')
     .select('id, name, document, phone, city, state, active, created_at')
+    .eq('company_id', companyId)
     .order('name', { ascending: true })
 
   if (error) {
@@ -48,12 +50,18 @@ async function getSuppliers(): Promise<SupplierRow[]> {
   return (data ?? []) as SupplierRow[]
 }
 
-async function getPerformance(): Promise<PerformanceMap> {
+// mv_supplier_performance não tem company_id (materialized view single-tenant
+// — ver Fase 1.5, item 12). Escopamos por tenant filtrando pelos IDs de
+// suppliers já resolvidos por empresa em getSuppliers(), nunca pela MV sozinha.
+async function getPerformance(supplierIds: number[]): Promise<PerformanceMap> {
+  if (supplierIds.length === 0) return {}
+
   const supabase = createAdminClient()
 
   const { data, error } = await supabase
     .from('mv_supplier_performance')
     .select('supplier_id, total_purchased_value, total_revenue')
+    .in('supplier_id', supplierIds)
 
   if (error) {
     console.error('Erro ao buscar performance de fornecedores:', error.message)
@@ -89,8 +97,18 @@ function formatDoc(doc: string | null): string {
 }
 
 export default async function FornecedoresPage() {
-  await requirePageRole('gerente')
-  const [suppliers, performance] = await Promise.all([getSuppliers(), getPerformance()])
+  // Fase 2 (revisão) — Fornecedores liberado para usuario, módulo completo
+  // (lista, detalhe, custo/faturamento por fornecedor incluídos — autorização
+  // explícita, diferente da rodada anterior).
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const viewerProfile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+
+  // company_id sempre da sessão autenticada (nunca de parâmetro do cliente).
+  // Sem empresa vinculada = nenhum fornecedor listado (fail closed).
+  const companyId = viewerProfile?.company_id ?? null
+  const suppliers = companyId ? await getSuppliers(companyId) : []
+  const performance = await getPerformance(suppliers.map((s) => s.id))
 
   return (
     <div className="space-y-6">

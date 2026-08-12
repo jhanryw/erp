@@ -1,4 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
+import { hasMinRole } from '@/types/roles'
 import Link from 'next/link'
 import { ArrowLeft, ArrowDownToLine } from 'lucide-react'
 import { Card, CardHeader } from '@/components/ui/card'
@@ -9,7 +12,10 @@ import { formatDate } from '@/lib/utils/date'
 
 export const dynamic = 'force-dynamic'
 
-async function getLotes() {
+// stock_lots não tem company_id (ver 000_schema_completo.sql) — tenant é
+// derivado via join até products.company_id. !inner nos dois níveis garante
+// que o filtro realmente restrinja as linhas (não é só um LEFT JOIN opcional).
+async function getLotes(companyId: number) {
   const admin = createAdminClient()
   const { data } = await admin
     .from('stock_lots')
@@ -25,15 +31,16 @@ async function getLotes() {
       entry_type,
       entry_date,
       notes,
-      product_variations (
+      product_variations!inner (
         sku_variation,
-        products ( name, sku ),
+        products!inner ( name, sku, company_id ),
         product_variation_attributes (
           variation_values:variation_value_id ( value )
         )
       ),
       suppliers ( name )
     `)
+    .eq('product_variations.products.company_id', companyId)
     .order('entry_date', { ascending: false })
     .limit(200)
 
@@ -41,7 +48,18 @@ async function getLotes() {
 }
 
 export default async function MovimentacoesPage() {
-  const lotes = await getLotes()
+  // Custo por lote é sensível (mesma proteção de unit_cost) — página fica
+  // aberta para usuario (histórico operacional de entradas), mas colunas de
+  // custo só aparecem para gerente/admin.
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const viewerProfile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const isManager = hasMinRole(viewerProfile?.role ?? 'usuario', 'gerente')
+
+  // company_id sempre da sessão autenticada (nunca de parâmetro do cliente).
+  // Sem empresa vinculada = nenhum lote listado (fail closed).
+  const companyId = viewerProfile?.company_id ?? null
+  const lotes = companyId ? await getLotes(companyId) : []
 
   return (
     <div className="space-y-5">
@@ -76,8 +94,8 @@ export default async function MovimentacoesPage() {
                   <TableHead>Tipo</TableHead>
                   <TableHead>Fornecedor</TableHead>
                   <TableHead align="right">Qtd</TableHead>
-                  <TableHead align="right">Custo/Un</TableHead>
-                  <TableHead align="right">Total Lote</TableHead>
+                  {isManager && <TableHead align="right">Custo/Un</TableHead>}
+                  {isManager && <TableHead align="right">Total Lote</TableHead>}
                   <TableHead>Data</TableHead>
                 </TableRow>
               </TableHeader>
@@ -119,12 +137,16 @@ export default async function MovimentacoesPage() {
                           <span className="text-sm font-medium">{item.quantity_original}</span>
                         </div>
                       </TableCell>
-                      <TableCell align="right" muted>
-                        {formatCurrency(item.cost_per_unit)}
-                      </TableCell>
-                      <TableCell align="right" className="font-medium">
-                        {formatCurrency(item.total_lot_cost)}
-                      </TableCell>
+                      {isManager && (
+                        <TableCell align="right" muted>
+                          {formatCurrency(item.cost_per_unit)}
+                        </TableCell>
+                      )}
+                      {isManager && (
+                        <TableCell align="right" className="font-medium">
+                          {formatCurrency(item.total_lot_cost)}
+                        </TableCell>
+                      )}
                       <TableCell muted>{formatDate(item.entry_date)}</TableCell>
                     </TableRow>
                   )

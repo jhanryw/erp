@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader } from '@/components/ui/card'
 import {
   Table,
@@ -22,7 +23,7 @@ type RawItem = {
   product_variations: {
     products: { id: number; name: string } | null
   } | null
-  sales: { status: string } | null
+  sales: { status: string; company_id: number } | null
 }
 
 type ProductBucket = {
@@ -32,7 +33,7 @@ type ProductBucket = {
   totalProfit: number
 }
 
-async function getRankingData() {
+async function getRankingData(companyId: number) {
   const admin = createAdminClient()
 
   const { data, error } = await admin
@@ -44,8 +45,9 @@ async function getRankingData() {
       product_variations:product_variation_id (
         products:product_id (id, name)
       ),
-      sales!inner(status)
+      sales!inner(status, company_id)
     `)
+    .eq('sales.company_id', companyId)
     .not('sales.status', 'eq', 'cancelled')
     .not('sales.status', 'eq', 'returned') as unknown as { data: RawItem[] | null; error: { message: string } | null }
 
@@ -79,7 +81,8 @@ async function getRankingData() {
 }
 
 export default async function RankingPage() {
-  const rows = await getRankingData()
+  const profile = await requirePageRole('gerente')
+  const rows = await getRankingData(profile.company_id!)
 
   return (
     <div className="space-y-5">

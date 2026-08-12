@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
-import { requirePageRole } from '@/lib/auth/requirePageRole'
 
 export const dynamic = 'force-dynamic'
 
@@ -71,8 +70,8 @@ async function getSupplier(id: string) {
 
 export default async function FornecedorDetalhePage({
  params }: { params: { id: string } }) {
-  await requirePageRole('gerente')
-
+  // Fase 2 (revisão) — Fornecedores liberado para usuario, incluindo detalhe
+  // e histórico de custo por produto (explicitamente autorizado).
   const result = await getSupplier(params.id)
   if (!result) notFound()
 

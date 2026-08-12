@@ -15,7 +15,8 @@ const schema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2: ajuste de estoque não expõe custo/margem — reativado para usuario.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   let body: unknown

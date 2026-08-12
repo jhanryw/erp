@@ -46,7 +46,9 @@ const massaSchema = z.object({
  *   207 — pelo menos um item falhou (partial success). Verifique `results[].ok`.
  */
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — Entrada de estoque liberada para usuario, custo
+  // incluído por ser obrigatório para o processo (autorização explícita).
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   let body: unknown

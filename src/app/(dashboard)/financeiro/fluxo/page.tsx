@@ -2,8 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
-import { getUserProfile } from '@/lib/auth/getProfile'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader } from '@/components/ui/card'
 import {
   Table,
@@ -141,10 +140,8 @@ export default async function FluxoCaixaPage({
 }: {
   searchParams: { month?: string }
 }) {
-  const supabase = createClient()
-  const { data: { user: authUser } } = await supabase.auth.getUser()
-  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
-  const companyId = profile?.company_id ?? null
+  const profile = await requirePageRole('gerente')
+  const companyId = profile.company_id ?? null
 
   const ym = /^\d{4}-\d{2}$/.test(searchParams.month ?? '')
     ? searchParams.month!

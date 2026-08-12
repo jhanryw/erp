@@ -22,7 +22,8 @@ const schema = z.object({
 // ─── GET /api/fornecedores ────────────────────────────────────────────────────
 
 export async function GET() {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — Fornecedores liberado para usuario (módulo completo).
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
@@ -41,7 +42,9 @@ export async function GET() {
 // ─── POST /api/fornecedores ───────────────────────────────────────────────────
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — Fornecedores liberado para usuario (módulo completo,
+  // inclui cadastro).
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })

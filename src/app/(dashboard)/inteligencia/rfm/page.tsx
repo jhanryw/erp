@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -51,6 +52,7 @@ const SEGMENT_INFO: Record<string, { label: string; desc: string }> = {
 }
 
 export default async function MapaRfmPage() {
+  await requirePageRole('gerente')
   const { items, bySegment } = await getRfmData()
 
   const totalSpent = items.reduce((s, r) => s + (r.total_spent ?? 0), 0)

@@ -4,6 +4,9 @@ import { notFound } from 'next/navigation'
 import { ArrowLeft, Package, Edit } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
+import { getUserProfile } from '@/lib/auth/getProfile'
+import { hasMinRole } from '@/types/roles'
 import { listMediaByEntity } from '@/services/media.service'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -137,6 +140,14 @@ export default async function ProdutoDetalhePage({
 
   const { product, variations, displayUrl } = result
 
+  // Custo e margem são sensíveis — mesma regra já aplicada em
+  // /api/produtos/buscar (cost: isUsuario ? 0 : ...). `usuario` pode ver a
+  // ficha do produto normalmente, só não custo/margem.
+  const supabase = createClient()
+  const { data: { user: authUser } } = await supabase.auth.getUser()
+  const viewerProfile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
+  const isManager = hasMinRole(viewerProfile?.role ?? 'usuario', 'gerente')
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -191,16 +202,20 @@ export default async function ProdutoDetalhePage({
           value={formatCurrency(product.base_price)}
           icon={<Package className="h-4 w-4" />}
         />
-        <StatCard
-          title="Custo Base"
-          value={formatCurrency(product.base_cost)}
-          icon={<Package className="h-4 w-4" />}
-        />
-        <StatCard
-          title="Margem"
-          value={formatPercent(product.margin_pct)}
-          icon={<Package className="h-4 w-4" />}
-        />
+        {isManager && (
+          <StatCard
+            title="Custo Base"
+            value={formatCurrency(product.base_cost)}
+            icon={<Package className="h-4 w-4" />}
+          />
+        )}
+        {isManager && (
+          <StatCard
+            title="Margem"
+            value={formatPercent(product.margin_pct)}
+            icon={<Package className="h-4 w-4" />}
+          />
+        )}
         <StatCard
           title="Origem"
           value={ORIGIN_LABELS[product.origin ?? ''] ?? '—'}
@@ -224,7 +239,7 @@ export default async function ProdutoDetalhePage({
                 <TableRow>
                   <TableHead>SKU Variação</TableHead>
                   <TableHead>Atributos</TableHead>
-                  <TableHead>Custo</TableHead>
+                  {isManager && <TableHead>Custo</TableHead>}
                   <TableHead>Preço</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -247,11 +262,13 @@ export default async function ProdutoDetalhePage({
                         <code>{v.sku_variation}</code>
                       </TableCell>
                       <TableCell>{attrs || '—'}</TableCell>
-                      <TableCell>
-                        {v.cost_override != null
-                          ? formatCurrency(v.cost_override)
-                          : 'base'}
-                      </TableCell>
+                      {isManager && (
+                        <TableCell>
+                          {v.cost_override != null
+                            ? formatCurrency(v.cost_override)
+                            : 'base'}
+                        </TableCell>
+                      )}
                       <TableCell>
                         {v.price_override != null
                           ? formatCurrency(v.price_override)

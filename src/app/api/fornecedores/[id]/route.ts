@@ -22,7 +22,8 @@ const putSchema = z.object({
 // ─── GET /api/fornecedores/[id] ───────────────────────────────────────────────
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — Fornecedores liberado para usuario (módulo completo).
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
@@ -41,7 +42,9 @@ export async function GET(_req: Request, { params }: { params: { id: string } })
 // ─── PUT /api/fornecedores/[id] ───────────────────────────────────────────────
 
 export async function PUT(request: Request, { params }: { params: { id: string } }) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2 (revisão) — Fornecedores liberado para usuario (módulo completo,
+  // inclui edição).
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   const supplierId = Number(params.id)

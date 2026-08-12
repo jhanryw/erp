@@ -39,7 +39,8 @@ export async function GET() {
 
 /** Cria um novo local de estoque */
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('gerente')
+  // Fase 2: local de estoque não tem dado financeiro — reativado para usuario.
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
 
   let body: unknown

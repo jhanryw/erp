@@ -9,9 +9,6 @@ import { ArrowLeft } from 'lucide-react'
 import { supplierSchema, type SupplierFormData } from '@/lib/validators'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { hasMinRole } from '@/types/roles'
-import { useEffect } from 'react'
-import { useUserContext } from '@/components/layout/user-context'
 
 const BRAZIL_STATES = [
   'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA',
@@ -20,11 +17,8 @@ const BRAZIL_STATES = [
 ]
 
 export default function NovoFornecedorPage() {
+  // Fase 2 (revisão) — Fornecedores liberado para usuario (módulo completo).
   const router = useRouter()
-  const { userRole } = useUserContext()
-  useEffect(() => { if (!hasMinRole(userRole, 'gerente')) router.replace('/') }, [userRole, router])
-  if (!hasMinRole(userRole, 'gerente')) return null
-
 
   const {
     register,

@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -20,6 +21,7 @@ async function getColorData() {
 }
 
 export default async function PerformanceCoresPage() {
+  await requirePageRole('gerente')
   const colors = await getColorData()
 
   const totalRevenue = colors.reduce((s, c) => s + (c.total_revenue ?? 0), 0)

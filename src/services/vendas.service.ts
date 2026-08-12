@@ -190,12 +190,67 @@ export async function validateProductsActive(items: SaleItem[], companyId: numbe
 }
 
 /**
+ * Resolve o custo REAL de cada item a partir do banco (cost_override da
+ * variação, com fallback para base_cost do produto) — nunca confia no
+ * `unit_cost` vindo do payload do cliente.
+ *
+ * Por quê: /api/produtos/buscar zera `cost` na resposta para o role `usuario`
+ * (proteção correta — vendedora não deve ver custo/margem). O problema era que
+ * esse valor zerado, vindo de volta no payload de criação da venda, era usado
+ * como se fosse o custo real tanto para a checagem de "venda abaixo do custo"
+ * (checkSalePrices) quanto para o registro de CMV em sale_items/stock_movements
+ * dentro de rpc_create_sale — nulificando a checagem e corrompendo o custo
+ * histórico de toda venda criada por usuario.
+ *
+ * Esta função é chamada pela API antes de checkSalePrices/createSale e
+ * substitui item.unit_cost pelo valor autoritativo, para QUALQUER role — a UI
+ * continua sem exibir custo para usuario (isso não muda), só o servidor passa
+ * a validar/gravar com o custo verdadeiro, não com o que o cliente mandou.
+ */
+export async function resolveAuthoritativeItemCosts(
+  items: SaleItem[],
+  companyId: number | null
+): Promise<ServiceOutcome<SaleItem[]>> {
+  const admin = createAdminClient()
+  const variationIds = items.map((i) => i.product_variation_id)
+
+  const { data, error } = await admin
+    .from('product_variations')
+    .select('id, cost_override, products!inner(base_cost, company_id)')
+    .in('id', variationIds) as unknown as {
+      data: { id: number; cost_override: number | null; products: { base_cost: number; company_id: number } }[] | null
+      error: { message: string } | null
+    }
+
+  if (error) return failure(error.message)
+
+  const costMap = new Map<number, number>()
+  for (const row of data ?? []) {
+    if (companyId != null && row.products.company_id !== companyId) {
+      return failure(`Variação #${row.id} não pertence à empresa.`, 403)
+    }
+    costMap.set(row.id, row.cost_override ?? row.products.base_cost ?? 0)
+  }
+
+  const resolved = items.map((item) => {
+    const realCost = costMap.get(item.product_variation_id)
+    return realCost == null ? item : { ...item, unit_cost: realCost }
+  })
+
+  return success(resolved)
+}
+
+/**
  * Verifica se algum item tem preço de venda abaixo do custo (margem negativa).
  *
  * Retorna sempre `ok: true`, mas inclui warnings quando encontrados.
  * A API route aplica a política por role:
  *   - usuario  → bloqueia (não pode aprovar venda com prejuízo)
  *   - gerente/admin → permite com warning no response (ex.: promoção ou liquidação)
+ *
+ * IMPORTANTE: deve receber items já processados por resolveAuthoritativeItemCosts
+ * — comparar contra um unit_cost vindo direto do cliente permite contornar
+ * esta checagem (ver comentário da função acima).
  */
 export function checkSalePrices(items: SaleItem[]): { ok: true; warnings: string[] } {
   const warnings: string[] = []
@@ -207,6 +262,47 @@ export function checkSalePrices(items: SaleItem[]): { ok: true; warnings: string
     }
   }
   return { ok: true, warnings }
+}
+
+/**
+ * Verifica se `usuario` pode atribuir a venda ao `responsible_seller_id` informado.
+ *
+ * Regra: `usuario` só pode se atribuir a si mesma (sellers.user_id = seu próprio
+ * auth id). `gerente`/`admin` continuam podendo escolher qualquer vendedor da
+ * empresa — nenhuma mudança de comportamento para essas roles.
+ *
+ * Antes desta checagem, GET /api/sellers já devolvia a lista completa de
+ * vendedores da empresa para qualquer `usuario`, e POST /api/vendas aceitava
+ * qualquer responsible_seller_id da lista sem checar se pertencia a quem
+ * estava logado — a única trava era no frontend (SellerPicker), nunca no servidor.
+ */
+export async function assertResponsibleSellerAllowed(
+  responsibleSellerId: number,
+  userId: string,
+  userRole: string,
+  companyId: number
+): Promise<ServiceOutcome> {
+  if (userRole !== 'usuario') return success(undefined)
+
+  const admin = createAdminClient()
+  const { data: seller, error } = await admin
+    .from('sellers')
+    .select('id, user_id, company_id')
+    .eq('id', responsibleSellerId)
+    .maybeSingle() as unknown as {
+      data: { id: number; user_id: string | null; company_id: number } | null
+      error: { message: string } | null
+    }
+
+  if (error) return failure(error.message)
+  if (!seller || seller.company_id !== companyId) {
+    return failure('Vendedor responsável inválido.', 400)
+  }
+  if (seller.user_id !== userId) {
+    return failure('Você só pode registrar a venda em seu próprio nome.', 403)
+  }
+
+  return success(undefined)
 }
 
 // ─── Criação de venda ─────────────────────────────────────────────────────────

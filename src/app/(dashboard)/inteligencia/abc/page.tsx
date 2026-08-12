@@ -1,4 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -53,6 +54,7 @@ const ABC_BADGE: Record<string, { variant: 'success' | 'warning' | 'error' }> = 
 }
 
 export default async function CurvaAbcPage() {
+  await requirePageRole('gerente')
   const { items, totals } = await getAbcData()
 
   return (

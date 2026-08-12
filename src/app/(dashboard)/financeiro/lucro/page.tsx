@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { ArrowLeft } from 'lucide-react'
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { Card, CardHeader } from '@/components/ui/card'
 import {
   Table,
@@ -32,7 +33,7 @@ type SaleRow = {
   sale_items: SaleItem[]
 }
 
-async function getProfitData() {
+async function getProfitData(companyId: number) {
   const admin = createAdminClient()
 
   const { data, error } = await admin
@@ -50,6 +51,7 @@ async function getProfitData() {
         gross_profit
       )
     `)
+    .eq('company_id', companyId)
     .not('status', 'eq', 'cancelled')
     .order('sale_date', { ascending: false })
     .limit(100) as unknown as { data: SaleRow[] | null; error: { message: string } | null }
@@ -81,7 +83,8 @@ async function getProfitData() {
 }
 
 export default async function LucroPage() {
-  const rows = await getProfitData()
+  const profile = await requirePageRole('gerente')
+  const rows = await getProfitData(profile.company_id!)
 
   const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0)
   const totalCost = rows.reduce((s, r) => s + r.totalCost, 0)
