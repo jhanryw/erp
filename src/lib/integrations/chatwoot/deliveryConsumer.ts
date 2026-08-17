@@ -1,21 +1,26 @@
 /**
  * Consumer de `integration_event_deliveries` pro destino `chatwoot` (Fase
- * 4, seção 31 do pedido). NENHUM scheduler chama isso ainda — função
- * pronta pra ser invocada por teste manual ou por um cron futuro (Fase 5+).
+ * 4, seção 31 do pedido; contadores/skip revisados na Fase 5, seções 11/14).
  *
  * Fluxo: claim → resolve customer_id do evento → reconcileCustomerToChatwoot
- * → marca processed/failed/dead. Falha aqui NUNCA afeta o evento
+ * → classifica synced / skipped (terminal, sem nada pra sincronizar,
+ * NUNCA retryado) / failed (retryable, respeita Retry-After) / dead
+ * (erro permanente ou backoff esgotado). Falha aqui NUNCA afeta o evento
  * `integration_outbox` em si nem qualquer delivery de outro destino (prova
  * em `supabase/tests/integration_event_deliveries_independence.test.sql`).
+ *
+ * Chamado pelo runner (`src/lib/integrations/runner.ts`), nunca direto por
+ * um scheduler — este arquivo não decide COMO/QUANDO é invocado.
  */
 
-import { claimEventDeliveries, markDeliveryFailed, markDeliveryProcessed } from '@/services/integrations/deliveries.service'
+import { claimEventDeliveries, markDeliveryFailed, markDeliveryProcessed, markDeliverySkipped } from '@/services/integrations/deliveries.service'
 import { getOutboxEventById } from '@/services/integrations/outbox.service'
 import { reconcileCustomerToChatwoot } from './reconciliation'
 
 export interface ConsumeChatwootDeliveriesResult {
   claimed: number
-  processed: number
+  synced: number
+  skipped: number
   failed: number
   dead: number
 }
@@ -23,8 +28,9 @@ export interface ConsumeChatwootDeliveriesResult {
 // Estados de reconciliação que representam "nada mais a fazer agora" —
 // terminal, não é erro do Chatwoot, não adianta re-tentar a MESMA linha de
 // delivery (a próxima vinculação, se acontecer, nasce de outro gatilho —
-// um futuro evento contact_created, não desta fila).
-const TERMINAL_NON_SYNC_OUTCOMES = new Set([
+// um futuro evento contact_created, não desta fila). Seção 11 do pedido da
+// Fase 5: distinto de "processed" (sincronizado de verdade) na observabilidade.
+const SKIPPED_OUTCOMES = new Set([
   'not_linked',
   'no_person',
   'ambiguous_person',
@@ -39,7 +45,8 @@ export async function consumeChatwootDeliveries(
   const claimResult = await claimEventDeliveries('chatwoot', limit, workerId)
   if (!claimResult.ok) return { ok: false, error: claimResult.error }
 
-  let processed = 0
+  let synced = 0
+  let skipped = 0
   let failed = 0
   let dead = 0
 
@@ -55,27 +62,37 @@ export async function consumeChatwootDeliveries(
     if (customerIdRaw == null) {
       // sale.completed de cliente anônimo não tem customer_id útil aqui —
       // não é erro, é um estado terminal válido (nada pra sincronizar).
-      await markDeliveryProcessed(delivery.id, delivery.company_id)
-      processed++
+      await markDeliverySkipped(delivery.id, delivery.company_id, 'Evento sem customer_id no payload (venda de cliente anônimo).')
+      skipped++
       continue
     }
 
     const reconcileResult = await reconcileCustomerToChatwoot(delivery.company_id, Number(customerIdRaw))
     if (!reconcileResult.ok) {
+      // Falha de infraestrutura nossa (ex.: Postgres), não da API do
+      // Chatwoot — sempre retryable, sem Retry-After específico.
       await markDeliveryFailed(delivery.id, delivery.company_id, reconcileResult.error)
       failed++
       continue
     }
 
     const outcome = reconcileResult.data
-    if (outcome.status === 'synced' || TERMINAL_NON_SYNC_OUTCOMES.has(outcome.status)) {
+    if (outcome.status === 'synced') {
       await markDeliveryProcessed(delivery.id, delivery.company_id)
-      processed++
+      synced++
+    } else if (SKIPPED_OUTCOMES.has(outcome.status)) {
+      await markDeliverySkipped(delivery.id, delivery.company_id, `Nada a sincronizar: ${outcome.status}`)
+      skipped++
     } else if (outcome.status === 'permanent_error') {
       await markDeliveryFailed(delivery.id, delivery.company_id, outcome.message, { permanent: true })
       dead++
+    } else if (outcome.status === 'retryable_error') {
+      // Honra Retry-After de um 429 do Chatwoot quando presente (seção 13
+      // do pedido da Fase 5) — senão cai no backoff padrão.
+      await markDeliveryFailed(delivery.id, delivery.company_id, outcome.message, { retryAfterSeconds: outcome.retryAfterSeconds })
+      failed++
     }
   }
 
-  return { ok: true, data: { claimed: claimResult.data.length, processed, failed, dead } }
+  return { ok: true, data: { claimed: claimResult.data.length, synced, skipped, failed, dead } }
 }

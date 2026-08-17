@@ -71,9 +71,9 @@ describe('validateChatwootBaseUrl — SSRF guard (seção 43)', () => {
   })
 })
 
-describe('isPermanentChatwootError — classificação retry vs permanente (seção 33)', () => {
-  it('401/403/404/422 são permanentes', () => {
-    for (const status of [401, 403, 404, 422]) {
+describe('isPermanentChatwootError — classificação retry vs permanente (seção 33 da Fase 4 / seção 12 da Fase 5)', () => {
+  it('400/401/403/404/422 são permanentes', () => {
+    for (const status of [400, 401, 403, 404, 422]) {
       expect(isPermanentChatwootError({ kind: 'http', status, message: '' })).toBe(true)
     }
   })

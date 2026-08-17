@@ -46,13 +46,15 @@ export type ChatwootApiResult<T> = { ok: true; data: T } | { ok: false; error: C
 
 /**
  * Erros permanentes — nunca vale retry (mesmo payload, mesma causa, vai
- * falhar de novo). 401/403 = token/integração inválidos. 404 = contato não
- * existe mais no Chatwoot. 422 = payload rejeitado pela validação do
- * Chatwoot (seção 33 do pedido).
+ * falhar de novo). 400 = request malformado. 401/403 = token/integração
+ * inválidos. 404 = contato não existe mais no Chatwoot. 422 = payload
+ * rejeitado pela validação do Chatwoot (seção 12 do pedido da Fase 5 —
+ * "provavelmente permanente: 400, 401, 403, 404, 422" — lista revisada da
+ * Fase 4, que não incluía 400).
  */
 export function isPermanentChatwootError(error: ChatwootApiError): boolean {
   if (error.kind !== 'http') return false
-  return error.status === 401 || error.status === 403 || error.status === 404 || error.status === 422
+  return error.status === 400 || error.status === 401 || error.status === 403 || error.status === 404 || error.status === 422
 }
 
 /**

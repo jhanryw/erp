@@ -16,6 +16,7 @@
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { getCompanyIntegration, type IntegrationProvider } from './company-integrations.service'
 import type { ServiceOutcome } from '../produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -159,6 +160,31 @@ function destinationsForEvent(eventType: OutboxEventType): OutboxDestination[] {
   return []
 }
 
+// Interseção entre OutboxDestination ('chatwoot'|'meta'|'n8n') e
+// IntegrationProvider ('chatwoot'|'meta'|'nuvemshop') — só os destinos que
+// também são um provider real de company_integrations passam pelo check de
+// integração ativa; 'n8n' nunca é (não é modelado como provider).
+const PROVIDER_DESTINATIONS: readonly OutboxDestination[] = ['chatwoot', 'meta']
+
+/**
+ * Fase 5 (seção 4 do pedido): só cria delivery pra uma empresa se ela tiver
+ * `company_integrations(provider=<destination>, status='active')` — sem
+ * integração ativa, a delivery simplesmente não nasce (o evento em si
+ * continua válido em `integration_outbox`, nada é perdido, só não há pra
+ * onde entregar ainda). `n8n` nunca tem integração ativa por este caminho
+ * (não é um `provider` modelado em `company_integrations` — não há
+ * credencial/config desse tipo pra n8n hoje), então nunca gera delivery
+ * via fan-out automático.
+ */
+// Exportada só pra teste (vitest mocka getCompanyIntegration diretamente —
+// ver outbox.service.test.ts) — nenhum outro módulo deveria chamar isso,
+// o ponto de entrada real é fanOutPendingOutboxEvents.
+export async function isProviderActiveForCompany(companyId: number, destination: OutboxDestination): Promise<boolean> {
+  if (!PROVIDER_DESTINATIONS.includes(destination)) return false
+  const result = await getCompanyIntegration(companyId, destination as IntegrationProvider)
+  return result.ok && !!result.data && result.data.status === 'active'
+}
+
 export interface FanOutResult {
   claimedEvents: number
   deliveriesCreated: number
@@ -189,6 +215,9 @@ export async function fanOutPendingOutboxEvents(
 
   for (const event of claimResult.data) {
     for (const destination of destinationsForEvent(event.event_type)) {
+      const active = await isProviderActiveForCompany(event.company_id, destination)
+      if (!active) continue // seção 4 do pedido da Fase 5 — sem integração ativa, não cria delivery; evento continua válido no outbox
+
       const { error: insertError } = await (admin as any).from('integration_event_deliveries').insert({
         outbox_event_id: event.id,
         company_id: event.company_id,

@@ -13,7 +13,16 @@ import type { OutboxDestination } from './outbox.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-export type DeliveryStatus = 'pending' | 'processing' | 'processed' | 'failed' | 'dead'
+/**
+ * Desde a Fase 5: 'skipped' é distinto de 'processed' — ver
+ * `supabase/migrations/20260819_integration_event_deliveries_skipped_status.sql`.
+ * 'processed' = sincronizado de verdade (ex.: `reconcileCustomerToChatwoot`
+ * retornou `synced`). 'skipped' = resultado terminal válido sem nada pra
+ * sincronizar (`not_linked`/`no_person`/`ambiguous_person`/
+ * `anonymous_customer`/`integration_not_active`) — nunca é retryado, mas
+ * também nunca é contado como sucesso de sincronização.
+ */
+export type DeliveryStatus = 'pending' | 'processing' | 'processed' | 'skipped' | 'failed' | 'dead'
 
 export interface EventDelivery {
   id: number
@@ -94,6 +103,26 @@ export async function markDeliveryProcessed(deliveryId: number, companyId: numbe
 }
 
 /**
+ * Terminal, mas NUNCA é sucesso de sincronização nem erro — resultado
+ * válido de "não havia o que fazer ainda" (seção 11 do pedido da Fase 5:
+ * customer sem contato Chatwoot vinculado, pessoa ambígua, etc.). Nunca
+ * agenda retry — a próxima sincronização real acontece por um gatilho
+ * diferente (novo evento de venda, ou um futuro `contact_created` que crie
+ * o vínculo), nunca por insistir nesta mesma linha de delivery.
+ */
+export async function markDeliverySkipped(deliveryId: number, companyId: number, reason: string): Promise<ServiceOutcome<void>> {
+  const admin = createAdminClient()
+  const { error } = await (admin as any)
+    .from('integration_event_deliveries')
+    .update({ status: 'skipped', processed_at: new Date().toISOString(), locked_at: null, locked_by: null, last_error: reason.slice(0, 2000) })
+    .eq('id', deliveryId)
+    .eq('company_id', companyId)
+
+  if (error) return failure(error.message)
+  return success(undefined)
+}
+
+/**
  * `permanent = true` (seção 33 do pedido — 401/403/404/422, integração
  * inativa, contato não existe mais) pula direto pra `dead`, sem gastar o
  * backoff — retry não teria como ajudar. `retryAfterSeconds` (seção 34 —
@@ -133,6 +162,62 @@ export async function markDeliveryFailed(
       ? new Date(Date.now() + options.retryAfterSeconds * 1000).toISOString()
       : computeNextAvailableAt(current.attempts).toISOString()
   }
+
+  const { error } = await (admin as any)
+    .from('integration_event_deliveries')
+    .update(patch)
+    .eq('id', deliveryId)
+    .eq('company_id', companyId)
+
+  if (error) return failure(error.message)
+  return success(undefined)
+}
+
+// ─── Dead-letter (seção 20-21 do pedido da Fase 5) ─────────────────────────
+
+/**
+ * Consulta pra inspecionar deliveries que esgotaram o backoff (`dead`) —
+ * sem UI ainda (não pedido nesta fase), mas server-side pronto pra uso
+ * administrativo/futuro. Sempre escopado por `companyId` — nunca lista
+ * cross-tenant.
+ */
+export async function listDeadDeliveries(companyId: number, limit = 50): Promise<ServiceOutcome<EventDelivery[]>> {
+  const admin = createAdminClient()
+  const { data, error } = await (admin as any)
+    .from('integration_event_deliveries')
+    .select('*')
+    .eq('company_id', companyId)
+    .eq('status', 'dead')
+    .order('created_at', { ascending: false })
+    .limit(limit) as { data: EventDelivery[] | null; error: { message: string } | null }
+
+  if (error) return failure(error.message)
+  return success(data ?? [])
+}
+
+/**
+ * Reenfileira uma delivery `dead` (ou `failed`) manualmente. Semântica de
+ * `attempts` (seção 21 do pedido, decisão explícita): por padrão PRESERVA
+ * `attempts` — um requeue não é um novo orçamento de 5 tentativas do zero,
+ * é "tente de novo agora"; sem isso, requeues repetidos poderiam martelar
+ * um destino indefinidamente contornando o dead-letter. Passe
+ * `resetAttempts: true` só quando a causa raiz foi corrigida de verdade
+ * (ex.: integração reativada, token trocado) e um orçamento novo de
+ * tentativas é justificado.
+ */
+export async function requeueDelivery(
+  deliveryId: number,
+  companyId: number,
+  options?: { resetAttempts?: boolean },
+): Promise<ServiceOutcome<void>> {
+  const admin = createAdminClient()
+  const patch: Record<string, unknown> = {
+    status: 'pending',
+    available_at: new Date().toISOString(),
+    locked_at: null,
+    locked_by: null,
+  }
+  if (options?.resetAttempts) patch.attempts = 0
 
   const { error } = await (admin as any)
     .from('integration_event_deliveries')

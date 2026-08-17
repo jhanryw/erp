@@ -158,6 +158,16 @@ export type ReconciliationOutcome =
   | { status: 'anonymous_customer' }
   | { status: 'integration_not_active' }
   | { status: 'permanent_error'; message: string }
+  /**
+   * Falha classificada como retryable pela própria resposta do Chatwoot
+   * (429/5xx/timeout/network — `isPermanentChatwootError` retornou false).
+   * Distinto do `failure()` genérico do ServiceOutcome (reservado pra erros
+   * de infraestrutura nossa, ex.: Postgres fora do ar) — só assim
+   * `retryAfterSeconds` (seção 13 do pedido da Fase 5, honrar `Retry-After`
+   * de um 429) sobrevive até quem consome este resultado
+   * (`deliveryConsumer.ts`) poder repassar pro backoff.
+   */
+  | { status: 'retryable_error'; message: string; retryAfterSeconds?: number }
 
 /**
  * Fluxo completo (seção 35 do pedido). Nunca cria contato no Chatwoot
@@ -227,7 +237,7 @@ export async function reconcileCustomerToChatwoot(
     if (isPermanentChatwootError(currentContactResult.error)) {
       return success({ status: 'permanent_error', message: currentContactResult.error.message })
     }
-    return failure(currentContactResult.error.message)
+    return success({ status: 'retryable_error', message: currentContactResult.error.message, retryAfterSeconds: currentContactResult.error.retryAfterSeconds })
   }
 
   const mergedAttributes = mergeChatwootCustomAttributes(currentContactResult.data.custom_attributes ?? {}, qarvonAttributes)
@@ -238,7 +248,7 @@ export async function reconcileCustomerToChatwoot(
     if (isPermanentChatwootError(updateResult.error)) {
       return success({ status: 'permanent_error', message: updateResult.error.message })
     }
-    return failure(updateResult.error.message)
+    return success({ status: 'retryable_error', message: updateResult.error.message, retryAfterSeconds: updateResult.error.retryAfterSeconds })
   }
 
   await updateExternalEntityLinkMetadata(link.id, companyId, { last_synced_at: new Date().toISOString(), last_sync_error: null })
