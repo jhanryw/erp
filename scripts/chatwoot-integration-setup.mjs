@@ -18,7 +18,7 @@
  *     --company-id <id-real-da-empresa-no-Qarvon> \
  *     --account-id <id-da-conta-no-Chatwoot> \
  *     --base-url https://sua-instancia-chatwoot.example.com \
- *     [--api-token] [--webhook-secret] [--webhook-url <url-pública-do-endpoint-de-webhook-do-Qarvon>] [--inbox-id <id>] [--activate]
+ *     [--api-token] [--webhook-secret] [--webhook-url <url-pública-do-endpoint-de-webhook-do-Qarvon>] [--inbox-id <id>] [--register-inbox <id> --channel-type <whatsapp|instagram> --identifier <valor> [--label <texto>]] [--activate]
  *
  * --api-token e --webhook-secret são independentes e opt-in — nenhum dos
  * dois roda sem a flag explícita, exatamente pra nunca sobrescrever um
@@ -35,6 +35,21 @@
  * outros dois flags — só grava se passado explicitamente. `settings` é
  * sempre MESCLADO com o que já existia (nunca substituído por inteiro),
  * pra rodar `--api-token` de novo não apagar um `inbox_id` já configurado.
+ *
+ * `--register-inbox <id> --channel-type <whatsapp|instagram> --identifier
+ * <valor> [--label <texto>]` (FASE MVP CHATWOOT, seção 2 do pedido):
+ * cataloga uma inbox em `settings.inboxes[]` — modelo mínimo pra suportar
+ * múltiplas inboxes (2 WhatsApp + Instagram) SEM tabela nova, reaproveitando
+ * o mesmo JSONB `settings` que já existia. Independente e opt-in, mesmo
+ * princípio dos outros flags. Rodar de novo com o mesmo `--register-inbox
+ * <id>` ATUALIZA a entrada existente (nunca duplica). Distinto de
+ * `--inbox-id`: aquele é "QUAL inbox a automação de pós-venda usa" (Fase
+ * N2B, congelada), este é "QUAIS inboxes existem" (documentação/registro
+ * pro backfill e pra auditoria — nunca escolhe uma "principal" sozinho).
+ * Exemplo:
+ *   --register-inbox 2 --channel-type whatsapp --identifier "+5584999990001" --label "WhatsApp Santtorini 1"
+ *   --register-inbox 5 --channel-type whatsapp --identifier "+5584999990002" --label "WhatsApp Santtorini 2"
+ *   --register-inbox 7 --channel-type instagram --identifier "@santtorini" --label "Instagram Santtorini"
  *
  * `--webhook-url`: só relevante junto de `--webhook-secret` — se informado,
  * o script faz um AUTO-TESTE real (assina um payload de evento inofensivo
@@ -104,18 +119,23 @@ const accountId = arg('account-id')
 const baseUrl = arg('base-url')
 const webhookUrl = arg('webhook-url')
 const inboxIdArg = arg('inbox-id')
+const registerInboxArg = arg('register-inbox')
+const channelTypeArg = arg('channel-type')
+const identifierArg = arg('identifier')
+const labelArg = arg('label')
 const shouldActivate = flag('activate')
 const doApiToken = flag('api-token')
 const doWebhookSecret = flag('webhook-secret')
 const doInboxId = inboxIdArg !== undefined
+const doRegisterInbox = registerInboxArg !== undefined
 
 if (!companyId || !accountId || !baseUrl) {
-  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--api-token] [--webhook-secret] [--webhook-url <url>] [--inbox-id <id>] [--activate]')
+  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--api-token] [--webhook-secret] [--webhook-url <url>] [--inbox-id <id>] [--register-inbox <id> --channel-type <whatsapp|instagram> --identifier <valor> [--label <texto>]] [--activate]')
   process.exit(1)
 }
 
-if (!doApiToken && !doWebhookSecret && !doInboxId) {
-  console.error('Nada a fazer — passe --api-token e/ou --webhook-secret e/ou --inbox-id explicitamente (nenhum segredo/configuração é tocado por padrão, pra nunca sobrescrever algo já configurado sem intenção explícita).')
+if (!doApiToken && !doWebhookSecret && !doInboxId && !doRegisterInbox) {
+  console.error('Nada a fazer — passe --api-token e/ou --webhook-secret e/ou --inbox-id e/ou --register-inbox explicitamente (nenhum segredo/configuração é tocado por padrão, pra nunca sobrescrever algo já configurado sem intenção explícita).')
   process.exit(1)
 }
 
@@ -127,6 +147,29 @@ if (doInboxId) {
   inboxIdNum = Number(inboxIdArg)
   if (!Number.isFinite(inboxIdNum) || !Number.isInteger(inboxIdNum) || inboxIdNum <= 0) {
     console.error(`--inbox-id inválido: "${inboxIdArg}" (precisa ser um inteiro positivo — o ID numérico da inbox no Chatwoot, não o nome).`)
+    process.exit(1)
+  }
+}
+
+// --register-inbox (Fase MVP Chatwoot, seção 2 do pedido) — registro em
+// settings.inboxes[] (NÃO settings.inbox_id, que continua exclusivo da
+// automação de pós-venda da Fase N2B, congelada nesta fase). Só cataloga
+// quais inboxes existem/o que representam — nunca escolhe automaticamente
+// qual é "a" inbox de nada.
+const REGISTER_INBOX_CHANNEL_TYPES = ['whatsapp', 'instagram']
+let registerInboxIdNum
+if (doRegisterInbox) {
+  registerInboxIdNum = Number(registerInboxArg)
+  if (!Number.isFinite(registerInboxIdNum) || !Number.isInteger(registerInboxIdNum) || registerInboxIdNum <= 0) {
+    console.error(`--register-inbox inválido: "${registerInboxArg}" (precisa ser o ID numérico da inbox no Chatwoot).`)
+    process.exit(1)
+  }
+  if (!channelTypeArg || !REGISTER_INBOX_CHANNEL_TYPES.includes(channelTypeArg)) {
+    console.error(`--channel-type obrigatório junto de --register-inbox — valores aceitos: ${REGISTER_INBOX_CHANNEL_TYPES.join(', ')}.`)
+    process.exit(1)
+  }
+  if (!identifierArg || !identifierArg.trim()) {
+    console.error('--identifier obrigatório junto de --register-inbox (telefone E.164 pra whatsapp, @handle pra instagram — só rótulo, nunca usado pra autenticar nada).')
     process.exit(1)
   }
 }
@@ -253,6 +296,10 @@ async function chatwootFetch(token, path, init = {}) {
   }
 }
 
+// Cópia deliberada de src/lib/integrations/chatwoot/customAttributes.ts
+// (QARVON_CUSTOM_ATTRIBUTES) — mesma dívida técnica já documentada em
+// scripts/customer-identity-audit.mjs (sem tsx/ts-node pra importar TS
+// direto). QUALQUER mudança lá precisa ser replicada aqui.
 const QARVON_CUSTOM_ATTRIBUTES = [
   { key: 'qarvon_customer_id', name: 'Qarvon — ID do Cliente', type: 0, description: 'ID do cliente no ERP Qarvon (customers.id).' },
   { key: 'qarvon_total_orders', name: 'Qarvon — Total de Pedidos', type: 1, description: 'Quantidade de pedidos válidos (exclui cancelados/devolvidos).' },
@@ -261,7 +308,26 @@ const QARVON_CUSTOM_ATTRIBUTES = [
   { key: 'qarvon_first_purchase_at', name: 'Qarvon — Primeira Compra', type: 5, description: 'Data da primeira venda válida.' },
   { key: 'qarvon_last_purchase_at', name: 'Qarvon — Última Compra', type: 5, description: 'Data da venda válida mais recente.' },
   { key: 'qarvon_customer_segment', name: 'Qarvon — Segmento (RFM)', type: 0, description: 'Segmento RFM calculado — pode ficar até 1 refresh desatualizado.' },
+  { key: 'qarvon_cashback_available', name: 'Qarvon — Cashback Disponível', type: 2, description: 'Saldo de cashback disponível pra uso, em BRL.' },
+  { key: 'qarvon_erp_link', name: 'Qarvon — Ver no ERP', type: 4, description: 'Link direto pro histórico completo de compras do cliente no Qarvon.' },
 ]
+
+/**
+ * Registra/atualiza uma inbox em settings.inboxes[] (Fase MVP Chatwoot,
+ * seção 2 do pedido) — mesmo `id` já presente é ATUALIZADO no lugar (nunca
+ * duplica entrada pra mesma inbox), idempotente rodar de novo com os
+ * mesmos dados.
+ */
+function mergeRegisterInbox(existingInboxes, entry) {
+  const list = Array.isArray(existingInboxes) ? existingInboxes.slice() : []
+  const idx = list.findIndex((i) => i.id === entry.id)
+  if (idx === -1) {
+    list.push(entry)
+  } else {
+    list[idx] = { ...list[idx], ...entry }
+  }
+  return list
+}
 
 async function main() {
   const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -293,6 +359,14 @@ async function main() {
     // com só {base_url}).
     const mergedSettings = { ...(existing.settings ?? {}), base_url: baseUrl }
     if (doInboxId) mergedSettings.inbox_id = inboxIdNum
+    if (doRegisterInbox) {
+      mergedSettings.inboxes = mergeRegisterInbox(mergedSettings.inboxes, {
+        id: registerInboxIdNum,
+        channel_type: channelTypeArg,
+        identifier: identifierArg.trim(),
+        label: (labelArg && labelArg.trim()) || `${channelTypeArg} ${registerInboxIdNum}`,
+      })
+    }
 
     const { error } = await supabase
       .from('company_integrations')
@@ -301,9 +375,18 @@ async function main() {
     if (error) { console.error('Erro ao atualizar company_integrations:', error.message); process.exit(1) }
     console.log(`Integração existente atualizada (id=${integrationId}, status atual="${existing.status}").`)
     if (doInboxId) console.log(`settings.inbox_id definido como ${inboxIdNum}.`)
+    if (doRegisterInbox) console.log(`settings.inboxes: inbox ${registerInboxIdNum} (${channelTypeArg}) registrada. Total agora: ${mergedSettings.inboxes.length}.`)
   } else {
     const settings = { base_url: baseUrl }
     if (doInboxId) settings.inbox_id = inboxIdNum
+    if (doRegisterInbox) {
+      settings.inboxes = mergeRegisterInbox(undefined, {
+        id: registerInboxIdNum,
+        channel_type: channelTypeArg,
+        identifier: identifierArg.trim(),
+        label: (labelArg && labelArg.trim()) || `${channelTypeArg} ${registerInboxIdNum}`,
+      })
+    }
 
     const { data: created, error } = await supabase
       .from('company_integrations')
@@ -312,7 +395,7 @@ async function main() {
       .single()
     if (error) { console.error('Erro ao criar company_integrations:', error.message); process.exit(1) }
     integrationId = created.id
-    console.log(`Integração criada (id=${integrationId}, status="pending").${doInboxId ? ` settings.inbox_id=${inboxIdNum}.` : ''}`)
+    console.log(`Integração criada (id=${integrationId}, status="pending").${doInboxId ? ` settings.inbox_id=${inboxIdNum}.` : ''}${doRegisterInbox ? ` settings.inboxes[0]=${registerInboxIdNum} (${channelTypeArg}).` : ''}`)
   }
 
   // ── 2. api_token — só se --api-token foi passado (nunca toca sem pedir) ──

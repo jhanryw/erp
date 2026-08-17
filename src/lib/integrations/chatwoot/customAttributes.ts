@@ -31,6 +31,8 @@ export const QARVON_CUSTOM_ATTRIBUTES = [
   { key: 'qarvon_first_purchase_at', displayName: 'Qarvon — Primeira Compra', type: 5 as const, description: 'Data da primeira venda válida.' },
   { key: 'qarvon_last_purchase_at', displayName: 'Qarvon — Última Compra', type: 5 as const, description: 'Data da venda válida mais recente.' },
   { key: 'qarvon_customer_segment', displayName: 'Qarvon — Segmento (RFM)', type: 0 as const, description: 'Segmento RFM calculado (mv_customer_rfm) — pode ficar até 1 refresh desatualizado.' },
+  { key: 'qarvon_cashback_available', displayName: 'Qarvon — Cashback Disponível', type: 2 as const, description: 'Saldo de cashback disponível pra uso (v_cashback_balance.available_balance), em BRL.' },
+  { key: 'qarvon_erp_link', displayName: 'Qarvon — Ver no ERP', type: 4 as const, description: 'Link direto pro histórico completo de compras do cliente no Qarvon — fonte de verdade, nunca duplicada aqui (Fase MVP Chatwoot, seção 7 do pedido).' },
 ] as const
 
 export type QarvonAttributeKey = (typeof QARVON_CUSTOM_ATTRIBUTES)[number]['key']

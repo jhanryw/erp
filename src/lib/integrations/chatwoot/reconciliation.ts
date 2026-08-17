@@ -81,6 +81,8 @@ export interface CustomerCommercialAttributes {
   firstPurchaseAt: string | null // YYYY-MM-DD
   lastPurchaseAt: string | null // YYYY-MM-DD
   customerSegment: string | null
+  /** Saldo disponível pra uso — sempre 0 (nunca null), mesma view já usada por GET /api/cashback/balance (v_cashback_balance.available_balance). Fase MVP Chatwoot, seção 6 do pedido. */
+  cashbackAvailable: number
 }
 
 export async function computeCustomerCommercialAttributes(
@@ -111,6 +113,13 @@ export async function computeCustomerCommercialAttributes(
     .eq('customer_id', customerId)
     .maybeSingle() as { data: { segment: string } | null }
 
+  const { data: cashback } = await (admin as any)
+    .from('v_cashback_balance')
+    .select('available_balance')
+    .eq('customer_id', customerId)
+    .eq('company_id', companyId)
+    .maybeSingle() as { data: { available_balance: number } | null }
+
   return success({
     totalOrders,
     totalSpent: Math.round(totalSpent * 100) / 100,
@@ -118,20 +127,35 @@ export async function computeCustomerCommercialAttributes(
     firstPurchaseAt,
     lastPurchaseAt,
     customerSegment: rfm?.segment ?? null,
+    cashbackAvailable: Math.round(Number(cashback?.available_balance ?? 0) * 100) / 100,
   })
 }
 
-/** Pura, exportada pra teste — nunca inclui chave com valor ausente (nunca envia `null`/`undefined` ao Chatwoot). */
+/**
+ * Pura, exportada pra teste — nunca inclui chave com valor ausente (nunca
+ * envia `null`/`undefined` ao Chatwoot).
+ *
+ * `qarvon_erp_link` (Fase MVP Chatwoot, seção 7 do pedido): link direto pra
+ * `/clientes/:id` no ERP — decisão deliberada de NÃO despejar histórico de
+ * compras aqui (custom attribute não é lugar pra lista, ver relatório da
+ * fase, seção sobre histórico de compras). Só incluído quando
+ * `NEXT_PUBLIC_APP_URL` está configurada (nunca um link relativo/quebrado).
+ */
 export function buildQarvonCustomAttributesPayload(customerId: number, attrs: CustomerCommercialAttributes): Record<string, unknown> {
   const payload: Record<string, unknown> = {
     qarvon_customer_id: String(customerId),
     qarvon_total_orders: attrs.totalOrders,
     qarvon_total_spent: attrs.totalSpent,
+    qarvon_cashback_available: attrs.cashbackAvailable,
   }
   if (attrs.averageTicket !== null) payload.qarvon_average_ticket = attrs.averageTicket
   if (attrs.firstPurchaseAt) payload.qarvon_first_purchase_at = attrs.firstPurchaseAt
   if (attrs.lastPurchaseAt) payload.qarvon_last_purchase_at = attrs.lastPurchaseAt
   if (attrs.customerSegment) payload.qarvon_customer_segment = attrs.customerSegment
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL
+  if (appUrl) payload.qarvon_erp_link = `${appUrl.replace(/\/$/, '')}/clientes/${customerId}`
+
   return payload
 }
 

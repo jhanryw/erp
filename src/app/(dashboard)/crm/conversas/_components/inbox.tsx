@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Spinner } from '@/components/ui/spinner'
@@ -28,7 +28,7 @@ export interface ConversationCounts {
 
 const SEARCH_DEBOUNCE_MS = 400
 
-export function Inbox({ companyId }: { companyId: number | null }) {
+export function Inbox({ companyId, chatwootUrl }: { companyId: number | null; chatwootUrl: string | null }) {
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [channels, setChannels] = useState<CrmChannelOption[]>([])
   const [counts, setCounts] = useState<ConversationCounts | null>(null)
@@ -217,7 +217,28 @@ export function Inbox({ companyId }: { companyId: number | null }) {
 
   return (
     <div className="flex flex-col gap-1">
-      <h1 className="text-xl font-semibold text-text-primary mb-1">CRM — Conversas</h1>
+      <div className="flex items-center justify-between mb-1">
+        <h1 className="text-xl font-semibold text-text-primary">CRM — Conversas</h1>
+
+        {chatwootUrl ? (
+          <a
+            href={chatwootUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium border border-border bg-bg-overlay text-text-primary hover:bg-bg-hover transition-colors"
+          >
+            Abrir Chatwoot
+            <ExternalLink className="w-3.5 h-3.5" />
+          </a>
+        ) : (
+          <span
+            className="inline-flex items-center h-8 px-3 rounded-lg text-xs text-text-muted border border-border border-dashed"
+            title="Nenhuma integração Chatwoot ativa com base_url configurado para esta empresa."
+          >
+            Chatwoot não configurado
+          </span>
+        )}
+      </div>
 
       <div className="flex h-[calc(100vh-160px)] min-h-[500px] gap-4">
         {/* Mobile/tablet (<lg): tela única — lista OU thread, nunca as duas.
