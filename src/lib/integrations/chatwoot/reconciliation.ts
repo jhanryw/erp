@@ -131,6 +131,90 @@ export async function computeCustomerCommercialAttributes(
   })
 }
 
+// ─── 2b. Categorias compradas + tamanho preferencial (Fase "Enriquecimento
+// comercial") — via rpc_customer_purchase_profile, ver migration
+// 20260817_rpc_customer_purchase_profile.sql pro achado completo de
+// modelagem (Tipo ≠ tabela `categories`; tamanho vem de
+// product_variation_attributes, nunca de product_variations.size/.color,
+// colunas mortas confirmadas 100% NULL em produção).
+
+export interface CustomerPurchaseProfileEntry {
+  productTypeSlug: string
+  productTypeName: string
+  totalQuantity: number
+  /** null quando não há evidência suficiente (nenhuma variação com tamanho identificado nesse Tipo) — nunca inventado. */
+  dominantSize: string | null
+}
+
+export interface CustomerPurchaseProfile {
+  /** Nomes de product_types (Tipo) com pelo menos 1 compra válida — deduplicados, ordenados alfabeticamente (pt-BR). */
+  categories: string[]
+  sizesByType: CustomerPurchaseProfileEntry[]
+}
+
+interface CustomerPurchaseProfileRow {
+  product_type_slug: string
+  product_type_name: string
+  total_quantity: number
+  dominant_size: string | null
+}
+
+export async function computeCustomerPurchaseProfile(
+  customerId: number,
+  companyId: number,
+): Promise<ServiceOutcome<CustomerPurchaseProfile>> {
+  const admin = createAdminClient()
+
+  const { data, error } = await (admin as any).rpc('rpc_customer_purchase_profile', {
+    p_customer_id: customerId,
+    p_company_id: companyId,
+  }) as { data: CustomerPurchaseProfileRow[] | null; error: { message: string } | null }
+
+  if (error) return failure(error.message)
+
+  const rows = data ?? []
+  const categories = Array.from(new Set(rows.map((r) => r.product_type_name))).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+
+  return success({
+    categories,
+    sizesByType: rows.map((r) => ({
+      productTypeSlug: r.product_type_slug,
+      productTypeName: r.product_type_name,
+      totalQuantity: Number(r.total_quantity),
+      dominantSize: r.dominant_size,
+    })),
+  })
+}
+
+/**
+ * Pura, exportada pra teste — nunca inclui chave com valor ausente.
+ * `qarvon_categories`: nomes de Tipo (product_types), deduplicados,
+ * ordenados alfabeticamente, unidos por ", " (ex.: "Calcinha, Pijama,
+ * Sutiã") — NUNCA a tabela `categories` (sub-classificação de estilo
+ * dentro de um Tipo, ex.: "Rendada"/"Básico" — achado da auditoria,
+ * ver migration da RPC). Omitido se o customer não tem nenhuma compra
+ * válida classificável.
+ *
+ * `qarvon_size_<slug>`: um por Tipo, só quando há tamanho dominante
+ * identificável (nunca inferido sem evidência — nunca envia chave pra
+ * um Tipo sem nenhuma variação com tamanho cadastrado).
+ */
+export function buildQarvonCategoryAttributesPayload(profile: CustomerPurchaseProfile): Record<string, unknown> {
+  const payload: Record<string, unknown> = {}
+
+  if (profile.categories.length > 0) {
+    payload.qarvon_categories = profile.categories.join(', ')
+  }
+
+  for (const entry of profile.sizesByType) {
+    if (entry.dominantSize) {
+      payload[`qarvon_size_${entry.productTypeSlug}`] = entry.dominantSize
+    }
+  }
+
+  return payload
+}
+
 /**
  * Pura, exportada pra teste — nunca inclui chave com valor ausente (nunca
  * envia `null`/`undefined` ao Chatwoot).
@@ -251,7 +335,13 @@ export async function reconcileCustomerToChatwoot(
   const attrsResult = await computeCustomerCommercialAttributes(customerId, companyId)
   if (!attrsResult.ok) return failure(attrsResult.error, attrsResult.status)
 
-  const qarvonAttributes = buildQarvonCustomAttributesPayload(customerId, attrsResult.data)
+  const profileResult = await computeCustomerPurchaseProfile(customerId, companyId)
+  if (!profileResult.ok) return failure(profileResult.error, profileResult.status)
+
+  const qarvonAttributes = {
+    ...buildQarvonCustomAttributesPayload(customerId, attrsResult.data),
+    ...buildQarvonCategoryAttributesPayload(profileResult.data),
+  }
 
   // Busca o contato atual pra mesclar (nunca substitui custom_attributes
   // de outro sistema — ver nota de incerteza em client.ts).

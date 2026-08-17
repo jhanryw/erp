@@ -166,12 +166,39 @@ const QARVON_CUSTOM_ATTRIBUTES = [
   { key: 'qarvon_customer_segment', name: 'Qarvon — Segmento (RFM)', type: 0, description: 'Segmento RFM calculado — pode ficar até 1 refresh desatualizado.' },
   { key: 'qarvon_cashback_available', name: 'Qarvon — Cashback Disponível', type: 2, description: 'Saldo de cashback disponível pra uso, em BRL.' },
   { key: 'qarvon_erp_link', name: 'Qarvon — Ver no ERP', type: 4, description: 'Link direto pro histórico completo de compras do cliente no Qarvon.' },
+  { key: 'qarvon_categories', name: 'Qarvon — Categorias Compradas', type: 0, description: 'Tipos de produto (product_types) em que o cliente já comprou de verdade, separados por vírgula.' },
 ]
+
+// Cópia deliberada de QARVON_SIZE_PRODUCT_TYPES (customAttributes.ts) — Fase
+// "Enriquecimento comercial". Tipos REAIS e confirmados do catálogo (ver
+// migration 20260817_rpc_customer_purchase_profile.sql pra evidência).
+const QARVON_SIZE_PRODUCT_TYPES = [
+  { slug: 'sutia', name: 'Sutiã' },
+  { slug: 'calcinha', name: 'Calcinha' },
+  { slug: 'body', name: 'Body' },
+  { slug: 'pijama', name: 'Pijama' },
+  { slug: 'camisola', name: 'Camisola' },
+  { slug: 'baby_doll', name: 'Baby Doll' },
+  { slug: 'robe', name: 'Robe' },
+  { slug: 'top', name: 'Top' },
+  { slug: 'short_doll', name: 'Short Doll' },
+  { slug: 'conjunto_calcinha_sutia', name: 'Conjunto Calcinha e Sutiã' },
+  { slug: 'cinta', name: 'Cinta' },
+  { slug: 'meia_calca', name: 'Meia-calça' },
+  { slug: 'acessorio_intimo', name: 'Acessório Íntimo' },
+]
+
+const QARVON_SIZE_ATTRIBUTES = QARVON_SIZE_PRODUCT_TYPES.map((t) => ({
+  key: `qarvon_size_${t.slug}`,
+  name: `Qarvon — Tamanho (${t.name})`,
+  type: 0,
+  description: `Tamanho mais comprado pelo cliente em ${t.name} (maior quantidade; empate resolvido pela compra mais recente).`,
+}))
 
 async function ensureCustomAttributeDefinitions(config) {
   const existing = await chatwootFetch(config, '/custom_attribute_definitions')
   const existingKeys = new Set((existing ?? []).map((a) => a.attribute_key))
-  for (const attr of QARVON_CUSTOM_ATTRIBUTES) {
+  for (const attr of [...QARVON_CUSTOM_ATTRIBUTES, ...QARVON_SIZE_ATTRIBUTES]) {
     if (existingKeys.has(attr.key)) continue
     await chatwootFetch(config, '/custom_attribute_definitions', {
       method: 'POST',
@@ -228,13 +255,39 @@ function buildAttributesPayload(customerId, attrs) {
   return payload
 }
 
+// Reaproveita a RPC de verdade (rpc_customer_purchase_profile) via
+// supabase.rpc() — nenhuma lógica de agregação/desempate duplicada aqui,
+// diferente do resto deste script (a query em si já vive no Postgres,
+// chamável igualmente de TS ou deste script Node).
+async function computePurchaseProfile(customerId) {
+  const { data, error } = await supabase.rpc('rpc_customer_purchase_profile', {
+    p_customer_id: customerId,
+    p_company_id: companyId,
+  })
+  if (error) throw new Error(error.message)
+
+  const rows = data ?? []
+  const categories = Array.from(new Set(rows.map((r) => r.product_type_name))).sort((a, b) => a.localeCompare(b, 'pt-BR'))
+  return { categories, sizesByType: rows.map((r) => ({ productTypeSlug: r.product_type_slug, dominantSize: r.dominant_size })) }
+}
+
+// Cópia deliberada de buildQarvonCategoryAttributesPayload (reconciliation.ts)
+function buildCategoryAttributesPayload(profile) {
+  const payload = {}
+  if (profile.categories.length > 0) payload.qarvon_categories = profile.categories.join(', ')
+  for (const entry of profile.sizesByType) {
+    if (entry.dominantSize) payload[`qarvon_size_${entry.productTypeSlug}`] = entry.dominantSize
+  }
+  return payload
+}
+
 function maskPhone(phone) {
   const digits = String(phone ?? '').replace(/\D/g, '')
   return digits.length <= 2 ? '**' : `${'*'.repeat(digits.length - 2)}${digits.slice(-2)}`
 }
 
 // ─── Contadores do relatório ────────────────────────────────────────────────
-const counters = {
+export const counters = {
   total_candidates: 0,
   already_linked: 0,
   person_created: 0,
@@ -249,7 +302,7 @@ const counters = {
   errors: 0,
 }
 
-async function processCustomer(customer, config, inboxId) {
+export async function processCustomer(customer, config, inboxId) {
   counters.total_candidates++
 
   // ── 1. crm_person já vinculado a este customer? ──────────────────────────
@@ -262,9 +315,16 @@ async function processCustomer(customer, config, inboxId) {
   if (linksError) throw new Error(linksError.message)
 
   let personId = null
+  let contactId = null
+  let alreadyLinked = false
 
   if ((existingLinks ?? []).length > 0) {
-    // Já vinculado a algum contato Chatwoot via qualquer um dos vínculos existentes? Idempotente — não mexe de novo.
+    // Já vinculado a algum contato Chatwoot via qualquer um dos vínculos
+    // existentes? `already_linked` significa só "não precisa recriar
+    // crm_person/contato/external_entity_link" — reaproveita o contact_id e
+    // CONTINUA pro pipeline de sincronização de atributos abaixo (nunca mais
+    // um return antecipado aqui — esse era o bug: customers já vinculados
+    // nunca recebiam os atributos comerciais/categorias/tamanhos novos).
     for (const link of existingLinks) {
       const { data: existingContactLink } = await supabase
         .from('external_entity_links')
@@ -277,25 +337,31 @@ async function processCustomer(customer, config, inboxId) {
         .maybeSingle()
       if (existingContactLink) {
         counters.already_linked++
-        return { status: 'already_linked', contactId: existingContactLink.external_id }
+        personId = link.person_id
+        contactId = existingContactLink.external_id
+        alreadyLinked = true
+        break
       }
     }
 
-    if (existingLinks.length === 1) {
-      personId = existingLinks[0].person_id
-    } else {
-      const primary = existingLinks.find((l) => l.is_primary)
-      if (primary) {
-        personId = primary.person_id
+    if (!alreadyLinked) {
+      if (existingLinks.length === 1) {
+        personId = existingLinks[0].person_id
       } else {
-        counters.skipped_customer_multiple_persons_ambiguous++
-        return { status: 'skipped_customer_multiple_persons_ambiguous' }
+        const primary = existingLinks.find((l) => l.is_primary)
+        if (primary) {
+          personId = primary.person_id
+        } else {
+          counters.skipped_customer_multiple_persons_ambiguous++
+          return { status: 'skipped_customer_multiple_persons_ambiguous' }
+        }
       }
+      counters.person_reused++
     }
-    counters.person_reused++
   }
 
   // ── 2. Sem pessoa vinculada — encontra/cria via identidade de telefone ───
+  // (nunca roda quando já tem contact_id reaproveitado do passo 1)
   if (!personId) {
     if (!doExecute) {
       // Dry-run: só reporta a intenção, nunca chama a RPC (que cria de verdade).
@@ -343,54 +409,62 @@ async function processCustomer(customer, config, inboxId) {
     counters.person_created++
   }
 
-  // ── 3. Contato Chatwoot — busca por telefone exato antes de criar ────────
-  let contactId = null
+  // ── 3/4. Contato Chatwoot — só quando ainda não reaproveitado do passo 1 ──
+  if (!contactId) {
+    if (!doExecute) {
+      return { status: 'would_resolve_contact', personId }
+    }
 
-  if (!doExecute) {
-    return { status: 'would_resolve_contact', personId }
-  }
+    const searchResult = await chatwootFetch(config, `/contacts/search?q=${encodeURIComponent(customer.phone_e164)}`)
+    // Busca do Chatwoot é fuzzy (nome/identifier/email/telefone) — só confia
+    // em EQUALDADE exata de dígitos (não `endsWith`, que aceitaria um número
+    // maior terminando nos mesmos dígitos por coincidência).
+    const exactMatches = (searchResult?.payload ?? []).filter((c) => c.phone_number && c.phone_number.replace(/\D/g, '') === customer.phone_e164)
 
-  const searchResult = await chatwootFetch(config, `/contacts/search?q=${encodeURIComponent(customer.phone_e164)}`)
-  // Busca do Chatwoot é fuzzy (nome/identifier/email/telefone) — só confia
-  // em EQUALDADE exata de dígitos (não `endsWith`, que aceitaria um número
-  // maior terminando nos mesmos dígitos por coincidência).
-  const exactMatches = (searchResult?.payload ?? []).filter((c) => c.phone_number && c.phone_number.replace(/\D/g, '') === customer.phone_e164)
+    if (exactMatches.length > 1) {
+      counters.skipped_chatwoot_contact_ambiguous++
+      return { status: 'skipped_chatwoot_contact_ambiguous', personId }
+    }
 
-  if (exactMatches.length > 1) {
-    counters.skipped_chatwoot_contact_ambiguous++
-    return { status: 'skipped_chatwoot_contact_ambiguous', personId }
-  }
+    if (exactMatches.length === 1) {
+      contactId = String(exactMatches[0].id)
+      counters.contact_reused_by_phone++
+    } else {
+      const createResult = await chatwootFetch(config, '/contacts', {
+        method: 'POST',
+        body: { inbox_id: inboxId, name: customer.name, phone_number: `+${customer.phone_e164}` },
+      })
+      contactId = String(createResult?.payload?.contact?.id ?? '')
+      if (!contactId) throw new Error('Chatwoot não devolveu o contato criado.')
+      counters.contact_created++
+    }
 
-  if (exactMatches.length === 1) {
-    contactId = String(exactMatches[0].id)
-    counters.contact_reused_by_phone++
-  } else {
-    const createResult = await chatwootFetch(config, '/contacts', {
-      method: 'POST',
-      body: { inbox_id: inboxId, name: customer.name, phone_number: `+${customer.phone_e164}` },
+    // external_entity_link — idempotente (23505 = já existe)
+    const { error: extLinkError } = await supabase.from('external_entity_links').insert({
+      company_id: companyId,
+      integration_id: config.integrationId,
+      provider: 'chatwoot',
+      entity_type: 'crm_person',
+      entity_id: String(personId),
+      external_entity_type: 'contact',
+      external_id: contactId,
     })
-    contactId = String(createResult?.payload?.contact?.id ?? '')
-    if (!contactId) throw new Error('Chatwoot não devolveu o contato criado.')
-    counters.contact_created++
+    if (extLinkError && extLinkError.code !== '23505') throw new Error(extLinkError.message)
+    if (!extLinkError) counters.link_created++
   }
 
-  // ── 4. external_entity_link — idempotente (23505 = já existe) ────────────
-  const { error: extLinkError } = await supabase.from('external_entity_links').insert({
-    company_id: companyId,
-    integration_id: config.integrationId,
-    provider: 'chatwoot',
-    entity_type: 'crm_person',
-    entity_id: String(personId),
-    external_entity_type: 'contact',
-    external_id: contactId,
-  })
-  if (extLinkError && extLinkError.code !== '23505') throw new Error(extLinkError.message)
-  if (!extLinkError) counters.link_created++
+  // ── 5. Atributos comerciais + categorias/tamanhos — merge, nunca sobrescreve atributo alheio ───
+  // Roda SEMPRE que chegar até aqui, inclusive pra customers já vinculados
+  // (reaproveitando o contact_id do passo 1) — é isso que corrige a
+  // ressincronização: already_linked deixa de ser terminal.
+  if (!doExecute) {
+    return { status: alreadyLinked ? 'would_resync_attributes' : 'would_resolve_contact', personId, contactId }
+  }
 
-  // ── 5. Atributos comerciais — merge, nunca sobrescreve atributo alheio ───
   const currentContact = await chatwootFetch(config, `/contacts/${encodeURIComponent(contactId)}`)
   const attrs = await computeCommercialAttributes(customer.id)
-  const qarvonPayload = buildAttributesPayload(customer.id, attrs)
+  const profile = await computePurchaseProfile(customer.id)
+  const qarvonPayload = { ...buildAttributesPayload(customer.id, attrs), ...buildCategoryAttributesPayload(profile) }
   const merged = { ...(currentContact?.custom_attributes ?? {}), ...qarvonPayload }
   await chatwootFetch(config, `/contacts/${encodeURIComponent(contactId)}`, { method: 'PUT', body: { custom_attributes: merged } })
   counters.attributes_synced++
@@ -490,7 +564,15 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error('Erro fatal:', err.message)
-  process.exit(1)
-})
+// Só roda main() quando o arquivo é executado diretamente (`node
+// scripts/chatwoot-customer-backfill.mjs ...`) — nunca quando importado
+// (testes importam `processCustomer` isoladamente, sem disparar o loop
+// inteiro de customers). Nenhuma mudança de comportamento no uso normal via
+// CLI: `process.argv[1]` é sempre este arquivo nesse caso.
+const isMainModule = import.meta.url === `file://${process.argv[1]}`
+if (isMainModule) {
+  main().catch((err) => {
+    console.error('Erro fatal:', err.message)
+    process.exit(1)
+  })
+}

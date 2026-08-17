@@ -78,8 +78,25 @@ REVOKE ALL ON FUNCTION public.rpc_stock_transfer_bulk(int, int, text, uuid, json
 GRANT EXECUTE ON FUNCTION public.rpc_stock_transfer_bulk(int, int, text, uuid, jsonb) TO service_role;
 
 -- 7. rpc_reconcile_stock_divergence
-REVOKE ALL ON FUNCTION public.rpc_reconcile_stock_divergence(text, uuid, boolean) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.rpc_reconcile_stock_divergence(text, uuid, boolean) TO service_role;
+-- Esta RPC existe no histórico estático do repositório, mas não existe
+-- necessariamente em todos os bancos já provisionados.
+DO $$
+BEGIN
+  IF to_regprocedure(
+    'public.rpc_reconcile_stock_divergence(text,uuid,boolean)'
+  ) IS NOT NULL THEN
+
+    EXECUTE
+      'REVOKE ALL ON FUNCTION public.rpc_reconcile_stock_divergence(text, uuid, boolean) FROM PUBLIC';
+
+    EXECUTE
+      'GRANT EXECUTE ON FUNCTION public.rpc_reconcile_stock_divergence(text, uuid, boolean) TO service_role';
+
+  ELSE
+    RAISE NOTICE
+      'rpc_reconcile_stock_divergence(text, uuid, boolean) não existe neste banco; hardening ignorado.';
+  END IF;
+END $$;
 
 -- 8. rpc_set_primary_media
 REVOKE ALL ON FUNCTION public.rpc_set_primary_media(uuid, bigint, text, text) FROM PUBLIC;

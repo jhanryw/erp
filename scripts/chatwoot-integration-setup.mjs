@@ -310,7 +310,36 @@ const QARVON_CUSTOM_ATTRIBUTES = [
   { key: 'qarvon_customer_segment', name: 'Qarvon — Segmento (RFM)', type: 0, description: 'Segmento RFM calculado — pode ficar até 1 refresh desatualizado.' },
   { key: 'qarvon_cashback_available', name: 'Qarvon — Cashback Disponível', type: 2, description: 'Saldo de cashback disponível pra uso, em BRL.' },
   { key: 'qarvon_erp_link', name: 'Qarvon — Ver no ERP', type: 4, description: 'Link direto pro histórico completo de compras do cliente no Qarvon.' },
+  { key: 'qarvon_categories', name: 'Qarvon — Categorias Compradas', type: 0, description: 'Tipos de produto (product_types) em que o cliente já comprou de verdade, separados por vírgula.' },
 ]
+
+// Cópia deliberada de QARVON_SIZE_PRODUCT_TYPES (customAttributes.ts) — Fase
+// "Enriquecimento comercial". Lista de product_types REAIS e confirmados do
+// catálogo (não inventados — ver migration 20260817_rpc_customer_purchase_
+// profile.sql pra evidência completa). Exclui sex_shop e os 4 Tipos sem
+// categoria confirmada (gap conhecido do próprio catálogo).
+const QARVON_SIZE_PRODUCT_TYPES = [
+  { slug: 'sutia', name: 'Sutiã' },
+  { slug: 'calcinha', name: 'Calcinha' },
+  { slug: 'body', name: 'Body' },
+  { slug: 'pijama', name: 'Pijama' },
+  { slug: 'camisola', name: 'Camisola' },
+  { slug: 'baby_doll', name: 'Baby Doll' },
+  { slug: 'robe', name: 'Robe' },
+  { slug: 'top', name: 'Top' },
+  { slug: 'short_doll', name: 'Short Doll' },
+  { slug: 'conjunto_calcinha_sutia', name: 'Conjunto Calcinha e Sutiã' },
+  { slug: 'cinta', name: 'Cinta' },
+  { slug: 'meia_calca', name: 'Meia-calça' },
+  { slug: 'acessorio_intimo', name: 'Acessório Íntimo' },
+]
+
+const QARVON_SIZE_ATTRIBUTES = QARVON_SIZE_PRODUCT_TYPES.map((t) => ({
+  key: `qarvon_size_${t.slug}`,
+  name: `Qarvon — Tamanho (${t.name})`,
+  type: 0,
+  description: `Tamanho mais comprado pelo cliente em ${t.name} (maior quantidade; empate resolvido pela compra mais recente).`,
+}))
 
 /**
  * Registra/atualiza uma inbox em settings.inboxes[] (Fase MVP Chatwoot,
@@ -434,7 +463,7 @@ async function main() {
     const existingKeys = new Set((existingAttrs ?? []).map((a) => a.attribute_key))
     let created = 0
     let alreadyExisted = 0
-    for (const attr of QARVON_CUSTOM_ATTRIBUTES) {
+    for (const attr of [...QARVON_CUSTOM_ATTRIBUTES, ...QARVON_SIZE_ATTRIBUTES]) {
       if (existingKeys.has(attr.key)) { alreadyExisted++; continue }
       await chatwootFetch(tokenForTest, '/custom_attribute_definitions', {
         method: 'POST',
