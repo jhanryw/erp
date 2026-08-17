@@ -18,7 +18,7 @@
  *     --company-id <id-real-da-empresa-no-Qarvon> \
  *     --account-id <id-da-conta-no-Chatwoot> \
  *     --base-url https://sua-instancia-chatwoot.example.com \
- *     [--api-token] [--webhook-secret] [--webhook-url <url-pública-do-endpoint-de-webhook-do-Qarvon>] [--activate]
+ *     [--api-token] [--webhook-secret] [--webhook-url <url-pública-do-endpoint-de-webhook-do-Qarvon>] [--inbox-id <id>] [--activate]
  *
  * --api-token e --webhook-secret são independentes e opt-in — nenhum dos
  * dois roda sem a flag explícita, exatamente pra nunca sobrescrever um
@@ -27,6 +27,14 @@
  * — o upsert é escoped por `(integration_id, key)`, estruturalmente
  * incapaz de afetar uma key diferente). Pode combinar os dois na mesma
  * chamada se quiser configurar ambos de uma vez.
+ *
+ * `--inbox-id <id>` (FASE N2B): grava `settings.inbox_id` — o ID numérico
+ * da inbox no Chatwoot que `resolveCustomerChatwootContext` usa pra
+ * resolver/criar contato+conversa (seção 7 do pedido N2B: "não criar tabela
+ * nova só pra isso"). Não é secret, mas segue o MESMO princípio opt-in dos
+ * outros dois flags — só grava se passado explicitamente. `settings` é
+ * sempre MESCLADO com o que já existia (nunca substituído por inteiro),
+ * pra rodar `--api-token` de novo não apagar um `inbox_id` já configurado.
  *
  * `--webhook-url`: só relevante junto de `--webhook-secret` — se informado,
  * o script faz um AUTO-TESTE real (assina um payload de evento inofensivo
@@ -95,18 +103,32 @@ const companyId = arg('company-id')
 const accountId = arg('account-id')
 const baseUrl = arg('base-url')
 const webhookUrl = arg('webhook-url')
+const inboxIdArg = arg('inbox-id')
 const shouldActivate = flag('activate')
 const doApiToken = flag('api-token')
 const doWebhookSecret = flag('webhook-secret')
+const doInboxId = inboxIdArg !== undefined
 
 if (!companyId || !accountId || !baseUrl) {
-  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--api-token] [--webhook-secret] [--webhook-url <url>] [--activate]')
+  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--api-token] [--webhook-secret] [--webhook-url <url>] [--inbox-id <id>] [--activate]')
   process.exit(1)
 }
 
-if (!doApiToken && !doWebhookSecret) {
-  console.error('Nada a fazer — passe --api-token e/ou --webhook-secret explicitamente (nenhum segredo é tocado por padrão, pra nunca sobrescrever um já configurado sem intenção explícita).')
+if (!doApiToken && !doWebhookSecret && !doInboxId) {
+  console.error('Nada a fazer — passe --api-token e/ou --webhook-secret e/ou --inbox-id explicitamente (nenhum segredo/configuração é tocado por padrão, pra nunca sobrescrever algo já configurado sem intenção explícita).')
   process.exit(1)
+}
+
+// inbox_id (Fase N2B, seção 7 do pedido) — não é secret, não passa pelo
+// prompt mascarado; ainda assim só grava se --inbox-id foi passado
+// explicitamente (mesmo princípio dos outros dois flags).
+let inboxIdNum
+if (doInboxId) {
+  inboxIdNum = Number(inboxIdArg)
+  if (!Number.isFinite(inboxIdNum) || !Number.isInteger(inboxIdNum) || inboxIdNum <= 0) {
+    console.error(`--inbox-id inválido: "${inboxIdArg}" (precisa ser um inteiro positivo — o ID numérico da inbox no Chatwoot, não o nome).`)
+    process.exit(1)
+  }
 }
 
 // ─── Validação de base_url (mesma regra de validateChatwootBaseUrl em client.ts) ──
@@ -255,7 +277,7 @@ async function main() {
   // ── 1. company_integrations — cria ou atualiza (idempotente) ──────────────
   const { data: existing, error: findError } = await supabase
     .from('company_integrations')
-    .select('id, status')
+    .select('id, status, settings')
     .eq('company_id', companyId)
     .eq('provider', 'chatwoot')
     .maybeSingle()
@@ -264,21 +286,33 @@ async function main() {
   let integrationId
   if (existing) {
     integrationId = existing.id
+    // MERGE em settings, nunca substitui o objeto inteiro — uma re-execução
+    // deste script sem --inbox-id não pode apagar silenciosamente um
+    // inbox_id já configurado numa execução anterior (bug real corrigido
+    // nesta fase: a versão anterior sempre sobrescrevia settings inteiro
+    // com só {base_url}).
+    const mergedSettings = { ...(existing.settings ?? {}), base_url: baseUrl }
+    if (doInboxId) mergedSettings.inbox_id = inboxIdNum
+
     const { error } = await supabase
       .from('company_integrations')
-      .update({ external_account_id: String(accountId), settings: { base_url: baseUrl } })
+      .update({ external_account_id: String(accountId), settings: mergedSettings })
       .eq('id', integrationId)
     if (error) { console.error('Erro ao atualizar company_integrations:', error.message); process.exit(1) }
     console.log(`Integração existente atualizada (id=${integrationId}, status atual="${existing.status}").`)
+    if (doInboxId) console.log(`settings.inbox_id definido como ${inboxIdNum}.`)
   } else {
+    const settings = { base_url: baseUrl }
+    if (doInboxId) settings.inbox_id = inboxIdNum
+
     const { data: created, error } = await supabase
       .from('company_integrations')
-      .insert({ company_id: companyId, provider: 'chatwoot', external_account_id: String(accountId), settings: { base_url: baseUrl }, status: 'pending' })
+      .insert({ company_id: companyId, provider: 'chatwoot', external_account_id: String(accountId), settings, status: 'pending' })
       .select('id')
       .single()
     if (error) { console.error('Erro ao criar company_integrations:', error.message); process.exit(1) }
     integrationId = created.id
-    console.log(`Integração criada (id=${integrationId}, status="pending").`)
+    console.log(`Integração criada (id=${integrationId}, status="pending").${doInboxId ? ` settings.inbox_id=${inboxIdNum}.` : ''}`)
   }
 
   // ── 2. api_token — só se --api-token foi passado (nunca toca sem pedir) ──

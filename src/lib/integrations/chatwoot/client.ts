@@ -240,3 +240,144 @@ export async function testChatwootConnection(config: ChatwootClientConfig): Prom
   if (!result.ok) return result
   return { ok: true, data: { reachable: true } }
 }
+
+// ─── Fase N2B — resolver customer→Chatwoot (contact/conversation/message) ──────
+//
+// FONTES CONSULTADAS EM 2026-08-17 (WebFetch/WebSearch contra
+// developers.chatwoot.com, mesmo rigor das fases anteriores):
+//   - .../api-reference/contacts/search-contacts → GET /contacts/search?q=
+//   - .../api-reference/contacts/create-contact → POST /contacts (requer inbox_id)
+//   - .../api-reference/contacts/get-contactable-inboxes → GET /contacts/{id}/contactable_inboxes
+//   - .../api-reference/contacts/create-contact-inbox → POST /contacts/{id}/contact_inboxes
+//   - .../api-reference/contacts/contact-conversations → GET /contacts/{id}/conversations
+//   - .../api-reference/conversations/create-new-conversation → POST /conversations
+//     (requer `source_id` — obtido via contactable_inboxes/contact_inboxes, o
+//     n8n nunca precisa conhecer esse valor, seção 3 do pedido)
+//   - .../api-reference/messages/create-new-message → POST /conversations/{id}/messages
+
+export interface ChatwootContactSearchResult {
+  id: number
+  name: string | null
+  phone_number: string | null
+  contact_inboxes: { source_id: string; inbox: { id: number } }[]
+}
+
+/** Busca por `q` (nome/identifier/email/telefone) — o chamador ainda precisa confirmar match exato de telefone (a busca do Chatwoot é fuzzy). */
+export async function searchChatwootContacts(
+  config: ChatwootClientConfig,
+  query: string,
+): Promise<ChatwootApiResult<ChatwootContactSearchResult[]>> {
+  const result = await chatwootFetch(config, `/contacts/search?q=${encodeURIComponent(query)}`, { method: 'GET' })
+  if (!result.ok) return result
+  const payload = (result.data as { payload?: ChatwootContactSearchResult[] } | null)?.payload
+  return { ok: true, data: payload ?? [] }
+}
+
+export interface CreateChatwootContactInput {
+  inboxId: number
+  name?: string | null
+  phoneNumber: string
+}
+
+export interface CreatedChatwootContact {
+  contact: ChatwootContactSearchResult
+  /**
+   * Confirmado via exemplo real de resposta (busca 2026-08-17): o POST de
+   * criação devolve `payload.contact_inbox.source_id` pra inbox informada em
+   * `inbox_id` — já pronto pra criar conversa nessa MESMA inbox sem precisar
+   * de uma segunda chamada a `getContactableInboxes`.
+   */
+  sourceId: string
+}
+
+export async function createChatwootContact(
+  config: ChatwootClientConfig,
+  input: CreateChatwootContactInput,
+): Promise<ChatwootApiResult<CreatedChatwootContact>> {
+  const result = await chatwootFetch(config, '/contacts', {
+    method: 'POST',
+    body: { inbox_id: input.inboxId, name: input.name ?? undefined, phone_number: input.phoneNumber },
+  })
+  if (!result.ok) return result
+  const payload = result.data as { payload?: { contact?: ChatwootContactSearchResult; contact_inbox?: { source_id?: string } } } | null
+  const contact = payload?.payload?.contact
+  const sourceId = payload?.payload?.contact_inbox?.source_id
+  if (!contact || !sourceId) return { ok: false, error: { kind: 'http', message: 'Chatwoot não devolveu o contato/contact_inbox criado.' } }
+  return { ok: true, data: { contact, sourceId } }
+}
+
+export interface ChatwootContactableInbox {
+  source_id: string
+  inbox: { id: number }
+}
+
+export async function getContactableInboxes(
+  config: ChatwootClientConfig,
+  contactId: string,
+): Promise<ChatwootApiResult<ChatwootContactableInbox[]>> {
+  const result = await chatwootFetch(config, `/contacts/${encodeURIComponent(contactId)}/contactable_inboxes`, { method: 'GET' })
+  if (!result.ok) return result
+  const payload = (result.data as { payload?: ChatwootContactableInbox[] } | null)?.payload
+  return { ok: true, data: payload ?? [] }
+}
+
+/** Cria o vínculo contato↔inbox quando o contato ainda não tem `source_id` pra esta inbox — necessário antes de criar uma conversa nela. */
+export async function createContactInbox(
+  config: ChatwootClientConfig,
+  contactId: string,
+  inboxId: number,
+): Promise<ChatwootApiResult<{ source_id: string }>> {
+  return chatwootFetch(config, `/contacts/${encodeURIComponent(contactId)}/contact_inboxes`, {
+    method: 'POST',
+    body: { inbox_id: inboxId },
+  }) as Promise<ChatwootApiResult<{ source_id: string }>>
+}
+
+export interface ChatwootConversationSummary {
+  id: number
+  status: 'open' | 'resolved' | 'pending' | 'snoozed'
+  inbox_id: number
+}
+
+export async function listContactConversations(
+  config: ChatwootClientConfig,
+  contactId: string,
+): Promise<ChatwootApiResult<ChatwootConversationSummary[]>> {
+  const result = await chatwootFetch(config, `/contacts/${encodeURIComponent(contactId)}/conversations`, { method: 'GET' })
+  if (!result.ok) return result
+  const payload = (result.data as { payload?: ChatwootConversationSummary[] } | null)?.payload
+  return { ok: true, data: payload ?? [] }
+}
+
+export interface CreateChatwootConversationInput {
+  sourceId: string
+  inboxId: number
+  contactId: string
+}
+
+export async function createChatwootConversation(
+  config: ChatwootClientConfig,
+  input: CreateChatwootConversationInput,
+): Promise<ChatwootApiResult<{ id: number; inbox_id: number }>> {
+  return chatwootFetch(config, '/conversations', {
+    method: 'POST',
+    body: { source_id: input.sourceId, inbox_id: input.inboxId, contact_id: input.contactId },
+  }) as Promise<ChatwootApiResult<{ id: number; inbox_id: number }>>
+}
+
+export interface ChatwootMessage {
+  id: number
+  content: string
+}
+
+/** Sempre `message_type: 'outgoing'`, `private: false` — este cliente nunca envia nota interna nem simula mensagem do cliente (seção 12 do pedido N2B: só mensagem outgoing real). */
+export async function createChatwootMessage(
+  config: ChatwootClientConfig,
+  conversationId: string | number,
+  content: string,
+): Promise<ChatwootApiResult<ChatwootMessage>> {
+  return chatwootFetch(config, `/conversations/${encodeURIComponent(String(conversationId))}/messages`, {
+    method: 'POST',
+    body: { content, message_type: 'outgoing', private: false },
+  }) as Promise<ChatwootApiResult<ChatwootMessage>>
+}
