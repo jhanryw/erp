@@ -44,7 +44,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 COPY --from=builder /app/scripts/chatwoot-integration-setup.mjs ./scripts/chatwoot-integration-setup.mjs
-COPY --from=builder /app/node_modules/@supabase ./node_modules/@supabase
+COPY --from=builder /app/node_modules ./node_modules
 
 EXPOSE 3000
 
