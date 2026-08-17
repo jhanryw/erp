@@ -17,7 +17,25 @@
  *   node scripts/chatwoot-integration-setup.mjs \
  *     --company-id <id-real-da-empresa-no-Qarvon> \
  *     --account-id <id-da-conta-no-Chatwoot> \
- *     --base-url https://sua-instancia-chatwoot.example.com
+ *     --base-url https://sua-instancia-chatwoot.example.com \
+ *     [--api-token] [--webhook-secret] [--webhook-url <url-pública-do-endpoint-de-webhook-do-Qarvon>] [--activate]
+ *
+ * --api-token e --webhook-secret são independentes e opt-in — nenhum dos
+ * dois roda sem a flag explícita, exatamente pra nunca sobrescrever um
+ * segredo já configurado e validado só porque você queria mexer no outro
+ * (ex.: `--webhook-secret` sozinho NUNCA toca `api_token`, nem re-pede ele
+ * — o upsert é escoped por `(integration_id, key)`, estruturalmente
+ * incapaz de afetar uma key diferente). Pode combinar os dois na mesma
+ * chamada se quiser configurar ambos de uma vez.
+ *
+ * `--webhook-url`: só relevante junto de `--webhook-secret` — se informado,
+ * o script faz um AUTO-TESTE real (assina um payload de evento inofensivo
+ * — `conversation_typing_on`, que o dispatcher da Fase 3 sempre ignora,
+ * nunca cria/altera crm_person nenhuma — com o secret recém-gravado e
+ * envia pro endpoint informado, exatamente como o Chatwoot faria) e só
+ * então informa se o secret está genuinamente funcional. SEM
+ * `--webhook-url`, o script grava o secret mas deixa claro que ele ainda
+ * NÃO foi validado — nunca assume que "gravado" significa "funciona".
  *
  * Adicione --activate só depois de confirmar que tudo funcionou (o script
  * nunca ativa a integração sozinho por padrão — mesmo princípio de
@@ -39,7 +57,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js'
-import { randomBytes, createCipheriv, createDecipheriv } from 'node:crypto'
+import { randomBytes, createCipheriv, createDecipheriv, createHmac } from 'node:crypto'
 import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -76,10 +94,18 @@ function flag(name) {
 const companyId = arg('company-id')
 const accountId = arg('account-id')
 const baseUrl = arg('base-url')
+const webhookUrl = arg('webhook-url')
 const shouldActivate = flag('activate')
+const doApiToken = flag('api-token')
+const doWebhookSecret = flag('webhook-secret')
 
 if (!companyId || !accountId || !baseUrl) {
-  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--activate]')
+  console.error('Uso: node scripts/chatwoot-integration-setup.mjs --company-id <id> --account-id <id> --base-url <url> [--api-token] [--webhook-secret] [--webhook-url <url>] [--activate]')
+  process.exit(1)
+}
+
+if (!doApiToken && !doWebhookSecret) {
+  console.error('Nada a fazer — passe --api-token e/ou --webhook-secret explicitamente (nenhum segredo é tocado por padrão, pra nunca sobrescrever um já configurado sem intenção explícita).')
   process.exit(1)
 }
 
@@ -255,51 +281,116 @@ async function main() {
     console.log(`Integração criada (id=${integrationId}, status="pending").`)
   }
 
-  // ── 2. Token — SEMPRE interativo, nunca logado ─────────────────────────────
-  let token = await promptHidden('API access token do Chatwoot (não será exibido): ')
-  if (!token.trim()) { console.error('Token vazio — abortando.'); process.exit(1) }
+  // ── 2. api_token — só se --api-token foi passado (nunca toca sem pedir) ──
+  if (doApiToken) {
+    let token = await promptHidden('API access token do Chatwoot (não será exibido): ')
+    if (!token.trim()) { console.error('Token vazio — abortando.'); process.exit(1) }
 
-  const { ciphertext, keyVersion } = encryptSecret(token)
-  token = null // limpa a referência em memória assim que possível
+    const { ciphertext, keyVersion } = encryptSecret(token)
+    token = null // limpa a referência em memória assim que possível
 
-  const { error: secretError } = await supabase
-    .from('integration_secrets')
-    .upsert(
-      { integration_id: integrationId, company_id: companyId, key: 'api_token', ciphertext, key_version: keyVersion },
-      { onConflict: 'integration_id,key' },
-    )
-  if (secretError) { console.error('Erro ao gravar secret:', secretError.message); process.exit(1) }
-  console.log('api_token cifrado e gravado em integration_secrets.\n')
+    const { error: secretError } = await supabase
+      .from('integration_secrets')
+      .upsert(
+        { integration_id: integrationId, company_id: companyId, key: 'api_token', ciphertext, key_version: keyVersion },
+        { onConflict: 'integration_id,key' },
+      )
+    if (secretError) { console.error('Erro ao gravar secret:', secretError.message); process.exit(1) }
+    console.log('api_token cifrado e gravado em integration_secrets.\n')
 
-  // ── 3. Teste de conexão + custom attributes ────────────────────────────────
-  const tokenForTest = decryptForThisRunOnly(ciphertext, keyVersion)
+    // Teste de conexão + custom attributes — só faz sentido pro api_token
+    // (webhook_secret não tem chamada de API equivalente pra testar assim).
+    const tokenForTest = decryptForThisRunOnly(ciphertext, keyVersion)
 
-  console.log('Testando conexão com o Chatwoot...')
-  let existingAttrs
-  try {
-    existingAttrs = await chatwootFetch(tokenForTest, '/custom_attribute_definitions')
-  } catch (err) {
-    console.error(`Falha ao conectar: ${err.message}`)
-    await supabase.from('company_integrations').update({ last_error: err.message }).eq('id', integrationId)
-    process.exit(1)
+    console.log('Testando conexão com o Chatwoot...')
+    let existingAttrs
+    try {
+      existingAttrs = await chatwootFetch(tokenForTest, '/custom_attribute_definitions')
+    } catch (err) {
+      console.error(`Falha ao conectar: ${err.message}`)
+      await supabase.from('company_integrations').update({ last_error: err.message }).eq('id', integrationId)
+      process.exit(1)
+    }
+    console.log('Conexão OK — token válido, account acessível, base_url correta.\n')
+
+    console.log('Garantindo definições de custom attribute qarvon_*...')
+    const existingKeys = new Set((existingAttrs ?? []).map((a) => a.attribute_key))
+    let created = 0
+    let alreadyExisted = 0
+    for (const attr of QARVON_CUSTOM_ATTRIBUTES) {
+      if (existingKeys.has(attr.key)) { alreadyExisted++; continue }
+      await chatwootFetch(tokenForTest, '/custom_attribute_definitions', {
+        method: 'POST',
+        body: { attribute_key: attr.key, attribute_display_name: attr.name, attribute_display_type: attr.type, attribute_description: attr.description, attribute_model: 1 },
+      })
+      created++
+    }
+    console.log(`Custom attributes: ${created} criados, ${alreadyExisted} já existiam.\n`)
   }
-  console.log('Conexão OK — token válido, account acessível, base_url correta.\n')
 
-  console.log('Garantindo definições de custom attribute qarvon_*...')
-  const existingKeys = new Set((existingAttrs ?? []).map((a) => a.attribute_key))
-  let created = 0
-  let alreadyExisted = 0
-  for (const attr of QARVON_CUSTOM_ATTRIBUTES) {
-    if (existingKeys.has(attr.key)) { alreadyExisted++; continue }
-    await chatwootFetch(tokenForTest, '/custom_attribute_definitions', {
-      method: 'POST',
-      body: { attribute_key: attr.key, attribute_display_name: attr.name, attribute_display_type: attr.type, attribute_description: attr.description, attribute_model: 1 },
-    })
-    created++
+  // ── 3. webhook_secret — só se --webhook-secret foi passado, NUNCA toca api_token ──
+  // Key diferente ('webhook_secret' vs 'api_token') sob o mesmo UNIQUE
+  // (integration_id, key) — o upsert abaixo é estruturalmente incapaz de
+  // afetar a linha de api_token, mesmo que ela exista.
+  if (doWebhookSecret) {
+    let webhookSecret = await promptHidden('Webhook signing secret do Chatwoot (não será exibido): ')
+    if (!webhookSecret.trim()) { console.error('Webhook secret vazio — abortando.'); process.exit(1) }
+
+    const { ciphertext: whCiphertext, keyVersion: whKeyVersion } = encryptSecret(webhookSecret)
+    webhookSecret = null // limpa a referência em memória assim que possível
+
+    const { error: whSecretError } = await supabase
+      .from('integration_secrets')
+      .upsert(
+        { integration_id: integrationId, company_id: companyId, key: 'webhook_secret', ciphertext: whCiphertext, key_version: whKeyVersion },
+        { onConflict: 'integration_id,key' },
+      )
+    if (whSecretError) { console.error('Erro ao gravar webhook_secret:', whSecretError.message); process.exit(1) }
+
+    // Mesma key ('webhook_secret') que src/app/api/integrations/chatwoot/webhook/route.ts:54
+    // realmente busca via getIntegrationSecret(integration.id, integration.company_id, 'webhook_secret')
+    // — conferido no código-fonte antes de escrever isto, não presumido.
+    console.log('webhook_secret cifrado e gravado em integration_secrets.')
+    console.log('ARMAZENADO — ainda NÃO VALIDADO. Gravar não prova que a assinatura vai bater (ver o achado do bug #13809 do Chatwoot documentado em src/lib/integrations/chatwoot/signature.ts).\n')
+
+    if (webhookUrl) {
+      console.log(`Auto-teste: assinando um evento inofensivo (conversation_typing_on — o dispatcher da Fase 3 sempre ignora, nunca cria/altera crm_person) e enviando pra ${webhookUrl}...`)
+      const testSecretForRun = decryptForThisRunOnly(whCiphertext, whKeyVersion)
+      const testPayload = JSON.stringify({ event: 'conversation_typing_on', account: { id: Number(accountId) || accountId } })
+      const testTimestamp = Math.floor(Date.now() / 1000)
+      const testSignature = `sha256=${createHmac('sha256', testSecretForRun).update(`${testTimestamp}.${testPayload}`, 'utf8').digest('hex')}`
+
+      try {
+        const testResponse = await fetch(webhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Chatwoot-Timestamp': String(testTimestamp),
+            'X-Chatwoot-Signature': testSignature,
+          },
+          body: testPayload,
+        })
+        if (testResponse.ok) {
+          console.log(`Auto-teste OK (HTTP ${testResponse.status}) — o endpoint aceitou a assinatura calculada com o secret recém-gravado. webhook_secret VALIDADO end-to-end.\n`)
+        } else {
+          console.error(`Auto-teste FALHOU (HTTP ${testResponse.status}) — o endpoint rejeitou a assinatura. O secret gravado provavelmente NÃO é o usado de verdade pelo Chatwoot pra assinar (ver bug #13809) ou --webhook-url está incorreta. NÃO considere o secret validado.`)
+          process.exitCode = 1
+        }
+      } catch (err) {
+        console.error(`Auto-teste falhou (erro de rede/timeout): ${err.message}. NÃO considere o secret validado.`)
+        process.exitCode = 1
+      }
+    } else {
+      console.log('Nenhuma --webhook-url informada — auto-teste NÃO realizado. Pra validar de verdade, dispare um evento real no Chatwoot (ex.: edite um contato de teste) e confirme nos logs da aplicação uma linha "[chatwoot/webhook]" SEM "assinatura rejeitada" — ou rode este mesmo comando de novo com --webhook-url <url pública do seu endpoint> pra um auto-teste automático.\n')
+    }
   }
-  console.log(`Custom attributes: ${created} criados, ${alreadyExisted} já existiam.\n`)
 
-  await supabase.from('company_integrations').update({ last_error: null }).eq('id', integrationId)
+  if (doApiToken) {
+    // Só limpa last_error se este run testou conexão de verdade (fluxo do
+    // api_token) — não mexe nesse campo quando só --webhook-secret rodou,
+    // pra nunca esconder um erro anterior que não foi realmente re-testado.
+    await supabase.from('company_integrations').update({ last_error: null }).eq('id', integrationId)
+  }
 
   // ── 4. Ativação — só se --activate foi passado explicitamente ─────────────
   if (shouldActivate) {
