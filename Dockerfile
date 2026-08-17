@@ -44,6 +44,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
 COPY --from=builder /app/scripts/chatwoot-integration-setup.mjs ./scripts/chatwoot-integration-setup.mjs
+COPY --from=builder /app/scripts/customer-identity-audit.mjs ./scripts/customer-identity-audit.mjs
 COPY --from=builder /app/node_modules ./node_modules
 
 EXPOSE 3000
