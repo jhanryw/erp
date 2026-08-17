@@ -24,6 +24,7 @@ const PUBLIC_PATHS = [
   '/api/shipping/calculate', // cálculo público (checkout de clientes)
   '/api/shipping/cep',       // lookup de CEP (sem dados sensíveis)
   '/api/integrations/nuvemshop/callback',
+  '/api/integrations/chatwoot/webhook', // webhook Chatwoot — path exato, autentica só por assinatura HMAC (ver route.ts); nunca liberar /api/integrations/ inteiro
   '/api/webhooks/',          // webhooks externos (Nuvemshop, etc.) — sem sessão
   '/api/automations/',       // automação N8N→ERP — protegida por secret próprio (Bearer), não sessão
   '/api/jobs/',              // cron jobs — protegidos por CRON_SECRET próprio, não sessão

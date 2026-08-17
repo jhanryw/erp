@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { cancelSale } from '@/services/vendas.service'
+import { normalizeE164BR } from '@/lib/utils/phone'
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
@@ -108,6 +109,7 @@ async function findOrCreateCustomer(
   }
 
   // Criar novo cliente — cpf e phone são nullable após migration 20260521
+  const phoneE164 = phone ? normalizeE164BR(phone) || null : null // FASE 1 (Customer Identity): identidade canônica, nunca inventada quando ambígua
   const { data: created, error } = await (admin as any)
     .from('customers')
     .insert({
@@ -115,6 +117,7 @@ async function findOrCreateCustomer(
       email:      email ?? null,
       cpf:        cpf   ?? null,
       phone:      phone ?? null,
+      phone_e164: phoneE164,
       origin:     'website',
       company_id: companyId,
     })

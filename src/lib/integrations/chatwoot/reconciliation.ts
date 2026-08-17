@@ -1,0 +1,249 @@
+/**
+ * Reconciliação de atributos comerciais: customer (ERP) → contato Chatwoot
+ * (Fase 4). Regra inegociável (seção 8 do pedido): Qarvon é a verdade
+ * comercial, Chatwoot é só uma PROJEÇÃO — nunca o inverso.
+ *
+ * Caminho canônico de resolução (seção 16):
+ *   customer → crm_person_customer_links → crm_person → external_entity_links → contact_id
+ * Nunca busca contato por telefone a cada sync — sempre via o vínculo já
+ * existente (Fases 1-3).
+ */
+
+import { createAdminClient } from '@/lib/supabase/admin'
+import { listPersonCustomerLinksByCustomer } from '@/services/crm/person-customer-links.service'
+import { getCompanyIntegration } from '@/services/integrations/company-integrations.service'
+import { getIntegrationSecret } from '@/services/integrations/secrets.service'
+import { findLinkForEntity, updateExternalEntityLinkMetadata } from '@/services/integrations/external-entity-links.service'
+import {
+  getChatwootContact,
+  updateChatwootContactCustomAttributes,
+  isPermanentChatwootError,
+  type ChatwootClientConfig,
+} from './client'
+import { QARVON_CUSTOM_ATTRIBUTES } from './customAttributes'
+import type { ServiceOutcome } from '@/services/produtos.service'
+
+function success<T>(data: T): ServiceOutcome<T> {
+  return { ok: true, data }
+}
+
+function failure(error: string, status = 500): ServiceOutcome<never> {
+  return { ok: false, error, status }
+}
+
+// ─── 1. Resolução customer → crm_person (seção 18) ─────────────────────────
+
+export type PersonForCustomerResult =
+  | { status: 'resolved'; personId: number }
+  | { status: 'ambiguous' }
+  | { status: 'no_person' }
+
+/**
+ * `is_primary` é uma coluna do VÍNCULO (crm_person_customer_links), não da
+ * pessoa nem do customer — nada impede, estruturalmente, que duas pessoas
+ * DIFERENTES tenham cada uma seu próprio vínculo `is_primary=true` pro
+ * MESMO customer (o índice único parcial só garante 1 primary por PESSOA,
+ * não por customer). Por isso: só resolve sem ambiguidade quando há
+ * exatamente 1 vínculo ativo, OU quando há mais de 1 mas exatamente 1
+ * deles está marcado `is_primary=true`.
+ */
+export async function resolvePersonForCustomer(
+  customerId: number,
+  companyId: number,
+): Promise<ServiceOutcome<PersonForCustomerResult>> {
+  const linksResult = await listPersonCustomerLinksByCustomer(customerId, companyId)
+  if (!linksResult.ok) return failure(linksResult.error, linksResult.status)
+
+  const links = linksResult.data
+  if (links.length === 0) return success({ status: 'no_person' })
+  if (links.length === 1) return success({ status: 'resolved', personId: links[0].person_id })
+
+  const primaries = links.filter((l) => l.is_primary)
+  if (primaries.length === 1) return success({ status: 'resolved', personId: primaries[0].person_id })
+
+  return success({ status: 'ambiguous' })
+}
+
+// ─── 2. Atributos comerciais — SEMPRE ao vivo contra `sales`, nunca da MV ──
+//
+// mv_customer_rfm é materializada (refresh assíncrono/periódico) — usá-la
+// aqui arriscaria enviar números DESATUALIZADOS bem no momento em que a
+// reconciliação foi disparada exatamente por uma venda ter mudado esses
+// números (sale.completed → reconcilia). Só `customer_segment` vem da MV
+// (não dá pra recalcular o ranking RFM completo, que depende de todos os
+// clientes, a cada reconciliação individual) — aceito como podendo ficar
+// até 1 refresh desatualizado, documentado no relatório da Fase 4.
+
+export interface CustomerCommercialAttributes {
+  totalOrders: number
+  totalSpent: number
+  averageTicket: number | null
+  firstPurchaseAt: string | null // YYYY-MM-DD
+  lastPurchaseAt: string | null // YYYY-MM-DD
+  customerSegment: string | null
+}
+
+export async function computeCustomerCommercialAttributes(
+  customerId: number,
+  companyId: number,
+): Promise<ServiceOutcome<CustomerCommercialAttributes>> {
+  const admin = createAdminClient()
+
+  const { data: sales, error: salesError } = await (admin as any)
+    .from('sales')
+    .select('total, sale_date, status')
+    .eq('customer_id', customerId)
+    .eq('company_id', companyId) as { data: { total: number; sale_date: string; status: string }[] | null; error: { message: string } | null }
+
+  if (salesError) return failure(salesError.message)
+
+  const valid = (sales ?? []).filter((s) => s.status !== 'cancelled' && s.status !== 'returned')
+  const totalOrders = valid.length
+  const totalSpent = valid.reduce((sum, s) => sum + Number(s.total), 0)
+  const averageTicket = totalOrders > 0 ? Math.round((totalSpent / totalOrders) * 100) / 100 : null
+  const dates = valid.map((s) => s.sale_date).sort()
+  const firstPurchaseAt = dates[0] ?? null
+  const lastPurchaseAt = dates[dates.length - 1] ?? null
+
+  const { data: rfm } = await (admin as any)
+    .from('mv_customer_rfm')
+    .select('segment')
+    .eq('customer_id', customerId)
+    .maybeSingle() as { data: { segment: string } | null }
+
+  return success({
+    totalOrders,
+    totalSpent: Math.round(totalSpent * 100) / 100,
+    averageTicket,
+    firstPurchaseAt,
+    lastPurchaseAt,
+    customerSegment: rfm?.segment ?? null,
+  })
+}
+
+/** Pura, exportada pra teste — nunca inclui chave com valor ausente (nunca envia `null`/`undefined` ao Chatwoot). */
+export function buildQarvonCustomAttributesPayload(customerId: number, attrs: CustomerCommercialAttributes): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    qarvon_customer_id: String(customerId),
+    qarvon_total_orders: attrs.totalOrders,
+    qarvon_total_spent: attrs.totalSpent,
+  }
+  if (attrs.averageTicket !== null) payload.qarvon_average_ticket = attrs.averageTicket
+  if (attrs.firstPurchaseAt) payload.qarvon_first_purchase_at = attrs.firstPurchaseAt
+  if (attrs.lastPurchaseAt) payload.qarvon_last_purchase_at = attrs.lastPurchaseAt
+  if (attrs.customerSegment) payload.qarvon_customer_segment = attrs.customerSegment
+  return payload
+}
+
+/**
+ * Pura, exportada pra teste (seção 47 do pedido — nunca sobrescrever
+ * atributo que não seja `qarvon_*`). `qarvonAttributes` sempre vence em
+ * caso de colisão de chave (nunca deveria colidir na prática, já que o
+ * namespace é exclusivo, mas a ordem de spread documenta a intenção).
+ */
+export function mergeChatwootCustomAttributes(
+  current: Record<string, unknown>,
+  qarvonAttributes: Record<string, unknown>,
+): Record<string, unknown> {
+  return { ...current, ...qarvonAttributes }
+}
+
+// ─── 3. Reconciliação completa ─────────────────────────────────────────────
+
+export type ReconciliationOutcome =
+  | { status: 'synced'; contactId: string }
+  | { status: 'not_linked' }
+  | { status: 'ambiguous_person' }
+  | { status: 'no_person' }
+  | { status: 'anonymous_customer' }
+  | { status: 'integration_not_active' }
+  | { status: 'permanent_error'; message: string }
+
+/**
+ * Fluxo completo (seção 35 do pedido). Nunca cria contato no Chatwoot
+ * automaticamente (seção 17) — se não houver vínculo, retorna `not_linked`
+ * e para. Nunca envia `name`/`phone_number`/`email`/`avatar`/`identifier`
+ * (seção 22) — só `custom_attributes`, e só o namespace `qarvon_*`, mescladas
+ * com o que já existia no contato (nunca sobrescreve atributo de outro
+ * sistema).
+ */
+export async function reconcileCustomerToChatwoot(
+  companyId: number,
+  customerId: number,
+): Promise<ServiceOutcome<ReconciliationOutcome>> {
+  const admin = createAdminClient()
+
+  const { data: customer, error: customerError } = await (admin as any)
+    .from('customers')
+    .select('id, is_anonymous')
+    .eq('id', customerId)
+    .eq('company_id', companyId)
+    .maybeSingle() as { data: { id: number; is_anonymous: boolean } | null; error: { message: string } | null }
+
+  if (customerError) return failure(customerError.message)
+  if (!customer) return failure('Cliente não encontrado.', 404)
+  if (customer.is_anonymous) return success({ status: 'anonymous_customer' })
+
+  const integrationResult = await getCompanyIntegration(companyId, 'chatwoot')
+  if (!integrationResult.ok) return failure(integrationResult.error, integrationResult.status)
+  const integration = integrationResult.data
+  if (!integration || integration.status !== 'active') return success({ status: 'integration_not_active' })
+
+  const personResult = await resolvePersonForCustomer(customerId, companyId)
+  if (!personResult.ok) return failure(personResult.error, personResult.status)
+  if (personResult.data.status === 'no_person') return success({ status: 'no_person' })
+  if (personResult.data.status === 'ambiguous') return success({ status: 'ambiguous_person' })
+
+  const personId = personResult.data.personId
+
+  // Defesa em profundidade (seção 20): confirma que o vínculo externo é
+  // desta MESMA integração — nunca um contact de uma integração diferente.
+  const linkResult = await findLinkForEntity(integration.id, 'crm_person', personId, 'contact')
+  if (!linkResult.ok) return failure(linkResult.error, linkResult.status)
+  if (!linkResult.data) return success({ status: 'not_linked' })
+
+  const link = linkResult.data
+  const contactId = link.external_id
+
+  const apiTokenResult = await getIntegrationSecret(integration.id, companyId, 'api_token')
+  if (!apiTokenResult.ok) return failure(apiTokenResult.error, apiTokenResult.status)
+  if (!apiTokenResult.data) return success({ status: 'permanent_error', message: 'api_token não configurado para esta integração.' })
+
+  const baseUrl = typeof integration.settings.base_url === 'string' ? integration.settings.base_url : null
+  if (!baseUrl) return success({ status: 'permanent_error', message: 'settings.base_url não configurado para esta integração.' })
+
+  const clientConfig: ChatwootClientConfig = { baseUrl, accountId: integration.external_account_id ?? '', apiToken: apiTokenResult.data }
+
+  const attrsResult = await computeCustomerCommercialAttributes(customerId, companyId)
+  if (!attrsResult.ok) return failure(attrsResult.error, attrsResult.status)
+
+  const qarvonAttributes = buildQarvonCustomAttributesPayload(customerId, attrsResult.data)
+
+  // Busca o contato atual pra mesclar (nunca substitui custom_attributes
+  // de outro sistema — ver nota de incerteza em client.ts).
+  const currentContactResult = await getChatwootContact(clientConfig, contactId)
+  if (!currentContactResult.ok) {
+    await updateExternalEntityLinkMetadata(link.id, companyId, { last_sync_error: currentContactResult.error.message, last_sync_at: new Date().toISOString() })
+    if (isPermanentChatwootError(currentContactResult.error)) {
+      return success({ status: 'permanent_error', message: currentContactResult.error.message })
+    }
+    return failure(currentContactResult.error.message)
+  }
+
+  const mergedAttributes = mergeChatwootCustomAttributes(currentContactResult.data.custom_attributes ?? {}, qarvonAttributes)
+
+  const updateResult = await updateChatwootContactCustomAttributes(clientConfig, contactId, mergedAttributes)
+  if (!updateResult.ok) {
+    await updateExternalEntityLinkMetadata(link.id, companyId, { last_sync_error: updateResult.error.message, last_sync_at: new Date().toISOString() })
+    if (isPermanentChatwootError(updateResult.error)) {
+      return success({ status: 'permanent_error', message: updateResult.error.message })
+    }
+    return failure(updateResult.error.message)
+  }
+
+  await updateExternalEntityLinkMetadata(link.id, companyId, { last_synced_at: new Date().toISOString(), last_sync_error: null })
+
+  return success({ status: 'synced', contactId })
+}
+
+export { QARVON_CUSTOM_ATTRIBUTES }

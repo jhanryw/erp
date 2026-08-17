@@ -80,6 +80,46 @@ export async function getPerson(personId: number, companyId: number): Promise<Se
 }
 
 /**
+ * Preenche `display_name` só quando o valor atual está "ausente" (nunca
+ * sobrescreve um nome real já definido — seção 17 da Fase 3: nome do
+ * Chatwoot é atributo descritivo, nunca identificador forte, e só serve
+ * pra PREENCHER nome ausente). Como `display_name` é `NOT NULL`, "ausente"
+ * aqui significa igual ao placeholder gerado na criação automática
+ * (`Contato Chatwoot #<id>` — ver chatwoot/contactResolver.ts) ou uma
+ * string vazia após trim — nunca sobrescreve qualquer outro valor.
+ */
+export async function updatePersonDisplayNameIfBlank(
+  personId: number,
+  companyId: number,
+  newDisplayName: string,
+): Promise<ServiceOutcome<void>> {
+  const trimmed = newDisplayName.trim()
+  if (!trimmed) return success(undefined)
+
+  const admin = createAdminClient()
+  const { data: current } = await admin
+    .from('crm_persons')
+    .select('display_name')
+    .eq('id', personId)
+    .eq('company_id', companyId)
+    .maybeSingle() as unknown as { data: { display_name: string } | null }
+
+  if (!current) return failure('Pessoa não encontrada.', 404)
+
+  const isBlankOrFallback = !current.display_name.trim() || /^Contato Chatwoot #/.test(current.display_name)
+  if (!isBlankOrFallback) return success(undefined)
+
+  const { error } = await (admin as any)
+    .from('crm_persons')
+    .update({ display_name: trimmed })
+    .eq('id', personId)
+    .eq('company_id', companyId)
+
+  if (error) return failure(error.message)
+  return success(undefined)
+}
+
+/**
  * Lista pessoas da empresa. `includeInactive` decide se soft-deletadas
  * (active=false) entram no resultado — default é só ativas.
  */

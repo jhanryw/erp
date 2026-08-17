@@ -8,6 +8,7 @@
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { normalizeE164BR } from '@/lib/utils/phone'
 import type { ServiceOutcome } from './produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -32,6 +33,20 @@ function success<T>(data: T): { ok: true; data: T; error?: never; status?: never
 
 function failure(error: string, status = 500): { ok: false; error: string; status: number; data?: never } {
   return { ok: false, error, status }
+}
+
+/**
+ * FASE 1 (Customer Identity): `phone_e164` é calculado aqui, nunca confiado
+ * ao chamador — mesmo padrão de "normalização central, não na UI" pedido no
+ * relatório da Fase 1. Retorna `null` (nunca string vazia) quando o
+ * telefone não pôde ser normalizado com segurança — `customers.phone`
+ * continua gravado como veio, sem alteração; só a identidade canônica é
+ * nova.
+ */
+function computePhoneE164(phone: string | null | undefined): string | null {
+  if (!phone) return null
+  const normalized = normalizeE164BR(phone)
+  return normalized || null
 }
 
 // ─── Verificação de integridade ───────────────────────────────────────────────
@@ -113,7 +128,12 @@ export async function createCustomer(
 
   const { data, error } = await admin
     .from('customers')
-    .insert({ ...input, created_by: createdBy, company_id: companyId } as any)
+    .insert({
+      ...input,
+      phone_e164: computePhoneE164(input.phone),
+      created_by: createdBy,
+      company_id: companyId,
+    } as any)
     .select('id, name, cpf, phone')
     .single() as unknown as {
       data: { id: number | string; name: string; cpf: string; phone: string } | null
@@ -138,7 +158,10 @@ export async function updateCustomer(
 ): Promise<ServiceOutcome> {
   const admin = createAdminClient() // admin client: UPDATE em customers
 
-  let query = (admin as any).from('customers').update(input).eq('id', customerId)
+  const payload: Record<string, unknown> = { ...input }
+  if ('phone' in input) payload.phone_e164 = computePhoneE164(input.phone)
+
+  let query = (admin as any).from('customers').update(payload).eq('id', customerId)
   if (companyId != null) query = query.eq('company_id', companyId)
 
   const { error } = await query as { error: { message: string } | null }
