@@ -13,7 +13,8 @@
     "delete-nuvemshop-products": "node scripts/delete-nuvemshop-products.js",
     "customer-identity-audit": "node scripts/customer-identity-audit.mjs",
     "chatwoot-webhook-test-setup": "node scripts/chatwoot-webhook-test-setup.mjs",
-    "chatwoot-integration-setup": "node scripts/chatwoot-integration-setup.mjs"
+    "chatwoot-integration-setup": "node scripts/chatwoot-integration-setup.mjs",
+    "focus-nfe-integration-setup": "node scripts/focus-nfe-integration-setup.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",

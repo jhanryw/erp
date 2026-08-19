@@ -16,6 +16,7 @@ import { formatDate } from '@/lib/utils/date'
 import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
+import { EmitirNfeHomologacaoCard } from './_components/emitir-nfe-homologacao-card'
 import type { SaleStatus } from '@/types/database.types'
 import { ArrowRightLeft } from 'lucide-react'
 
@@ -548,6 +549,9 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           <p className="text-sm text-text-secondary">{sale.notes}</p>
         </Card>
       )}
+
+      {/* Fiscal — só admin (mesma regra de "Fiscal" bloqueado pra usuario, Fase Fiscal 1) */}
+      {profile?.role === 'admin' && <EmitirNfeHomologacaoCard saleId={sale.id} />}
     </div>
   )
 }

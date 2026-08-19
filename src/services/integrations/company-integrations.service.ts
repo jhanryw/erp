@@ -20,7 +20,7 @@ import type { ServiceOutcome } from '../produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop'
+export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop' | 'focus_nfe'
 export type IntegrationStatus = 'pending' | 'active' | 'inactive' | 'error'
 
 export interface CompanyIntegration {

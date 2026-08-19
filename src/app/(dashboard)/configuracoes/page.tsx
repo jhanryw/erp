@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe, ListChecks } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe, ListChecks, Receipt } from 'lucide-react'
 import { PushPermissionButton } from '@/components/push/PushPermissionButton'
 
 export const dynamic = 'force-dynamic'
@@ -16,6 +16,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/taxas-pagamento', icon: CreditCard, title: 'Taxas de Pagamento', description: 'Configure as taxas de cartão (1x–12x), PIX e Nuvemshop por parcelamento.' },
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
   { href: '/configuracoes/nuvemshop', icon: Globe, title: 'Nuvemshop', description: 'Sincronize produtos e estoque com a loja online.' },
+  { href: '/configuracoes/fiscal', icon: Receipt, title: 'Fiscal', description: 'Fundação de emissão de NF-e via Focus NFe (homologação).' },
 ]
 
 export default async function ConfiguracoesPage() {
