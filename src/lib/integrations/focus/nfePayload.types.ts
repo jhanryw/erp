@@ -73,6 +73,38 @@
  * silenciosa desta.
  */
 
+/**
+ * Forma de pagamento — Fase Fiscal 3A. Campos confirmados por leitura
+ * direta do HTML bruto de campos.focusnfe.com.br (JSON embutido na
+ * própria página) E cross-checados contra o XSD oficial da SEFAZ
+ * (`leiauteNFe_v4.00.xsd`) — nunca resumo de IA. `formas_pagamento[]` é
+ * campo raiz do payload (0-100 entradas), campos ACHATADOS por item
+ * (diferente do XML, que aninha os campos de cartão num grupo `card`) —
+ * confirmado na doc da Focus.
+ *
+ * Deliberadamente OMITIDOS (nunca implementados nesta fase): `tipo_integracao`,
+ * `cnpj_credenciadora`, `numero_autorizacao`, `cnpj_beneficiario`,
+ * `id_terminal_pagamento` — este ERP não tem dado fiscal confiável de
+ * credenciadora/integração (`sale_payments.acquirer` é texto livre, nunca
+ * um CNPJ real), e `cnpj_credenciadora` só é exigido quando
+ * `tipo_integracao='1'` — o caminho seguro é nunca enviar esse sub-bloco
+ * inteiro, nunca inventar `tipo_integracao='2'` só pra evitar a exigência.
+ * `descricao_pagamento` (só usado quando forma_pagamento='99') também não
+ * é enviado — este ERP nunca produz forma_pagamento='99'.
+ *
+ * Também deliberadamente ausente: qualquer campo de parcelas — confirmado
+ * no XSD oficial que `detPag`/`card` não tem campo de parcelas. `sale_payments.
+ * installments` nunca chega aqui, fica só como dado interno do ERP.
+ */
+export interface FocusFormaPagamento {
+  forma_pagamento: string
+  valor_pagamento: number
+  /** indPag — sempre '0' (à vista) neste ERP, ver paymentRules.ts. */
+  indicador_pagamento: '0' | '1'
+  /** tBand — só quando reconhecido ou "sabemos que há bandeira, não qual" (ver resolveBandeiraOperadora). Omitido quando não há dado de cartão algum. */
+  bandeira_operadora?: string
+}
+
 export interface FocusNfeItemPayload {
   numero_item: number
   codigo_produto: string
@@ -180,4 +212,6 @@ export interface FocusNfePayload {
   inscricao_estadual_destinatario?: string
 
   items: FocusNfeItemPayload[]
+  /** Fase Fiscal 3A — ver FocusFormaPagamento. Obrigatório ter ao menos 1 entrada (buildNfePayload valida). */
+  formas_pagamento: FocusFormaPagamento[]
 }

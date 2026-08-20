@@ -27,6 +27,7 @@ import { loadSaleFiscalContext, FiscalContextError } from '@/services/fiscal/loa
 import { validateFiscalReadiness } from '@/services/fiscal/validateFiscalReadiness'
 import { buildNfePayload, FiscalBuildError } from '@/services/fiscal/buildNfePayload'
 import { buildFiscalDocumentSnapshot } from '@/services/fiscal/buildFiscalSnapshot'
+import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { randomUUID } from 'node:crypto'
 
 const bodySchema = z.object({
@@ -78,7 +79,12 @@ export async function POST(request: Request) {
   try {
     payload = buildNfePayload(context)
   } catch (buildErr) {
-    payloadError = buildErr instanceof FiscalBuildError ? buildErr.message : 'Falha inesperada ao montar o payload.'
+    // FiscalRuleNotImplementedError (CRT 2/3, método de pagamento sem
+    // regra) capturado explicitamente — mesma correção de
+    // submitNfeHomologacao.ts (Problema Alto #4 da auditoria da Fase 3).
+    payloadError = buildErr instanceof FiscalRuleNotImplementedError || buildErr instanceof FiscalBuildError
+      ? buildErr.message
+      : 'Falha inesperada ao montar o payload.'
   }
 
   let snapshot: unknown = null

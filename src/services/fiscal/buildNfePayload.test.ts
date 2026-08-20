@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
+import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { baseFiscalContext } from './testFixtures'
 
 describe('buildNfePayload — cenário base (MEI, RN → SP, consumidor final)', () => {
@@ -124,6 +125,87 @@ describe('buildNfePayload — campos obrigatórios ausentes lançam FiscalBuildE
   it('destinatário sem CPF nem CNPJ → lança', () => {
     const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, cpf: null, cnpj: null } })
     expect(() => buildNfePayload(ctx)).toThrow(FiscalBuildError)
+  })
+
+  it('venda sem pagamentos → lança (Fase Fiscal 3A)', () => {
+    const ctx = baseFiscalContext({ payments: [] })
+    expect(() => buildNfePayload(ctx)).toThrow(FiscalBuildError)
+    expect(() => buildNfePayload(ctx)).toThrow(/pagamento/i)
+  })
+
+  it('NCM malformado (7 dígitos) → lança, mesma defesa própria do builder que NCM ausente (independe de validateFiscalReadiness ter rodado antes)', () => {
+    const ctx = baseFiscalContext({ items: [{ ...baseFiscalContext().items[0], ncm: '6108220' }] })
+    expect(() => buildNfePayload(ctx)).toThrow(FiscalBuildError)
+    expect(() => buildNfePayload(ctx)).toThrow(/ncm/i)
+  })
+
+  it('NCM com letras → lança', () => {
+    const ctx = baseFiscalContext({ items: [{ ...baseFiscalContext().items[0], ncm: '6108220A' }] })
+    expect(() => buildNfePayload(ctx)).toThrow(FiscalBuildError)
+  })
+})
+
+describe('buildNfePayload — NCM normalizado (fechamento de blocker de readiness)', () => {
+  it('NCM com pontuação legada ("6108.22.00") → payload envia SEM pontuação ("61082200"), nunca a string bruta', () => {
+    const ctx = baseFiscalContext({ items: [{ ...baseFiscalContext().items[0], ncm: '6108.22.00' }] })
+    const payload = buildNfePayload(ctx)
+    expect(payload.items[0].codigo_ncm).toBe('61082200')
+  })
+
+  it('NCM já limpo (8 dígitos) → payload envia exatamente o mesmo valor', () => {
+    const ctx = baseFiscalContext({ items: [{ ...baseFiscalContext().items[0], ncm: '61082200' }] })
+    const payload = buildNfePayload(ctx)
+    expect(payload.items[0].codigo_ncm).toBe('61082200')
+  })
+})
+
+describe('buildNfePayload — formas_pagamento (Fase Fiscal 3A)', () => {
+  it('pagamento único em PIX → forma_pagamento="20", indicador_pagamento="0", sem bandeira_operadora', () => {
+    const payload = buildNfePayload(baseFiscalContext())
+    expect(payload.formas_pagamento).toEqual([
+      { forma_pagamento: '20', valor_pagamento: 79.8, indicador_pagamento: '0' },
+    ])
+  })
+
+  it('pagamento em cartão com bandeira reconhecida → inclui bandeira_operadora', () => {
+    const ctx = baseFiscalContext({ payments: [{ method: 'credit_card', netAmount: 79.8, cardBrand: 'visa' }] })
+    expect(buildNfePayload(ctx).formas_pagamento).toEqual([
+      { forma_pagamento: '03', valor_pagamento: 79.8, indicador_pagamento: '0', bandeira_operadora: '01' },
+    ])
+  })
+
+  it('pagamento em cartão sem bandeira cadastrada → omite bandeira_operadora, nunca inventa', () => {
+    const ctx = baseFiscalContext({ payments: [{ method: 'debit_card', netAmount: 79.8, cardBrand: null }] })
+    const forma = buildNfePayload(ctx).formas_pagamento[0] as any
+    expect(forma.bandeira_operadora).toBeUndefined()
+  })
+
+  it('múltiplos pagamentos (split) → uma entrada por pagamento, cada um com seu próprio valor', () => {
+    const ctx = baseFiscalContext({ payments: [
+      { method: 'pix', netAmount: 40, cardBrand: null },
+      { method: 'cash', netAmount: 39.8, cardBrand: null },
+    ] })
+    const formas = buildNfePayload(ctx).formas_pagamento
+    expect(formas).toHaveLength(2)
+    expect(formas[0].forma_pagamento).toBe('20')
+    expect(formas[1].forma_pagamento).toBe('01')
+  })
+
+  it('método de pagamento "card" (legado) → lança FiscalRuleNotImplementedError, propagada (não engolida)', () => {
+    const ctx = baseFiscalContext({ payments: [{ method: 'card', netAmount: 79.8, cardBrand: null }] })
+    expect(() => buildNfePayload(ctx)).toThrow(FiscalRuleNotImplementedError)
+  })
+
+  it('nunca inclui campos de credenciadora/integração/parcelas — nenhum dado fiscal confiável pra isso nesta fase', () => {
+    const ctx = baseFiscalContext({ payments: [{ method: 'credit_card', netAmount: 79.8, cardBrand: 'visa' }] })
+    const forma = buildNfePayload(ctx).formas_pagamento[0] as any
+    expect(forma.tipo_integracao).toBeUndefined()
+    expect(forma.cnpj_credenciadora).toBeUndefined()
+    expect(forma.numero_autorizacao).toBeUndefined()
+    expect(forma.cnpj_beneficiario).toBeUndefined()
+    expect(forma.id_terminal_pagamento).toBeUndefined()
+    expect(forma.parcelas).toBeUndefined()
+    expect(forma.installments).toBeUndefined()
   })
 })
 

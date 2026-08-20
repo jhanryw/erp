@@ -1,5 +1,6 @@
 /**
- * Transmission service — Fase Fiscal 2B, seção 6-8 do pedido.
+ * Transmission service — Fase Fiscal 2B (base) + Fase Fiscal 3B (lock de
+ * concorrência).
  *
  * `submitNfeHomologacao(saleId, companyId)` é o ÚNICO ponto do projeto que
  * chama `POST /v2/nfe` (emissão real). Só em homologação — bloqueia
@@ -8,49 +9,77 @@
  * `POST /api/fiscal/nfe/emitir-homologacao`, acionado manualmente por um
  * admin.
  *
- * ─── Idempotência (seção 7 do pedido) ────────────────────────────────────
+ * ─── Concorrência (Fase Fiscal 3B) ───────────────────────────────────────
  *
- * `provider_ref` é DETERMINÍSTICO — `qarvon-{company_id}-{sale_id}-nfe`
- * (`buildProviderRef`) — nunca um UUID aleatório por tentativa. Isso é o
- * que permite retry seguro: a MESMA ref é reenviada em toda tentativa pra
- * uma venda, nunca uma nova.
+ * Risco anterior (corrigido nesta fase, ver
+ * docs/fiscal-fase3b-concorrencia-claim-lease.md pro relatório completo):
+ * a versão anterior deste arquivo buscava/criava a linha de
+ * `fiscal_documents` e só DEPOIS checava o status — sem nenhum lock real,
+ * duas execuções concorrentes (duplo clique, dois containers, retry) para
+ * a MESMA venda passavam pelas mesmas checagens e podiam AMBAS chegar ao
+ * `issueFocusNfe`. O `UNIQUE(provider, provider_ref)` só protegia o
+ * INSERT da linha, nunca duas transmissões concorrentes sobre uma linha
+ * já existente.
  *
- * Fluxo de proteção contra duplo clique / retry / timeout / concorrência:
- *   1. Busca o `fiscal_documents` mais recente pra (company_id, sale_id,
- *      document_type='nfe'). Se não existir, tenta criar um novo com
- *      status='draft' — se essa criação colidir (23505, UNIQUE
- *      provider+provider_ref) porque outra requisição concorrente já
- *      criou o mesmo ref no meio do caminho, RE-busca a linha e trata
- *      como "já existe", nunca insere uma segunda.
- *   2. Se a linha já está `authorized` → devolve o resultado existente,
- *      NUNCA tenta emitir de novo (mesmo padrão do UNIQUE parcial do
- *      banco — aqui é a primeira linha de defesa, o UNIQUE é a segunda).
- *   3. Se a linha está `pending` → o resultado da tentativa anterior é
- *      DESCONHECIDO (pode ter timeado, pode estar processando de verdade).
- *      Consulta a Focus pela MESMA ref (`GET /v2/nfe/{ref}`) ANTES de
- *      qualquer outra coisa — nunca reemite às cegas. Atualiza a linha
- *      conforme a resposta real e devolve — nunca chama `POST /v2/nfe`
- *      de novo nesse caminho.
- *   4. Qualquer outro status (`draft`/`validation_failed`/
- *      `submission_error`/`authorization_failed`/`cancellation_failed`) →
- *      seguro reemitir reaproveitando a MESMA linha e o MESMO ref.
- *   5. `cancelled` é tratado como terminal (mesmo padrão de `authorized`)
- *      — cancelamento não é implementado nesta fase, mas uma vez
- *      cancelado não faz sentido reemitir automaticamente pro mesmo ref.
- *   6. Se a chamada HTTP falhar por timeout/rede (resultado
- *      GENUINAMENTE desconhecido, nem a Focus respondeu), a linha fica
- *      `pending` com uma mensagem explicando isso — a PRÓXIMA chamada cai
- *      no passo 3 (consulta antes de reemitir), nunca gera um ref novo.
+ * Desenho novo: `rpc_claim_fiscal_emission` (claim atômico curto,
+ * `SELECT ... FOR UPDATE` só dentro da própria função — nunca ao redor de
+ * HTTP) decide entre `claimed`/`busy`/`already_authorized`/
+ * `already_cancelled`/`reconciliation_required` ANTES de qualquer chamada
+ * à Focus. Só depois de `claimed` (com um `claim_token` imprevisível e
+ * uma lease de 60s) o service prossegue pra HTTP, fora de qualquer
+ * transação. Toda escrita de resultado depois do claim passa por
+ * `rpc_complete_fiscal_emission`, que só afeta a linha se
+ * `submission_claim_token` ainda for o mesmo — protege contra um worker
+ * antigo (lease expirada, outro claim já concedido) sobrescrever o
+ * resultado de um claim mais novo (seção 10 do pedido da fase).
  *
- * ─── Máquina de estados (seção 8 do pedido) ──────────────────────────────
+ * Lease expirada NUNCA autoriza retransmissão direta — só ativa reclamar
+ * de novo; se o status ainda for `pending`, a única decisão possível é
+ * `reconciliation_required` (consultar a Focus pela MESMA ref antes de
+ * qualquer outra coisa).
+ *
+ * ─── Fechamento do risco residual #2 (mesma fase) ────────────────────────
+ *
+ * Risco: se `issueFocusNfe` demorar mais que a lease (ex.: a Focus recebeu
+ * a requisição e está processando, mas nosso próprio timeout de cliente
+ * já estourou, ou o processo morre depois de disparar o POST), uma
+ * segunda execução podia reclamar o documento, consultar a Focus, receber
+ * um "não encontrado" AMBÍGUO (a Focus pode não ter processado a
+ * transmissão original ainda) e concluir erradamente que era seguro
+ * reemitir — abrindo a porta pra duas transmissões HTTP concorrentes com
+ * a mesma `provider_ref`.
+ *
+ * Fechado distinguindo três estados explícitos: claim adquirido →
+ * transmissão iniciada → resultado/reconciliação. `rpc_begin_fiscal_
+ * transmission` marca atomicamente `submission_started_at`, guardada pelo
+ * `claim_token` vigente, IMEDIATAMENTE ANTES de `issueFocusNfe`. A partir
+ * daí, `rpc_claim_fiscal_emission` NUNCA mais concede um claim direto
+ * enquanto essa marca existir — sempre devolve `reconciliation_required`,
+ * incondicionalmente, mesmo com a lease expirada. Só uma nova
+ * `already_authorized`/consulta que confirme inequivocamente a ausência
+ * da `provider_ref` na Focus (ou nenhuma evidência de transmissão ter
+ * ocorrido) libera uma nova tentativa — sempre com a MESMA `provider_ref`.
+ * Não resolvido aumentando a lease — a decisão passou a ser independente
+ * da duração da lease a partir do momento em que existe evidência de
+ * despacho real.
+ *
+ * ─── Idempotência (herdada da Fase 2B, preservada) ──────────────────────
+ *
+ * `provider_ref` continua DETERMINÍSTICA — `qarvon-{company_id}-{sale_id}
+ * -nfe` (`buildProviderRef`) — nunca um UUID por tentativa, nunca
+ * `-attempt-N`/`-retry-N`. `UNIQUE(provider, provider_ref)`,
+ * `UNIQUE(access_key) WHERE NOT NULL` e `UNIQUE(sale_id, document_type)
+ * WHERE status='authorized'` continuam intocadas — o claim COMPLEMENTA
+ * essas barreiras, nunca as substitui.
+ *
+ * ─── Máquina de estados (herdada da Fase 2B) ─────────────────────────────
  *
  * `erro_autorizacao` da Focus NUNCA é tratado como suficiente sozinho —
- * `status_sefaz`/`mensagem_sefaz` são sempre persistidos junto (podem ser
- * rejeição real da SEFAZ OU falha técnica da Focus, indistinguíveis só
- * pelo `status`, confirmado na Fase 1). Erro síncrono da Focus (400/422,
- * a chamada nem chegou na SEFAZ) vira `submission_error`, com
- * `submission_error_code`/`submission_error_message` — nunca confundido
- * com `authorization_failed`.
+ * `status_sefaz`/`mensagem_sefaz` são sempre persistidos junto. Erro
+ * síncrono da Focus (400/422, a chamada nem chegou na SEFAZ) vira
+ * `submission_error` — nunca confundido com `authorization_failed`.
+ * Timeout/rede (resultado GENUINAMENTE desconhecido) vira `pending` —
+ * nunca `submission_error`, nunca um POST automático de novo.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
@@ -58,6 +87,7 @@ import { resolveFocusIntegration } from './resolveFocusIntegration'
 import { loadSaleFiscalContext, FiscalContextError } from './loadSaleFiscalContext'
 import { validateFiscalReadiness } from './validateFiscalReadiness'
 import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
+import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { buildFiscalDocumentSnapshot } from './buildFiscalSnapshot'
 import { issueFocusNfe, consultFocusNfe } from '@/lib/integrations/focus/httpClient'
 import { FocusApiError, type FocusNfeConsultaResponse } from '@/lib/integrations/focus/types'
@@ -109,7 +139,19 @@ interface FiscalDocumentRow {
   danfe_path: string | null
 }
 
-/** Determinístico — nunca um UUID aleatório. Ver comentário do arquivo. */
+/** Lease do claim de transmissão — generosa o bastante pra cobrir carregar contexto + montar payload + o timeout HTTP da Focus (15s, ver httpClient.ts) com folga, curta o bastante pra um crash se autorrecuperar em ~1 minuto. */
+const FISCAL_EMISSION_LEASE_SECONDS = 60
+
+type FiscalClaimDecision = 'claimed' | 'busy' | 'already_authorized' | 'already_cancelled' | 'reconciliation_required'
+
+interface FiscalClaimResult {
+  decision: FiscalClaimDecision
+  row: FiscalDocumentRow
+  claimToken: string | null
+  leaseUntil: string | null
+}
+
+/** Determinístico — nunca um UUID aleatório, nunca `-attempt-N`/`-retry-N`. Ver comentário do arquivo. */
 export function buildProviderRef(companyId: number, saleId: number): string {
   return `qarvon-${companyId}-${saleId}-nfe`
 }
@@ -146,53 +188,142 @@ function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalValidationE
 const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path'
 
 /**
- * Busca a linha mais recente pra (company, sale, nfe) ou cria uma nova em
- * 'draft'. Concorrência segura via UNIQUE(provider, provider_ref) — uma
- * corrida perdida na criação vira uma re-busca, nunca uma segunda linha.
+ * Wrapper de `rpc_claim_fiscal_emission` — claim atômico curto, comita
+ * antes de qualquer HTTP (a chamada `.rpc()` em si já é uma transação
+ * fechada). Nunca chamado de dentro de outra transação.
  */
-async function getOrCreateFiscalDocument(
+async function claimFiscalEmission(
   admin: ReturnType<typeof createAdminClient>,
   companyId: number,
   saleId: number,
   providerRef: string,
   environment: string,
-): Promise<FiscalDocumentRow> {
-  const { data: existing } = await (admin as any)
-    .from('fiscal_documents')
-    .select(FISCAL_DOCUMENT_SELECT)
-    .eq('company_id', companyId)
-    .eq('sale_id', saleId)
-    .eq('document_type', 'nfe')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+): Promise<FiscalClaimResult> {
+  const { data, error } = await (admin as any).rpc('rpc_claim_fiscal_emission', {
+    p_company_id: companyId,
+    p_sale_id: saleId,
+    p_provider_ref: providerRef,
+    p_environment: environment,
+    p_lease_seconds: FISCAL_EMISSION_LEASE_SECONDS,
+  })
 
-  if (existing) return existing as FiscalDocumentRow
+  if (error) throw new Error(`Falha ao reivindicar emissão fiscal pra venda ${saleId}: ${error.message}`)
+  const row = ((data as any[]) ?? [])[0]
+  if (!row) throw new Error(`rpc_claim_fiscal_emission não devolveu nenhuma linha pra venda ${saleId}.`)
 
-  const { data: created, error: insertError } = await (admin as any)
-    .from('fiscal_documents')
-    .insert({ company_id: companyId, sale_id: saleId, document_type: 'nfe', provider: 'focus_nfe', environment, provider_ref: providerRef, status: 'draft' })
-    .select(FISCAL_DOCUMENT_SELECT)
-    .single()
-
-  if (!insertError) return created as FiscalDocumentRow
-
-  if (insertError.code === '23505') {
-    // Corrida perdida — outra requisição concorrente criou a mesma linha
-    // entre o SELECT e o INSERT acima. Re-busca, nunca insere de novo.
-    const { data: raceWinner } = await (admin as any)
-      .from('fiscal_documents')
-      .select(FISCAL_DOCUMENT_SELECT)
-      .eq('company_id', companyId)
-      .eq('sale_id', saleId)
-      .eq('document_type', 'nfe')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (raceWinner) return raceWinner as FiscalDocumentRow
+  return {
+    decision: row.decision as FiscalClaimDecision,
+    row: {
+      id: row.id,
+      status: row.status,
+      provider_ref: row.provider_ref,
+      number: row.number,
+      series: row.series,
+      access_key: row.access_key,
+      authorization_protocol: row.authorization_protocol,
+      status_sefaz: row.status_sefaz,
+      status_message: row.status_message,
+      submission_error_code: row.submission_error_code,
+      submission_error_message: row.submission_error_message,
+      xml_path: row.xml_path,
+      danfe_path: row.danfe_path,
+    },
+    claimToken: row.submission_claim_token ?? null,
+    leaseUntil: row.submission_lease_until ?? null,
   }
+}
 
-  throw new Error(`Falha ao criar fiscal_documents pra venda ${saleId}: ${insertError.message}`)
+interface CompleteFiscalEmissionInput {
+  fiscalDocumentId: number
+  claimToken: string
+  status: FiscalDocumentDomainStatus
+  statusSefaz?: string | null
+  statusMessage?: string | null
+  submissionErrorCode?: string | null
+  submissionErrorMessage?: string | null
+  number?: string | null
+  series?: string | null
+  accessKey?: string | null
+  authorizationProtocol?: string | null
+  xmlPath?: string | null
+  danfePath?: string | null
+  providerPayload?: unknown
+  requestPayload?: unknown
+  fiscalContextSnapshot?: unknown
+  issuedAt?: string
+  authorizedAt?: string
+}
+
+/**
+ * Wrapper de `rpc_complete_fiscal_emission` — só afeta a linha se
+ * `claimToken` ainda for o vigente. `null` = token superado (outro claim
+ * já assumiu) — quem chama NUNCA deve tratar isso como erro, só como "meu
+ * resultado não é mais o que vale, busque o atual".
+ */
+async function completeFiscalEmission(
+  admin: ReturnType<typeof createAdminClient>,
+  input: CompleteFiscalEmissionInput,
+): Promise<FiscalDocumentRow | null> {
+  const { data, error } = await (admin as any).rpc('rpc_complete_fiscal_emission', {
+    p_fiscal_document_id: input.fiscalDocumentId,
+    p_claim_token: input.claimToken,
+    p_status: input.status,
+    p_status_sefaz: input.statusSefaz ?? null,
+    p_status_message: input.statusMessage ?? null,
+    p_submission_error_code: input.submissionErrorCode ?? null,
+    p_submission_error_message: input.submissionErrorMessage ?? null,
+    p_number: input.number ?? null,
+    p_series: input.series ?? null,
+    p_access_key: input.accessKey ?? null,
+    p_authorization_protocol: input.authorizationProtocol ?? null,
+    p_xml_path: input.xmlPath ?? null,
+    p_danfe_path: input.danfePath ?? null,
+    p_provider_payload: input.providerPayload ?? null,
+    p_request_payload: input.requestPayload ?? null,
+    p_fiscal_context_snapshot: input.fiscalContextSnapshot ?? null,
+    p_issued_at: input.issuedAt ?? null,
+    p_authorized_at: input.authorizedAt ?? null,
+  })
+
+  if (error) throw new Error(`Falha ao concluir emissão fiscal (documento ${input.fiscalDocumentId}): ${error.message}`)
+  const rows = (data as any[]) ?? []
+  return rows[0] ? (rows[0] as FiscalDocumentRow) : null
+}
+
+interface BeginFiscalTransmissionInput {
+  fiscalDocumentId: number
+  claimToken: string
+  requestPayload: unknown
+  fiscalContextSnapshot: unknown
+}
+
+/**
+ * Wrapper de `rpc_begin_fiscal_transmission` — fechamento do risco
+ * residual #2. Chamada IMEDIATAMENTE ANTES de `issueFocusNfe`, guardada
+ * pelo `claimToken` vigente. `null` = claim já superado (outra execução
+ * assumiu enquanto validávamos/montávamos o payload) — quem chama NUNCA
+ * deve prosseguir pro POST nesse caso.
+ */
+async function beginFiscalTransmission(
+  admin: ReturnType<typeof createAdminClient>,
+  input: BeginFiscalTransmissionInput,
+): Promise<FiscalDocumentRow | null> {
+  const { data, error } = await (admin as any).rpc('rpc_begin_fiscal_transmission', {
+    p_fiscal_document_id: input.fiscalDocumentId,
+    p_claim_token: input.claimToken,
+    p_request_payload: input.requestPayload ?? null,
+    p_fiscal_context_snapshot: input.fiscalContextSnapshot ?? null,
+  })
+
+  if (error) throw new Error(`Falha ao marcar início de transmissão fiscal (documento ${input.fiscalDocumentId}): ${error.message}`)
+  const rows = (data as any[]) ?? []
+  return rows[0] ? (rows[0] as FiscalDocumentRow) : null
+}
+
+/** Leitura simples, sem guard de token — usada só quando um `completeFiscalEmission` foi recusado (token superado) e precisamos devolver o estado ATUAL e real pro chamador original. */
+async function fetchCurrentFiscalDocumentRow(admin: ReturnType<typeof createAdminClient>, fiscalDocumentId: number): Promise<FiscalDocumentRow> {
+  const { data } = await (admin as any).from('fiscal_documents').select(FISCAL_DOCUMENT_SELECT).eq('id', fiscalDocumentId).single()
+  return data as FiscalDocumentRow
 }
 
 async function applyFocusResponse(
@@ -207,6 +338,20 @@ async function applyFocusResponse(
     provider_payload: response,
     status_sefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
     status_message: response.mensagem_sefaz ?? null,
+  }
+
+  // Fechamento do risco residual #2: enquanto o resultado ainda é 'pending'
+  // (Focus respondeu 'processando_autorizacao' — a transmissão original
+  // genuinamente existe e ainda não terminou), NÃO limpa
+  // submission_started_at — a incerteza continua, o próximo claim ainda
+  // deve forçar reconciliação. Qualquer outro resultado aqui é uma
+  // conclusão DEFINITIVA da Focus (autorizado/rejeitado/cancelado/erro de
+  // cancelamento) — a incerteza que submission_started_at representava foi
+  // resolvida, então ela é liberada, permitindo que um claim futuro (se
+  // ainda fizer sentido pro novo status) seja concedido direto, sem exigir
+  // outra reconciliação desnecessária.
+  if (domainStatus !== 'pending') {
+    patch.submission_started_at = null
   }
 
   if (domainStatus === 'authorized') {
@@ -225,8 +370,17 @@ async function applyFocusResponse(
 
 /**
  * Consulta a Focus pela ref existente e atualiza a linha — nunca chama
- * `POST /v2/nfe` aqui. Usado quando uma linha `pending` já existe (retry
- * seguro) e por `consultNfeStatus.ts` (polling manual explícito).
+ * `POST /v2/nfe` aqui. Usado quando o claim devolve
+ * `reconciliation_required` e por `consultNfeStatus.ts` (polling manual
+ * explícito).
+ *
+ * Escreve SEM exigir `claim_token` — de propósito: é leitura da verdade
+ * da Focus, determinística por `ref`. Mesmo que uma execução "antiga"
+ * grave o resultado de uma consulta, é a MESMA verdade que qualquer outra
+ * consulta chegaria — não há "worker errado sobrescrevendo", só "verdade
+ * confirmada de novo". O guard de token (`rpc_complete_fiscal_emission`)
+ * existe pra proteger o resultado de um `POST`, que pode variar por
+ * tentativa — não pra uma consulta idempotente.
  */
 export async function consultAndUpdateFiscalDocument(
   fiscalDocumentId: number,
@@ -253,6 +407,41 @@ export async function consultAndUpdateFiscalDocument(
 
     return success(rowToResult({ ...(row as FiscalDocumentRow), status }))
   } catch (err) {
+    // Cenário A de recuperação de crash (seção 9 do pedido da Fase 3B):
+    // "processo morre antes do POST → lease expira → consulta Focus pela
+    // ref → INEXISTENTE → só então nova transmissão pode ser considerada."
+    // A Focus confirma "não encontrado" (404, codigo='nao_encontrado') —
+    // significa que a Focus NUNCA recebeu essa ref, então fica seguro
+    // liberar o documento pra uma tentativa real (`submission_error` é o
+    // status "retentável" correto aqui, mesmo significado de "a SEFAZ
+    // nunca viu isso"). Qualquer OUTRO erro de consulta (rede, 500, etc.)
+    // continua sem tocar a linha — resultado genuinamente desconhecido,
+    // não vira uma permissão de retry.
+    if (err instanceof FocusApiError && (err.httpStatus === 404 || err.codigo === 'nao_encontrado')) {
+      await (admin as any).from('fiscal_documents').update({
+        status: 'submission_error',
+        submission_error_code: err.codigo ?? '404',
+        submission_error_message: 'Focus confirmou que esta referência nunca foi recebida — seguro tentar uma nova transmissão.',
+        // Fechamento do risco residual #2: a Focus confirmou INEQUIVOCAMENTE
+        // a ausência da provider_ref (caso 2 do pedido) — a incerteza que
+        // submission_started_at representava foi resolvida, libera pra um
+        // claim futuro poder ser concedido direto (mesma provider_ref,
+        // nunca uma nova). Sem isto, submission_started_at continuaria
+        // setado pra sempre e TODO claim futuro cairia em
+        // reconciliation_required de novo, mesmo já sabendo que é seguro
+        // reclamar — um laço sem saída.
+        submission_started_at: null,
+      }).eq('id', fiscalDocumentId)
+
+      const { data: row } = await (admin as any)
+        .from('fiscal_documents')
+        .select(FISCAL_DOCUMENT_SELECT)
+        .eq('id', fiscalDocumentId)
+        .single()
+
+      return success(rowToResult(row as FiscalDocumentRow))
+    }
+
     const message = err instanceof FocusApiError ? `Focus retornou erro (${err.httpStatus}): ${err.mensagem ?? err.message}` : err instanceof Error ? err.message : 'Erro desconhecido ao consultar NF-e.'
     return failure(message)
   }
@@ -275,17 +464,33 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
   }
 
   const providerRef = buildProviderRef(companyId, saleId)
-  const existingRow = await getOrCreateFiscalDocument(admin, companyId, saleId, providerRef, 'homologacao')
 
-  // ─── Idempotência: linha terminal (authorized/cancelled) nunca reemite ──
-  if (existingRow.status === 'authorized' || existingRow.status === 'cancelled') {
-    return success(rowToResult(existingRow))
+  // ─── Claim atômico curto — decide ANTES de qualquer HTTP ────────────────
+  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, 'homologacao')
+
+  if (claim.decision === 'already_authorized' || claim.decision === 'already_cancelled') {
+    return success(rowToResult(claim.row))
   }
 
-  // ─── Idempotência: pending → consulta antes de qualquer coisa, nunca reemite às cegas ──
-  if (existingRow.status === 'pending') {
-    return consultAndUpdateFiscalDocument(existingRow.id, existingRow.provider_ref, companyId)
+  if (claim.decision === 'busy') {
+    return success(rowToResult({
+      ...claim.row,
+      status: 'pending',
+      status_message: `Outra tentativa de emissão está em andamento para esta venda (lease até ${claim.leaseUntil}) — tente novamente em instantes.`,
+    }))
   }
+
+  if (claim.decision === 'reconciliation_required') {
+    // Lease livre/expirada, mas resultado da tentativa anterior é
+    // desconhecido — nunca reclama nem reemite direto (seção 7 do pedido:
+    // "lease expirou ≠ POST novamente"). Consulta a Focus primeiro.
+    return consultAndUpdateFiscalDocument(claim.row.id, claim.row.provider_ref, companyId)
+  }
+
+  // ─── claim.decision === 'claimed' ────────────────────────────────────────
+  const fiscalDocumentId = claim.row.id
+  const claimToken = claim.claimToken
+  if (!claimToken) throw new Error('rpc_claim_fiscal_emission devolveu decision=claimed sem claim_token — inconsistência inesperada.')
 
   // ─── Resolve integração/token ────────────────────────────────────────────
   const integrationResult = await resolveFocusIntegration(companyId)
@@ -309,14 +514,16 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
 
   const validationErrors = validateFiscalReadiness(context)
   if (validationErrors.length > 0) {
-    await (admin as any).from('fiscal_documents').update({
+    const updated = await completeFiscalEmission(admin, {
+      fiscalDocumentId,
+      claimToken,
       status: 'validation_failed',
-      fiscal_context_snapshot: context,
-      submission_error_code: 'local_validation_failed',
-      submission_error_message: validationErrors.map((e) => e.message).join('; '),
-    }).eq('id', existingRow.id)
-
-    return success(rowToResult({ ...existingRow, status: 'validation_failed' }, validationErrors))
+      fiscalContextSnapshot: context,
+      submissionErrorCode: 'local_validation_failed',
+      submissionErrorMessage: validationErrors.map((e) => e.message).join('; '),
+    })
+    if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId), validationErrors))
+    return success(rowToResult(updated, validationErrors))
   }
 
   // ─── Monta payload + snapshot ────────────────────────────────────────────
@@ -326,68 +533,109 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     payload = buildNfePayload(context)
     snapshot = buildFiscalDocumentSnapshot(context)
   } catch (err) {
-    const message = err instanceof FiscalBuildError ? err.message : 'Falha inesperada ao montar o payload.'
-    await (admin as any).from('fiscal_documents').update({
+    // FiscalRuleNotImplementedError (ex.: CRT 2/3, método de pagamento sem
+    // regra) capturado ANTES do fallback genérico — achado da auditoria da
+    // Fase Fiscal 3: a mensagem real e específica nunca deve ser engolida
+    // por "Falha inesperada ao montar o payload".
+    const message = err instanceof FiscalRuleNotImplementedError || err instanceof FiscalBuildError
+      ? err.message
+      : 'Falha inesperada ao montar o payload.'
+    const updated = await completeFiscalEmission(admin, {
+      fiscalDocumentId,
+      claimToken,
       status: 'validation_failed',
-      fiscal_context_snapshot: context,
-      submission_error_code: 'local_build_failed',
-      submission_error_message: message,
-    }).eq('id', existingRow.id)
-    return success(rowToResult({ ...existingRow, status: 'validation_failed' }, [{ code: 'local_build_failed', message }]))
+      fiscalContextSnapshot: context,
+      submissionErrorCode: 'local_build_failed',
+      submissionErrorMessage: message,
+    })
+    if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId), [{ code: 'local_build_failed', message }]))
+    return success(rowToResult(updated, [{ code: 'local_build_failed', message }]))
   }
 
-  // ─── Persiste intenção ANTES de transmitir (rastro mesmo se o processo cair) ──
-  await (admin as any).from('fiscal_documents').update({
-    request_payload: payload,
-    fiscal_context_snapshot: context,
-    issued_at: new Date().toISOString(),
-  }).eq('id', existingRow.id)
+  // ─── Marca início de transmissão ANTES de transmitir (fechamento do
+  // risco residual #2) — guardado pelo MESMO claim_token E exige lease
+  // AINDA ativa neste exato instante (`rpc_begin_fiscal_transmission`
+  // exige id + claim_token + submission_lease_until > NOW() +
+  // submission_started_at IS NULL). `beginFiscalTransmission` devolve null
+  // por QUALQUER um desses três motivos (token superado por outra
+  // execução, lease vencida — inclusive se ESTE worker simplesmente
+  // demorou demais entre o claim e este ponto — ou begin já chamado antes
+  // sob este mesmo token) e em TODOS os casos NUNCA prosseguimos pro POST
+  // — fecha a janela de corrida bem antes da chamada HTTP, não só depois
+  // dela. Deliberadamente NÃO usa `completeFiscalEmission` aqui: aquela
+  // chamada SEMPRE libera a lease ao retornar (ver migration), o que
+  // zeraria a proteção da lease durante a janela do POST em si —
+  // `rpc_begin_fiscal_transmission` não toca a lease, só marca
+  // `submission_started_at`. ──────────────────────────────────────────────
+  const beginRow = await beginFiscalTransmission(admin, {
+    fiscalDocumentId,
+    claimToken,
+    requestPayload: payload,
+    fiscalContextSnapshot: context,
+  })
+  if (!beginRow) {
+    return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
+  }
 
-  await (admin as any).from('fiscal_document_items').delete().eq('fiscal_document_id', existingRow.id)
+  await (admin as any).from('fiscal_document_items').delete().eq('fiscal_document_id', fiscalDocumentId)
   if (snapshot.items.length > 0) {
     await (admin as any).from('fiscal_document_items').insert(
-      snapshot.items.map((item) => ({ ...item, fiscal_document_id: existingRow.id, company_id: companyId })),
+      snapshot.items.map((item) => ({ ...item, fiscal_document_id: fiscalDocumentId, company_id: companyId })),
     )
   }
 
-  // ─── Transmite ────────────────────────────────────────────────────────────
+  // ─── Transmite — fora de qualquer transação, nenhum lock/claim mantido
+  // durante o HTTP ──────────────────────────────────────────────────────────
   try {
     const response = await issueFocusNfe(providerRef, payload, { token, environment })
-    const status = await applyFocusResponse(admin, existingRow.id, response)
+    const status = mapFocusStatus(response.status)
 
-    const { data: finalRow } = await (admin as any)
-      .from('fiscal_documents')
-      .select(FISCAL_DOCUMENT_SELECT)
-      .eq('id', existingRow.id)
-      .single()
+    const updated = await completeFiscalEmission(admin, {
+      fiscalDocumentId,
+      claimToken,
+      status,
+      providerPayload: response,
+      statusSefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
+      statusMessage: response.mensagem_sefaz ?? null,
+      ...(status === 'authorized' ? {
+        number: response.numero ?? null,
+        series: response.serie ?? null,
+        accessKey: response.chave_nfe ?? null,
+        authorizationProtocol: response.protocolo_nota_fiscal?.numero_protocolo ?? null,
+        xmlPath: response.caminho_xml_nota_fiscal ?? null,
+        danfePath: response.caminho_danfe ?? null,
+        authorizedAt: new Date().toISOString(),
+      } : {}),
+    })
 
-    return success(rowToResult({ ...(finalRow as FiscalDocumentRow), status }))
+    if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
+    return success(rowToResult(updated))
   } catch (err) {
     if (err instanceof FocusApiError) {
       // Erro síncrono — a SEFAZ nunca viu a tentativa. Nunca confundir com authorization_failed.
-      await (admin as any).from('fiscal_documents').update({
+      const updated = await completeFiscalEmission(admin, {
+        fiscalDocumentId,
+        claimToken,
         status: 'submission_error',
-        submission_error_code: err.codigo ?? String(err.httpStatus),
-        submission_error_message: err.mensagem ?? err.message,
-      }).eq('id', existingRow.id)
-
-      return success(rowToResult({
-        ...existingRow,
-        status: 'submission_error',
-        submission_error_code: err.codigo ?? String(err.httpStatus),
-        submission_error_message: err.mensagem ?? err.message,
-      }))
+        submissionErrorCode: err.codigo ?? String(err.httpStatus),
+        submissionErrorMessage: err.mensagem ?? err.message,
+      })
+      if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
+      return success(rowToResult(updated))
     }
 
     // Timeout/falha de rede — resultado GENUINAMENTE desconhecido. Fica
-    // pending; a PRÓXIMA chamada consulta antes de reemitir (nunca gera
-    // ref novo, nunca reemite às cegas).
+    // pending; a PRÓXIMA chamada (claim → reconciliation_required)
+    // consulta antes de reemitir — nunca gera ref novo, nunca reemite às
+    // cegas.
     const message = err instanceof Error ? err.message : 'Erro desconhecido ao transmitir.'
-    await (admin as any).from('fiscal_documents').update({
+    const updated = await completeFiscalEmission(admin, {
+      fiscalDocumentId,
+      claimToken,
       status: 'pending',
-      status_message: `Resultado desconhecido após falha de transmissão: ${message}`,
-    }).eq('id', existingRow.id)
-
-    return success(rowToResult({ ...existingRow, status: 'pending', status_message: `Resultado desconhecido após falha de transmissão: ${message}` }))
+      statusMessage: `Resultado desconhecido após falha de transmissão: ${message}`,
+    })
+    if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
+    return success(rowToResult(updated))
   }
 }

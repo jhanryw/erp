@@ -13,8 +13,10 @@
  */
 
 import { resolveCfop, resolveIcmsCsosn, resolvePisCofinsCst, resolveIpiTreatment, resolveIbsCbsTestYear2026, type Crt } from '@/lib/fiscal/taxRules'
-import type { FocusNfeItemPayload, FocusNfePayload } from '@/lib/integrations/focus/nfePayload.types'
-import type { FiscalDocumentContext, FiscalSaleItemContext } from './types'
+import { resolveFormaPagamento, resolveIndicadorPagamento, resolveBandeiraOperadora } from '@/lib/fiscal/paymentRules'
+import { normalizeNcm } from '@/lib/fiscal/ncmRules'
+import type { FocusNfeItemPayload, FocusNfePayload, FocusFormaPagamento } from '@/lib/integrations/focus/nfePayload.types'
+import type { FiscalDocumentContext, FiscalSaleItemContext, FiscalPaymentContext } from './types'
 
 export class FiscalBuildError extends Error {
   constructor(message: string) {
@@ -57,7 +59,11 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt, 
     valor_unitario_comercial: item.unitPrice,
     valor_bruto: round2(item.unitPrice * item.quantity),
     ...(item.discountAmount > 0 ? { valor_desconto: round2(item.discountAmount) } : {}),
-    codigo_ncm: required(item.ncm, `items[${label}].ncm`),
+    // Normalizado (nunca a string bruta) — se `validateFiscalReadiness` não
+    // rodou antes (chamador direto, ou defesa própria do builder),
+    // `normalizeNcm` devolve null pra NCM malformado e `required` lança
+    // `FiscalBuildError` — nunca envia pontuação/formato inválido à Focus.
+    codigo_ncm: required(normalizeNcm(item.ncm), `items[${label}].ncm`),
     ...(item.cest ? { cest: item.cest } : {}),
     codigo_barras_comercial: 'SEM GTIN',
 
@@ -92,6 +98,26 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt, 
 }
 
 /**
+ * Fase Fiscal 3A — monta uma entrada de `formas_pagamento[]`. Nunca inclui
+ * `tipo_integracao`/`cnpj_credenciadora`/`numero_autorizacao`/
+ * `cnpj_beneficiario`/`id_terminal_pagamento` (ver comentário completo em
+ * nfePayload.types.ts) — este ERP não tem dado fiscal confiável de
+ * credenciadora/integração. `resolveFormaPagamento` propaga
+ * `FiscalRuleNotImplementedError` pra método não suportado (ex.: 'card'
+ * legado) — nunca capturado aqui, sobe pro chamador (submitNfeHomologacao/
+ * preview) tratar explicitamente.
+ */
+function buildFormaPagamentoPayload(payment: FiscalPaymentContext): FocusFormaPagamento {
+  const bandeira = resolveBandeiraOperadora(payment.cardBrand)
+  return {
+    forma_pagamento: resolveFormaPagamento(payment.method),
+    valor_pagamento: round2(payment.netAmount),
+    indicador_pagamento: resolveIndicadorPagamento(),
+    ...(bandeira ? { bandeira_operadora: bandeira } : {}),
+  }
+}
+
+/**
  * 1=contribuinte ICMS (informar IE), 2=contribuinte isento de inscrição,
  * 9=não contribuinte. Hoje `customers` só suporta PF (cnpj/IE sempre
  * null), então isto sempre resolve pra 9 na prática — mas a lógica é
@@ -114,6 +140,9 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
 
   if (ctx.items.length === 0) {
     throw new FiscalBuildError('buildNfePayload: venda sem itens — nada para montar.')
+  }
+  if (ctx.payments.length === 0) {
+    throw new FiscalBuildError('buildNfePayload: venda sem pagamentos registrados — nada para montar em formas_pagamento.')
   }
 
   const documentoDestinatario = ctx.destinatario.cpf ?? ctx.destinatario.cnpj
@@ -154,6 +183,7 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
     indicador_inscricao_estadual_destinatario: resolveIndicadorIeDestinatario(ctx.destinatario.cnpj, ctx.destinatario.inscricaoEstadual),
 
     items: ctx.items.map((item, index) => buildItemPayload(item, index, emitenteCrt, emitenteUf, destinatarioUf)),
+    formas_pagamento: ctx.payments.map((payment) => buildFormaPagamentoPayload(payment)),
   }
 
   return payload

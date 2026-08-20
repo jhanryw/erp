@@ -52,6 +52,8 @@ function goldenSample1(): FiscalDocumentContext {
     companyId: 1,
     providerRef: 'golden-sample-1',
     environment: 'homologacao',
+    saleStatus: 'paid',
+    saleTotal: 170.98, // vNF real do XML
     emitente: EMITENTE_REAL,
     destinatario: {
       nome: 'Cliente Golden Sample 1 — ofuscado',
@@ -74,6 +76,8 @@ function goldenSample1(): FiscalDocumentContext {
       { saleItemId: 1, productId: 1, variationId: 1, description: 'Camisola Secret Rosa com Branco Rosa GG', sku: '0503050426', quantity: 1, unitPrice: 104.99, discountAmount: 5.24, unit: 'UNDS', ncm: '61083200', cest: null, origem: 0 },
       { saleItemId: 2, productId: 2, variationId: 2, description: 'Camisola Secret Verde Militar Verde Militar GG', sku: '0503440426', quantity: 1, unitPrice: 74.99, discountAmount: 3.76, unit: 'UNDS', ncm: '61083200', cest: null, origem: 0 },
     ],
+    // <pag><detPag><tPag>20</tPag><vPag>170.98</vPag></detPag></pag> no XML real — PIX estático, valor = vNF.
+    payments: [{ method: 'pix', netAmount: 170.98, cardBrand: null }],
     operation: baseOperation(),
     focusIntegration: { available: true, reason: null },
   }
@@ -87,6 +91,8 @@ function goldenSample2(): FiscalDocumentContext {
     companyId: 1,
     providerRef: 'golden-sample-2',
     environment: 'homologacao',
+    saleStatus: 'paid',
+    saleTotal: 156.72, // vNF real do XML
     emitente: EMITENTE_REAL,
     destinatario: {
       nome: 'Cliente Golden Sample 2 — ofuscado',
@@ -110,6 +116,8 @@ function goldenSample2(): FiscalDocumentContext {
       { saleItemId: 2, productId: 2, variationId: 2, description: 'Camisola Secret Branco com Preto Branco G', sku: '0503020326', quantity: 1, unitPrice: 74.99, discountAmount: 3.75, unit: 'UNDS', ncm: '61083200', cest: null, origem: 0 },
       { saleItemId: 3, productId: 3, variationId: 3, description: 'Calcinha Invisible High Marrom Marrom GGG', sku: '0204120826', quantity: 1, unitPrice: 14.99, discountAmount: 0.75, unit: 'UNDS', ncm: '61082200', cest: null, origem: 2 },
     ],
+    // <pag><detPag><tPag>20</tPag><vPag>156.72</vPag></detPag></pag> no XML real.
+    payments: [{ method: 'pix', netAmount: 156.72, cardBrand: null }],
     operation: baseOperation(),
     focusIntegration: { available: true, reason: null },
   }
@@ -129,6 +137,12 @@ describe('Golden sample 1 — chave ...041006759001 (RN → PR, interestadual, 2
   it('emitente: CNPJ, CRT=4, regime_tributario_emitente espelha CRT', () => {
     expect(payload.cnpj_emitente).toBe('61523225000117')
     expect(payload.regime_tributario_emitente).toBe(4)
+  })
+
+  it('formas_pagamento: forma_pagamento="20" (PIX estático) reproduzindo o XML real, valor = vNF, sem bandeira (não é cartão)', () => {
+    expect(payload.formas_pagamento).toEqual([
+      { forma_pagamento: '20', valor_pagamento: 170.98, indicador_pagamento: '0' },
+    ])
   })
 
   it('destinatário: CPF, indicador_ie=9 (PF não contribuinte), código IBGE presente', () => {
@@ -201,6 +215,12 @@ describe('Golden sample 2 — chave ...031006758873 (RN → RJ, interestadual, 3
   it('destinatário: código IBGE do Rio de Janeiro (3304557), diferente do golden sample 1 — nunca hardcoded', () => {
     expect(payload.codigo_municipio_destinatario).toBe('3304557')
     expect(payload.uf_destinatario).toBe('RJ')
+  })
+
+  it('formas_pagamento: forma_pagamento="20" (PIX estático), valor = vNF real desta nota', () => {
+    expect(payload.formas_pagamento).toEqual([
+      { forma_pagamento: '20', valor_pagamento: 156.72, indicador_pagamento: '0' },
+    ])
   })
 
   it('origem mista: 2 itens origem 0 (nacional), 1 item origem 2 (estrangeira, mercado interno) — reproduzido item a item, não uma origem fixa pra venda inteira', () => {

@@ -108,6 +108,84 @@ describe('submitNfeHomologacao — validação bloqueia emissão', () => {
   })
 })
 
+describe('submitNfeHomologacao — blockers de readiness fechados (NCM/CRT) bloqueiam ANTES de rpc_begin_fiscal_transmission e de POST /v2/nfe', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('NCM malformado (validateFiscalReadiness REAL, não mockada) → validation_failed, ZERO POST, submission_started_at NUNCA gravado', async () => {
+    const fake = setupFake()
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(
+      baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID, items: [{ ...baseFiscalContext().items[0], ncm: '6108220A' }] }),
+    )
+    // validateFiscalReadiness NÃO mockada aqui — roda a implementação real.
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
+
+    const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('validation_failed')
+      expect(result.data.validationErrors.map((e) => e.code)).toContain('item_ncm_invalido')
+    }
+    expect(issueSpy).not.toHaveBeenCalled()
+
+    const row = fake.tables.fiscal_documents.find((r) => r.sale_id === SALE_ID)
+    expect(row?.submission_started_at).toBeFalsy() // rpc_begin_fiscal_transmission nunca foi alcançada
+  })
+
+  it('CRT não suportado (validateFiscalReadiness REAL) → validation_failed, ZERO POST, submission_started_at NUNCA gravado', async () => {
+    const fake = setupFake()
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(
+      baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID, emitente: { ...baseFiscalContext().emitente, crt: 2 } }),
+    )
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
+
+    const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('validation_failed')
+      expect(result.data.validationErrors.map((e) => e.code)).toContain('emitente_crt_nao_suportado')
+    }
+    expect(issueSpy).not.toHaveBeenCalled()
+
+    const row = fake.tables.fiscal_documents.find((r) => r.sale_id === SALE_ID)
+    expect(row?.submission_started_at).toBeFalsy()
+  })
+})
+
+describe('submitNfeHomologacao — FiscalRuleNotImplementedError não é engolido (Problema Alto #4 da auditoria, Fase Fiscal 3)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('método de pagamento sem regra fiscal (defensivo, mesmo que validateFiscalReadiness não tenha pego) → mensagem real preservada, não o fallback genérico', async () => {
+    setupFake()
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(
+      baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID, payments: [{ method: 'card', netAmount: 79.8, cardBrand: null }] }),
+    )
+    // Simula validação não ter pego (defensivo) — força o caminho de build lançar.
+    vi.spyOn(validateModule, 'validateFiscalReadiness').mockReturnValue([])
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
+
+    const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('validation_failed')
+      expect(result.data.validationErrors[0]?.message).toMatch(/método de pagamento/i)
+      expect(result.data.validationErrors[0]?.message).not.toBe('Falha inesperada ao montar o payload.')
+    }
+    expect(issueSpy).not.toHaveBeenCalled()
+  })
+})
+
 describe('submitNfeHomologacao — resultado autorizado', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
@@ -234,10 +312,15 @@ describe('submitNfeHomologacao — idempotência: retry com a mesma ref', () => 
     const fake = setupFake()
     mockHappyPathDependencies()
 
-    // Simula uma tentativa anterior que ficou pending (timeout).
+    // Simula uma tentativa anterior que ficou pending (timeout) — o POST já
+    // tinha sido despachado (submission_started_at setado) quando o
+    // resultado ficou desconhecido, senão não haveria evidência de
+    // transmissão anterior e reclamar direto seria seguro (risco residual
+    // #2).
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
       environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      submission_started_at: new Date(Date.now() - 2000).toISOString(),
     })
 
     const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')

@@ -59,7 +59,8 @@ export class FiscalRuleNotImplementedError extends Error {
   }
 }
 
-const SUPPORTED_CRT: readonly Crt[] = [1, 4]
+/** Exportado pra `validateFiscalReadiness` poder checar CRT suportado ANTES de montar/transmitir, sem duplicar esta lista (fonte única — nunca deixa as duas checagens divergirem). */
+export const SUPPORTED_CRT: readonly Crt[] = [1, 4]
 
 function assertSupportedCrt(crt: Crt, ruleName: string): void {
   if (!SUPPORTED_CRT.includes(crt)) {

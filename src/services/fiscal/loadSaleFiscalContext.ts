@@ -17,6 +17,13 @@
  *     Fiscal 2B, nunca hardcoded.
  *   - Itens: `sale_items` → `product_variations` → `products` (ncm/cest/
  *     origem/unidade_med/sku/name).
+ *   - Pagamentos (Fase Fiscal 3A): `sale_payments` por `sale_id`
+ *     (`method`/`net_amount`/`card_brand`) — `installments` deliberadamente
+ *     NÃO é carregado aqui (confirmado: não há campo fiscal equivalente,
+ *     ver paymentRules.ts).
+ *   - `saleStatus`/`saleTotal` (Fase Fiscal 3A): `sales.status`/`sales.total`
+ *     — usados por `validateFiscalReadiness` pra bloquear emissão de venda
+ *     cancelada/devolvida e pra checar soma de pagamentos = total.
  *   - Frete: `shipments.mod_frete`, quando existe uma remessa pra venda;
  *     `9` (sem frete) quando não existe (venda balcão sem entrega).
  *   - `presenca_comprador`/`natureza_operacao`: NÃO existem em nenhum
@@ -60,15 +67,15 @@ export async function loadSaleFiscalContext({
 
   const { data: sale, error: saleError } = await (admin as any)
     .from('sales')
-    .select('id, company_id, customer_id')
+    .select('id, company_id, customer_id, status, total')
     .eq('id', saleId)
     .eq('company_id', companyId)
-    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number } | null; error: { message: string } | null }
+    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number; status: string; total: number } | null; error: { message: string } | null }
 
   if (saleError) throw new FiscalContextError(`Falha ao carregar venda ${saleId}: ${saleError.message}`)
   if (!sale) throw new FiscalContextError(`Venda ${saleId} não encontrada nesta empresa.`)
 
-  const [{ data: settings }, { data: customer }, { data: saleItems }, { data: shipment }, focusIntegrationResult] = await Promise.all([
+  const [{ data: settings }, { data: customer }, { data: saleItems }, { data: shipment }, { data: salePayments }, focusIntegrationResult] = await Promise.all([
     (admin as any)
       .from('company_fiscal_settings')
       .select('cnpj, razao_social, inscricao_estadual, crt, logradouro, numero_endereco, complemento, bairro, municipio, municipio_ibge, uf, cep')
@@ -88,6 +95,10 @@ export async function loadSaleFiscalContext({
       .select('address_id, mod_frete')
       .eq('order_id', saleId)
       .maybeSingle(),
+    (admin as any)
+      .from('sale_payments')
+      .select('method, net_amount, card_brand')
+      .eq('sale_id', saleId),
     resolveFocusIntegration(companyId),
   ])
 
@@ -126,11 +137,19 @@ export async function loadSaleFiscalContext({
     origem: row.product_variations.products.origem ?? null,
   }))
 
+  const payments = (salePayments ?? []).map((row: any) => ({
+    method: row.method,
+    netAmount: Number(row.net_amount),
+    cardBrand: row.card_brand ?? null,
+  }))
+
   return {
     saleId,
     companyId,
     providerRef,
     environment,
+    saleStatus: sale.status,
+    saleTotal: Number(sale.total),
     emitente: {
       cnpj: settings?.cnpj ?? null,
       razaoSocial: settings?.razao_social ?? null,
@@ -166,6 +185,7 @@ export async function loadSaleFiscalContext({
       cep: address?.cep ?? null,
     },
     items,
+    payments,
     operation: {
       naturezaOperacao: operationOverrides?.naturezaOperacao ?? 'Venda de Mercadoria',
       presencaComprador: operationOverrides?.presencaComprador ?? 2,

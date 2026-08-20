@@ -19,6 +19,8 @@ export function baseFiscalContext(overrides: Partial<FiscalDocumentContext> = {}
     companyId: 1,
     providerRef: 'teste-preview-ref-0001',
     environment: 'homologacao',
+    saleStatus: 'paid',
+    saleTotal: 79.8, // 2 × 39.90 (item único do fixture) — bate com o pagamento abaixo
     emitente: {
       cnpj: '11222333000181',
       razaoSocial: 'Empresa Teste Fiscal LTDA',
@@ -65,6 +67,9 @@ export function baseFiscalContext(overrides: Partial<FiscalDocumentContext> = {}
         cest: null,
         origem: 2,
       },
+    ],
+    payments: [
+      { method: 'pix', netAmount: 79.8, cardBrand: null },
     ],
     operation: {
       naturezaOperacao: 'Venda de Mercadoria',

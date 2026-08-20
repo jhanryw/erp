@@ -83,14 +83,34 @@ export interface FiscalFocusIntegrationContext {
   reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | null
 }
 
+/**
+ * Um pagamento da venda (`sale_payments`) — Fase Fiscal 3A. `method` é o
+ * valor bruto de `sale_payments.method` ('pix'/'cash'/'credit_card'/
+ * 'debit_card'/'card' legado) — a tradução pro código fiscal (tPag)
+ * acontece em `paymentRules.ts`, nunca aqui (este é só o dado carregado,
+ * não interpretado). `installments` deliberadamente NÃO existe neste tipo
+ * — confirmado que não há campo fiscal equivalente; fica só em
+ * `sale_payments` mesmo.
+ */
+export interface FiscalPaymentContext {
+  method: string
+  netAmount: number
+  cardBrand: string | null
+}
+
 export interface FiscalDocumentContext {
   saleId: number
   companyId: number
   providerRef: string
   environment: FocusEnvironment
+  /** sales.status no momento da carga — usado por validateFiscalReadiness pra bloquear emissão de venda cancelled/returned (Fase Fiscal 3A). */
+  saleStatus: string
+  /** sales.total — usado pra validar que a soma dos pagamentos bate com o total da venda (Fase Fiscal 3A). */
+  saleTotal: number
   emitente: FiscalEmitenteContext
   destinatario: FiscalDestinatarioContext
   items: FiscalSaleItemContext[]
+  payments: FiscalPaymentContext[]
   operation: FiscalOperationContext
   focusIntegration: FiscalFocusIntegrationContext
 }
