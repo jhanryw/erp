@@ -53,6 +53,19 @@ export async function POST(request: Request) {
   const saleId = parsed.data.sale_id
   const admin = createAdminClient()
 
+  // `shipments.order_id = saleId` — CONTRA `sales.id` (mesmo `saleId`
+  // validado acima), nunca `pedidos.id` (tabela não relacionada, PK UUID,
+  // staging de webhook Nuvemshop). Mesmo join já usado por
+  // `vw_sale_shipping_summary` (`20260613_shipping_fiscal_ready.sql:169`)
+  // — não inventado aqui. Sem FK enforced entre as duas tabelas (auditado
+  // na Fase Fiscal 4G, achado real na venda 636: `sale_origin='store'`,
+  // sem nenhuma linha `shipments`, `shipping_charged=10`) — ausência de
+  // linha vira `deliveryMode: null` abaixo, nunca inferido de
+  // `shipping_charged` (nem buscado nesta rota — `shipping_charged` não
+  // participa da decisão fiscal em nenhum ponto do projeto).
+  // `resolveFiscalDocumentType` já trata `deliveryMode: null` +
+  // `saleOrigin: 'store'` como retirada (`nfce`), sem depender da
+  // existência de `shipments`.
   const [{ data: sale }, { data: shipment }] = await Promise.all([
     (admin as any).from('sales').select('id, sale_origin').eq('id', saleId).eq('company_id', user.company_id).maybeSingle(),
     (admin as any).from('shipments').select('delivery_mode').eq('order_id', saleId).maybeSingle(),

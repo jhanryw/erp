@@ -94,6 +94,15 @@ async function getSale(id: string) {
   const sale = saleData
 
   // ── Etapa 2: relações de 1º nível, em paralelo — nenhuma pode gerar 404 ────
+  // `shipments.order_id = sale.id` (linha abaixo) — CONTRA `sales.id`,
+  // nunca `pedidos.id` (tabela não relacionada, PK UUID). Mesmo join já
+  // usado por `vw_sale_shipping_summary`
+  // (`20260613_shipping_fiscal_ready.sql:169`) — não inventado aqui. Sem
+  // FK enforced entre as duas tabelas (auditado na Fase Fiscal 4G): uma
+  // venda de balcão pode legitimamente não ter nenhuma linha `shipments`
+  // (ex.: venda 636) — tratado como ausência de dado, nunca inferido de
+  // `shipping_charged` (usado só na resolução fiscal, ver comentário mais
+  // abaixo onde `fiscalResolverInput` é montado).
   const stage2 = await Promise.all([
     admin.from('customers').select('id, name, cpf, phone').eq('id', sale.customer_id).maybeSingle(),
     admin.from('users').select('name').eq('id', sale.seller_id).maybeSingle(),
@@ -244,7 +253,32 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   const statusLabels = isPickup ? STATUS_LABELS_PICKUP : STATUS_LABELS_DELIVERY
 
   // ─── Fiscal: resolução do documento (Fase Fiscal 4F, item 10 do pedido —
-  // nunca escolha manual, sempre decorrente da operação real da venda) ────
+  // nunca escolha manual, sempre decorrente da operação real da venda).
+  //
+  // AUDITORIA (Fase Fiscal 4G, achado real na venda 636): `sale.shipment`
+  // vem de `shipments.order_id = sale.id` (query em `getSale`, linha ~104
+  // deste arquivo) — SEMPRE contra `sales.id`, NUNCA contra `pedidos.id`
+  // (tabela não relacionada — staging de webhook Nuvemshop, PK UUID,
+  // schema totalmente diferente). Esse é o MESMO join já usado por
+  // `vw_sale_shipping_summary` (`20260613_shipping_fiscal_ready.sql:169`
+  // — `FROM public.sales s LEFT JOIN public.shipments sh ON sh.order_id =
+  // s.id`), não uma associação inventada aqui.
+  //
+  // Confirmado: NÃO existe FK enforced entre `shipments.order_id` e
+  // `sales.id` — por isso uma linha `shipments` encontrada é tratada como
+  // sinal best-effort (usada se existir), e a AUSÊNCIA de linha (venda de
+  // balcão que legitimamente nunca cria `shipments` — caso real da venda
+  // 636: `sale_origin='store'`, sem `shipments`, `shipping_charged=10`)
+  // vira `deliveryMode: null`, nunca um valor inventado. `resolveFiscal
+  // DocumentType` já trata `null` + `saleOrigin='store'` como retirada
+  // (`nfce`) sem exigir a linha `shipments` — não depende da existência
+  // dela (ver `resolveFiscalDocumentType.ts`).
+  //
+  // `sale.shipping_charged` (usado só para exibição na UI, linha ~440)
+  // NUNCA entra nesta construção — um valor de frete cobrado > 0 não é,
+  // sozinho, evidência de entrega (pode ser embalagem/taxa de balcão) —
+  // confirmado por grep: `shipping_charged` não aparece em nenhum ponto
+  // deste bloco.
   const fiscalResolverInput = { deliveryMode: sale.shipment?.delivery_mode ?? null, saleOrigin: sale.sale_origin ?? null }
   const resolvedFiscalDocumentType = resolveFiscalDocumentType(fiscalResolverInput)
   const fiscalBlockedReason = describeFiscalDocumentTypeBlockReason(fiscalResolverInput)
