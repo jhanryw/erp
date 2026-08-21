@@ -33,7 +33,7 @@
  * NF-e (Focus preenche automaticamente pra NF-e; NFC-e exige no corpo).
  */
 
-import { resolveIcmsCsosn, resolvePisCofinsCst, resolveIpiTreatment, resolveIbsCbsTestYear2026, type Crt } from '@/lib/fiscal/taxRules'
+import { resolveIcmsCsosn, resolvePisCofinsCst, resolveIbsCbsTestYear2026, type Crt } from '@/lib/fiscal/taxRules'
 import { resolveFormaPagamento, resolveBandeiraOperadora } from '@/lib/fiscal/paymentRules'
 import { normalizeNcm } from '@/lib/fiscal/ncmRules'
 import type { FocusNfceItemPayload, FocusNfcePayload, FocusFormaPagamentoNfce } from '@/lib/integrations/focus/nfcePayload.types'
@@ -68,7 +68,6 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt):
 
   const csosn = resolveIcmsCsosn(crt)
   const pisCofins = resolvePisCofinsCst(crt)
-  const ipi = resolveIpiTreatment()
   const ibsCbs = resolveIbsCbsTestYear2026()
 
   const ncm = required(normalizeNcm(item.ncm), `items[${label}].ncm`)
@@ -105,8 +104,12 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt):
     cofins_aliquota_porcentual: 0,
     cofins_valor: 0,
 
-    ipi_situacao_tributaria: ipi.cst,
-    ipi_codigo_enquadramento_legal: ipi.codigoEnquadramentoLegal,
+    // IPI: DELIBERADAMENTE NÃO enviado — mod 65 (NFC-e) rejeita o grupo
+    // IPI incondicionalmente (SEFAZ 742, achado real na venda 626), mesmo
+    // com CST "não tributado". Ver nota completa em `nfcePayload.types.ts`.
+    // NUNCA reintroduzir `ipi_situacao_tributaria`/
+    // `ipi_codigo_enquadramento_legal` aqui — o tipo `FocusNfceItemPayload`
+    // nem os declara mais, de propósito.
 
     ibs_cbs_situacao_tributaria: ibsCbs.situacaoTributaria,
     ibs_cbs_classificacao_tributaria: ibsCbs.classificacaoTributaria,

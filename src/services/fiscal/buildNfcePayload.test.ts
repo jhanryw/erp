@@ -168,6 +168,39 @@ describe('buildNfcePayload — campos obrigatórios ausentes lançam FiscalBuild
   })
 })
 
+describe('buildNfcePayload — grupos proibidos no modelo 65 (achado real, rejeição SEFAZ 742, venda 626)', () => {
+  it('nunca inclui grupo IPI, mesmo quando o produto teria CST/enquadramento suficientes pra NF-e', () => {
+    const payload = buildNfcePayload(nfceContext())
+    const item = payload.items[0] as any
+    expect(item.ipi_situacao_tributaria).toBeUndefined()
+    expect(item.ipi_codigo_enquadramento_legal).toBeUndefined()
+    expect('ipi_situacao_tributaria' in item).toBe(false)
+    expect('ipi_codigo_enquadramento_legal' in item).toBe(false)
+  })
+
+  it('nunca inclui grupo II (imposto de importação) — não implementado em nenhum builder deste ERP', () => {
+    const item = buildNfcePayload(nfceContext()).items[0] as any
+    expect(item.ii_valor).toBeUndefined()
+    expect(item.ii_base_calculo).toBeUndefined()
+  })
+
+  it('nunca inclui PIS-ST/COFINS-ST — só CST 49 (não tributado) é usado, nunca substituição tributária', () => {
+    const item = buildNfcePayload(nfceContext()).items[0] as any
+    expect(item.pis_st_valor).toBeUndefined()
+    expect(item.pis_st_base_calculo).toBeUndefined()
+    expect(item.cofins_st_valor).toBeUndefined()
+    expect(item.cofins_st_base_calculo).toBeUndefined()
+  })
+
+  it('nunca inclui grupo de transporte/volumes — retirada não tem transportador (modalidade_frete="9" é o único sinal enviado)', () => {
+    const payload = buildNfcePayload(nfceContext()) as any
+    expect(payload.transporte).toBeUndefined()
+    expect(payload.volumes).toBeUndefined()
+    expect(payload.transportador).toBeUndefined()
+    expect(payload.modalidade_frete).toBe('9')
+  })
+})
+
 describe('buildNfcePayload — determinismo (puro, sem I/O)', () => {
   it('mesma entrada → mesma saída (exceto data_emissao, que varia com o relógio)', () => {
     const ctx = nfceContext()

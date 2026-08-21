@@ -31,7 +31,7 @@
  * nacional (`leiauteNFe_v4.00.xsd`) define UM ÚNICO tipo complexo
  * `det/prod`+`det/imposto` reaproveitado tanto por NF-e (mod 55) quanto por
  * NFC-e (mod 65) — não são schemas XML independentes. Por isso os campos
- * `pis_*`/`cofins_*`/`ipi_*`/`ibs_cbs_*`/`cbs_*` abaixo reaproveitam
+ * `pis_*`/`cofins_*`/`ibs_cbs_*`/`cbs_*` abaixo reaproveitam
  * EXATAMENTE os mesmos nomes já confirmados em `nfePayload.types.ts`
  * (mesma fonte, mesma página). **Isto é inferência fundamentada, não
  * confirmação empírica específica de NFC-e** — nenhum XML real de NFC-e
@@ -39,6 +39,17 @@
  * Fase 2B, com 2 XMLs reais). Tratar como blocker de confirmação antes da
  * primeira emissão real de homologação NFC-e (mesmo padrão já usado pra
  * `forma_pagamento`, ver `nfcePaymentRules` em `buildNfcePayload.ts`).
+ *
+ * ─── IPI: DELIBERADAMENTE AUSENTE (achado real, primeira emissão real de
+ * homologação, venda 626) ───────────────────────────────────────────────
+ * `ipi_situacao_tributaria`/`ipi_codigo_enquadramento_legal` existiam aqui
+ * (copiados de `nfePayload.types.ts` por analogia, sem confirmação
+ * própria de NFC-e — exatamente o risco que a nota acima já sinalizava)
+ * e causaram rejeição real da SEFAZ: `SEFAZ 742 — "NFC-e com grupo do
+ * IPI"`. O modelo 65 (NFC-e) não aceita o grupo IPI de forma alguma,
+ * mesmo com CST "não tributado" (53) — diferente de NF-e (mod 55), onde
+ * o grupo é enviado normalmente. Removidos do tipo (não apenas
+ * opcionais) para que nenhum builder consiga montá-los por engano.
  *
  * ─── Deliberadamente NÃO implementado nesta fase ───────────────────────────
  * `codigo_unico` (contingência offline), `informacoes_adicionais_contribuinte`,
@@ -92,9 +103,6 @@ export interface FocusNfceItemPayload {
   cofins_base_calculo: number
   cofins_aliquota_porcentual: number
   cofins_valor: number
-
-  ipi_situacao_tributaria: string
-  ipi_codigo_enquadramento_legal: string
 
   ibs_cbs_situacao_tributaria: string
   ibs_cbs_classificacao_tributaria: string
