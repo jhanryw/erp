@@ -24,7 +24,7 @@ import { z } from 'zod'
 import { requireRole } from '@/lib/supabase/session'
 import { ok, err, forbidden, validationError } from '@/lib/api/response'
 import { loadSaleFiscalContext, FiscalContextError } from '@/services/fiscal/loadSaleFiscalContext'
-import { validateFiscalReadiness } from '@/services/fiscal/validateFiscalReadiness'
+import { validateNfeReadiness } from '@/services/fiscal/validateFiscalReadiness'
 import { buildNfePayload, FiscalBuildError } from '@/services/fiscal/buildNfePayload'
 import { buildFiscalDocumentSnapshot } from '@/services/fiscal/buildFiscalSnapshot'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
@@ -72,7 +72,7 @@ export async function POST(request: Request) {
     throw loadErr
   }
 
-  const validationErrors = validateFiscalReadiness(context)
+  const validationErrors = validateNfeReadiness(context)
 
   let payload: unknown = null
   let payloadError: string | null = null

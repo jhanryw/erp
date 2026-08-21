@@ -14,7 +14,7 @@
  * docs/fiscal-fase2a-payload-nfe.md / docs/fiscal-fase2b-*.md.
  */
 
-import { FOCUS_BASE_URLS, FocusApiError, type FocusEmpresa, type FocusEmpresaInput, type FocusNfeConsultaResponse, type FocusRequestOptions } from './types'
+import { FOCUS_BASE_URLS, FocusApiError, type FocusEmpresa, type FocusEmpresaInput, type FocusNfeConsultaResponse, type FocusNfceConsultaResponse, type FocusRequestOptions } from './types'
 
 const DEFAULT_TIMEOUT_MS = 15_000
 
@@ -128,4 +128,38 @@ export async function consultFocusNfe(ref: string, options: FocusRequestOptions)
 export async function issueFocusNfe(ref: string, payload: unknown, options: FocusRequestOptions): Promise<FocusNfeConsultaResponse> {
   const query = `?ref=${encodeURIComponent(ref)}`
   return focusRequest<FocusNfeConsultaResponse>(`/v2/nfe${query}`, options, { method: 'POST', body: payload })
+}
+
+/**
+ * `GET /v2/nfce/{referencia}` — consulta de status de NFC-e por ref. Fase
+ * Fiscal 4E. Confirmado por leitura direta do OpenAPI real (`curl` +
+ * `doc.focusnfe.com.br/reference/consultar_nfce.md`, JSON embutido no
+ * markdown, não resumo de IA): `method:"get"`, `path:"/nfce/{referencia}"`
+ * — path parameter, não query (diferente de `ref` na emissão, que É query
+ * param — mesma distinção que já existe pra NF-e).
+ */
+export async function consultFocusNfce(ref: string, options: FocusRequestOptions): Promise<FocusNfceConsultaResponse> {
+  return focusRequest<FocusNfceConsultaResponse>(`/v2/nfce/${encodeURIComponent(ref)}`, options)
+}
+
+/**
+ * `POST /v2/nfce?ref=<ref>` — emissão real de NFC-e, SÍNCRONA (o resultado
+ * — `autorizado`/`erro_autorizacao` — já vem nesta mesma resposta, nunca
+ * precisa de polling posterior pra saber o resultado imediato; a consulta
+ * continua útil só pra reconciliação após timeout/crash, mesmo padrão de
+ * NF-e). Confirmado por leitura direta do OpenAPI real
+ * (`doc.focusnfe.com.br/reference/emitir_nfce.md`): `method:"post"`,
+ * `path:"/nfce"`, `ref` é **query parameter obrigatório** (mesma posição
+ * que NF-e).
+ *
+ * `ref` continua determinística (`buildProviderRef(..., 'nfce')`) — nunca
+ * gerada de novo a cada tentativa, mesma idempotência de `ref` do lado da
+ * Focus já usada pra NF-e.
+ *
+ * Só chamado pelo transmission service (`submitNfceHomologacao.ts`) —
+ * nunca diretamente por uma rota, nunca automaticamente.
+ */
+export async function issueFocusNfce(ref: string, payload: unknown, options: FocusRequestOptions): Promise<FocusNfceConsultaResponse> {
+  const query = `?ref=${encodeURIComponent(ref)}`
+  return focusRequest<FocusNfceConsultaResponse>(`/v2/nfce${query}`, options, { method: 'POST', body: payload })
 }

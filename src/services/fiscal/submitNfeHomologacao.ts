@@ -85,7 +85,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveFocusIntegration } from './resolveFocusIntegration'
 import { loadSaleFiscalContext, FiscalContextError } from './loadSaleFiscalContext'
-import { validateFiscalReadiness } from './validateFiscalReadiness'
+import { validateNfeReadiness } from './validateFiscalReadiness'
 import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { buildFiscalDocumentSnapshot } from './buildFiscalSnapshot'
@@ -123,7 +123,12 @@ export interface SubmitNfeResult {
   validationErrors: FiscalValidationError[]
 }
 
-interface FiscalDocumentRow {
+// ─── Exportado pra reaproveitamento por submitNfceHomologacao.ts (Fase 4E)
+// — visibilidade apenas, ZERO mudança de lógica/comportamento nestas
+// definições. Infraestrutura de transmissão (claim/begin/complete) é
+// agnóstica ao tipo de documento desde a parametrização de document_type
+// (Fase 4B). ─────────────────────────────────────────────────────────────
+export interface FiscalDocumentRow {
   id: number
   status: FiscalDocumentDomainStatus
   provider_ref: string
@@ -140,20 +145,28 @@ interface FiscalDocumentRow {
 }
 
 /** Lease do claim de transmissão — generosa o bastante pra cobrir carregar contexto + montar payload + o timeout HTTP da Focus (15s, ver httpClient.ts) com folga, curta o bastante pra um crash se autorrecuperar em ~1 minuto. */
-const FISCAL_EMISSION_LEASE_SECONDS = 60
+export const FISCAL_EMISSION_LEASE_SECONDS = 60
 
-type FiscalClaimDecision = 'claimed' | 'busy' | 'already_authorized' | 'already_cancelled' | 'reconciliation_required'
+export type FiscalClaimDecision = 'claimed' | 'busy' | 'already_authorized' | 'already_cancelled' | 'reconciliation_required'
 
-interface FiscalClaimResult {
+export interface FiscalClaimResult {
   decision: FiscalClaimDecision
   row: FiscalDocumentRow
   claimToken: string | null
   leaseUntil: string | null
 }
 
-/** Determinístico — nunca um UUID aleatório, nunca `-attempt-N`/`-retry-N`. Ver comentário do arquivo. */
-export function buildProviderRef(companyId: number, saleId: number): string {
-  return `qarvon-${companyId}-${saleId}-nfe`
+/**
+ * Determinístico — nunca um UUID aleatório, nunca `-attempt-N`/`-retry-N`.
+ * Ver comentário do arquivo. `documentType` no sufixo (Fase Fiscal 4):
+ * uma mesma venda pode ter uma tentativa de NF-e E uma de NFC-e como
+ * linhas `fiscal_documents` SEPARADAS (cada uma com seu próprio
+ * `provider_ref`, nunca a mesma) — `UNIQUE(provider, provider_ref)` é
+ * global por provider, então uma ref compartilhada entre os dois tipos
+ * colidiria ou misturaria claim/lease de tentativas diferentes.
+ */
+export function buildProviderRef(companyId: number, saleId: number, documentType: 'nfe' | 'nfce' = 'nfe'): string {
+  return `qarvon-${companyId}-${saleId}-${documentType}`
 }
 
 function mapFocusStatus(status: FocusNfeConsultaResponse['status']): FiscalDocumentDomainStatus {
@@ -166,7 +179,7 @@ function mapFocusStatus(status: FocusNfeConsultaResponse['status']): FiscalDocum
   }
 }
 
-function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalValidationError[] = []): SubmitNfeResult {
+export function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalValidationError[] = []): SubmitNfeResult {
   return {
     fiscalDocumentId: row.id,
     providerRef: row.provider_ref,
@@ -185,19 +198,20 @@ function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalValidationE
   }
 }
 
-const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path'
+export const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path'
 
 /**
  * Wrapper de `rpc_claim_fiscal_emission` — claim atômico curto, comita
  * antes de qualquer HTTP (a chamada `.rpc()` em si já é uma transação
  * fechada). Nunca chamado de dentro de outra transação.
  */
-async function claimFiscalEmission(
+export async function claimFiscalEmission(
   admin: ReturnType<typeof createAdminClient>,
   companyId: number,
   saleId: number,
   providerRef: string,
   environment: string,
+  documentType: 'nfe' | 'nfce' = 'nfe',
 ): Promise<FiscalClaimResult> {
   const { data, error } = await (admin as any).rpc('rpc_claim_fiscal_emission', {
     p_company_id: companyId,
@@ -205,6 +219,7 @@ async function claimFiscalEmission(
     p_provider_ref: providerRef,
     p_environment: environment,
     p_lease_seconds: FISCAL_EMISSION_LEASE_SECONDS,
+    p_document_type: documentType,
   })
 
   if (error) throw new Error(`Falha ao reivindicar emissão fiscal pra venda ${saleId}: ${error.message}`)
@@ -233,7 +248,7 @@ async function claimFiscalEmission(
   }
 }
 
-interface CompleteFiscalEmissionInput {
+export interface CompleteFiscalEmissionInput {
   fiscalDocumentId: number
   claimToken: string
   status: FiscalDocumentDomainStatus
@@ -260,7 +275,7 @@ interface CompleteFiscalEmissionInput {
  * já assumiu) — quem chama NUNCA deve tratar isso como erro, só como "meu
  * resultado não é mais o que vale, busque o atual".
  */
-async function completeFiscalEmission(
+export async function completeFiscalEmission(
   admin: ReturnType<typeof createAdminClient>,
   input: CompleteFiscalEmissionInput,
 ): Promise<FiscalDocumentRow | null> {
@@ -290,7 +305,7 @@ async function completeFiscalEmission(
   return rows[0] ? (rows[0] as FiscalDocumentRow) : null
 }
 
-interface BeginFiscalTransmissionInput {
+export interface BeginFiscalTransmissionInput {
   fiscalDocumentId: number
   claimToken: string
   requestPayload: unknown
@@ -304,7 +319,7 @@ interface BeginFiscalTransmissionInput {
  * assumiu enquanto validávamos/montávamos o payload) — quem chama NUNCA
  * deve prosseguir pro POST nesse caso.
  */
-async function beginFiscalTransmission(
+export async function beginFiscalTransmission(
   admin: ReturnType<typeof createAdminClient>,
   input: BeginFiscalTransmissionInput,
 ): Promise<FiscalDocumentRow | null> {
@@ -321,7 +336,7 @@ async function beginFiscalTransmission(
 }
 
 /** Leitura simples, sem guard de token — usada só quando um `completeFiscalEmission` foi recusado (token superado) e precisamos devolver o estado ATUAL e real pro chamador original. */
-async function fetchCurrentFiscalDocumentRow(admin: ReturnType<typeof createAdminClient>, fiscalDocumentId: number): Promise<FiscalDocumentRow> {
+export async function fetchCurrentFiscalDocumentRow(admin: ReturnType<typeof createAdminClient>, fiscalDocumentId: number): Promise<FiscalDocumentRow> {
   const { data } = await (admin as any).from('fiscal_documents').select(FISCAL_DOCUMENT_SELECT).eq('id', fiscalDocumentId).single()
   return data as FiscalDocumentRow
 }
@@ -463,10 +478,10 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     return failure('Bloqueado: esta rota só emite em homologação. company_fiscal_settings.nfe_environment não é "homologacao".', 403)
   }
 
-  const providerRef = buildProviderRef(companyId, saleId)
+  const providerRef = buildProviderRef(companyId, saleId, 'nfe')
 
   // ─── Claim atômico curto — decide ANTES de qualquer HTTP ────────────────
-  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, 'homologacao')
+  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, 'homologacao', 'nfe')
 
   if (claim.decision === 'already_authorized' || claim.decision === 'already_cancelled') {
     return success(rowToResult(claim.row))
@@ -512,7 +527,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     throw err
   }
 
-  const validationErrors = validateFiscalReadiness(context)
+  const validationErrors = validateNfeReadiness(context)
   if (validationErrors.length > 0) {
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,

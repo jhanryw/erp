@@ -32,7 +32,7 @@ function mockHappyPathDependencies() {
     data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'token-jamais-deveria-vazar', environment: 'homologacao' } },
   })
   vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID }))
-  vi.spyOn(validateModule, 'validateFiscalReadiness').mockReturnValue([])
+  vi.spyOn(validateModule, 'validateNfeReadiness').mockReturnValue([])
 }
 
 describe('submitNfeHomologacao — bloqueio de produção', () => {
@@ -95,7 +95,7 @@ describe('submitNfeHomologacao — validação bloqueia emissão', () => {
   it('erros de validação → status validation_failed, nunca chama Focus', async () => {
     setupFake()
     mockHappyPathDependencies()
-    vi.spyOn(validateModule, 'validateFiscalReadiness').mockReturnValue([{ code: 'item_ncm_missing', message: 'Produto sem NCM.' }])
+    vi.spyOn(validateModule, 'validateNfeReadiness').mockReturnValue([{ code: 'item_ncm_missing', message: 'Produto sem NCM.' }])
     const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
 
     const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
@@ -172,7 +172,7 @@ describe('submitNfeHomologacao — FiscalRuleNotImplementedError não é engolid
       baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID, payments: [{ method: 'card', netAmount: 79.8, cardBrand: null }] }),
     )
     // Simula validação não ter pego (defensivo) — força o caminho de build lançar.
-    vi.spyOn(validateModule, 'validateFiscalReadiness').mockReturnValue([])
+    vi.spyOn(validateModule, 'validateNfeReadiness').mockReturnValue([])
     const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
 
     const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)

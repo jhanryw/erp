@@ -44,7 +44,7 @@ function mockHappyPathDependencies() {
     data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
   })
   vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID }))
-  vi.spyOn(validateModule, 'validateFiscalReadiness').mockReturnValue([])
+  vi.spyOn(validateModule, 'validateNfeReadiness').mockReturnValue([])
 }
 
 describe('Claim concorrente — a primitiva RPC fake, isolada', () => {
@@ -74,6 +74,65 @@ describe('Claim concorrente — a primitiva RPC fake, isolada', () => {
     // Nunca duas linhas fiscal_documents criadas pra mesma venda.
     const rows = fake.tables.fiscal_documents.filter((r) => r.sale_id === SALE_ID)
     expect(rows).toHaveLength(1)
+  })
+})
+
+describe('rpc_claim_fiscal_emission — isolamento por document_type (Fase Fiscal 4)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('claim de nfe e claim de nfce pra MESMA venda → 2 linhas fiscal_documents separadas, cada uma "claimed" (nunca "busy" uma da outra)', async () => {
+    const fake = setupFake()
+    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'nfe')
+    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'nfce')
+    expect(refNfe).not.toBe(refNfce)
+
+    const claimNfe = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfe, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfe',
+    })
+    const claimNfce = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfce, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfce',
+    })
+
+    expect(claimNfe.data[0].decision).toBe('claimed')
+    expect(claimNfce.data[0].decision).toBe('claimed')
+    expect(claimNfe.data[0].submission_claim_token).not.toBe(claimNfce.data[0].submission_claim_token)
+
+    const rows = fake.tables.fiscal_documents.filter((r) => r.sale_id === SALE_ID)
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.document_type).sort()).toEqual(['nfce', 'nfe'])
+  })
+
+  it('nfe "busy" (lease ativa) nunca bloqueia um claim de nfce pra mesma venda, e vice-versa', async () => {
+    const fake = setupFake()
+    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'nfe')
+    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'nfce')
+
+    await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfe, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfe',
+    })
+    // Segunda tentativa de NF-e enquanto a lease da primeira está ativa → busy.
+    const secondNfe = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfe, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfe',
+    })
+    expect(secondNfe.data[0].decision).toBe('busy')
+
+    // NFC-e da MESMA venda, ao mesmo tempo — nunca vê a lease de NF-e.
+    const claimNfce = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfce, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfce',
+    })
+    expect(claimNfce.data[0].decision).toBe('claimed')
+  })
+
+  it('sem p_document_type informado (chamador antigo) → default "nfe", mesmo comportamento de sempre', async () => {
+    const fake = setupFake()
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+
+    const claim = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: ref, p_environment: 'homologacao', p_lease_seconds: 60,
+    })
+    expect(claim.data[0].decision).toBe('claimed')
+    const row = fake.tables.fiscal_documents.find((r) => r.sale_id === SALE_ID)
+    expect(row?.document_type).toBe('nfe')
   })
 })
 

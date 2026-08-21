@@ -151,9 +151,9 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
     }
   }
 
-  function findMostRecentFiscalDocument(companyId: number, saleId: number): FakeFiscalDocumentRow | null {
+  function findMostRecentFiscalDocument(companyId: number, saleId: number, documentType: string): FakeFiscalDocumentRow | null {
     const rows = (tables.fiscal_documents as FakeFiscalDocumentRow[]).filter(
-      (r) => r.company_id === companyId && r.sale_id === saleId && r.document_type === 'nfe',
+      (r) => r.company_id === companyId && r.sale_id === saleId && r.document_type === documentType,
     )
     rows.sort((a, b) => b.id - a.id)
     return rows[0] ?? null
@@ -191,8 +191,9 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
     const providerRef = params.p_provider_ref
     const environment = params.p_environment
     const leaseSeconds = params.p_lease_seconds ?? 60
+    const documentType = params.p_document_type ?? 'nfe'
 
-    let row = findMostRecentFiscalDocument(companyId, saleId)
+    let row = findMostRecentFiscalDocument(companyId, saleId, documentType)
 
     if (!row) {
       const dup = (tables.fiscal_documents as FakeFiscalDocumentRow[]).find((r) => r.provider === 'focus_nfe' && r.provider_ref === providerRef)
@@ -203,7 +204,7 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
           id: nextId++,
           company_id: companyId,
           sale_id: saleId,
-          document_type: 'nfe',
+          document_type: documentType,
           provider: 'focus_nfe',
           environment,
           provider_ref: providerRef,

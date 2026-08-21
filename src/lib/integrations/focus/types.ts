@@ -166,3 +166,43 @@ export interface FocusNfeConsultaResponse {
   caminho_danfe_etiqueta?: string
   protocolo_nota_fiscal?: FocusNfeProtocoloNotaFiscal
 }
+
+/**
+ * Resposta de emissão (`POST /v2/nfce`, síncrona — o resultado já vem
+ * nesta mesma chamada, nunca precisa de polling) e de consulta
+ * (`GET /v2/nfce/{referencia}`) — Fase Fiscal 4E. Fonte: OpenAPI real
+ * (`doc.focusnfe.com.br/reference/{emitir_nfce,consultar_nfce}.md`, curl
+ * bruto + parse, não resumo de IA).
+ *
+ * `status`: união dos 3 schemas reais de resposta de consulta
+ * (`NFCeConsultaResponse`/`CanceladaResponse`/`ErroAutorizacaoResponse`) —
+ * inclui `'denegado'`, um status que NÃO existe no enum confirmado de NF-e
+ * (`FocusNfeConsultaResponse`) — SEFAZ recusando autorização por motivo
+ * cadastral do emitente (ex.: irregularidade), distinto de
+ * `erro_autorizacao` (rejeição por dado da própria nota). Nunca aparece
+ * `'processando_autorizacao'` na resposta de EMISSÃO (síncrona, só
+ * `autorizado`/`erro_autorizacao` imediatamente) — mantido no union type
+ * mesmo assim por segurança defensiva (mesmo padrão de NF-e: nunca assumir
+ * que um valor documentado como "não deveria aparecer aqui" realmente
+ * nunca aparece).
+ */
+export interface FocusNfceConsultaResponse {
+  cnpj_emitente?: string
+  ref?: string
+  status: 'autorizado' | 'processando_autorizacao' | 'erro_autorizacao' | 'denegado' | 'cancelado' | 'erro_cancelamento'
+  status_sefaz?: string | number
+  mensagem_sefaz?: string
+  numero?: string
+  serie?: string
+  chave_nfe?: string
+  caminho_xml_nota_fiscal?: string
+  /** Formato `.html` (DANFCe) — diferente do DANFE de NF-e. */
+  caminho_danfe?: string
+  /** URL do QR Code pro consumidor consultar a nota — sem equivalente em NF-e. */
+  qrcode_url?: string
+  url_consulta_nf?: string
+  caminho_xml_cancelamento?: string
+  numero_protocolo?: string
+  /** Presente só em erro_autorizacao — lista de erros de validação/rejeição, formato não detalhado no OpenAPI público. */
+  erros?: unknown[]
+}

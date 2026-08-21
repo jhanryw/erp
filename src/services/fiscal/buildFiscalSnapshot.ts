@@ -14,12 +14,13 @@
 
 import { resolveCfop, resolveIcmsCsosn, resolvePisCofinsCst, resolveIpiTreatment, resolveIbsCbsTestYear2026 } from '@/lib/fiscal/taxRules'
 import { FiscalBuildError } from './buildNfePayload'
+import { NFCE_CFOP_INTERNO } from './buildNfcePayload'
 import type { FiscalDocumentContext } from './types'
 
 export interface FiscalDocumentHeaderSnapshot {
   company_id: number
   sale_id: number
-  document_type: 'nfe'
+  document_type: 'nfe' | 'nfce'
   provider: 'focus_nfe'
   environment: string
   provider_ref: string
@@ -119,6 +120,72 @@ export function buildFiscalDocumentSnapshot(ctx: FiscalDocumentContext): FiscalD
       company_id: ctx.companyId,
       sale_id: ctx.saleId,
       document_type: 'nfe',
+      provider: 'focus_nfe',
+      environment: ctx.environment,
+      provider_ref: ctx.providerRef,
+      status: 'draft',
+    },
+    items,
+  }
+}
+
+/**
+ * Snapshot de NFC-e — Fase Fiscal 4E. Não reaproveita `buildFiscalDocumentSnapshot`
+ * porque aquela função exige `ctx.destinatario.uf` (via `resolveCfop`, que
+ * decide CFOP interno/interestadual comparando duas UFs) — NFC-e nunca tem
+ * UF de destinatário (venda presencial, sem endereço), então o CFOP é
+ * sempre `NFCE_CFOP_INTERNO` (mesma constante usada por `buildNfcePayload`,
+ * nunca duplicada como string mágica separada). Resto da lógica tributária
+ * (CSOSN/PIS-COFINS/IPI/IBS-CBS) é idêntica — mesmas funções puras de
+ * `taxRules.ts`, nenhuma duplicação de regra.
+ */
+export function buildNfceDocumentSnapshot(ctx: FiscalDocumentContext): FiscalDocumentSnapshot {
+  const crt = requireField(ctx.emitente.crt, 'emitente.crt')
+
+  const items: FiscalDocumentItemSnapshot[] = ctx.items.map((item) => {
+    const label = item.sku ?? `sale_item_id=${item.saleItemId}`
+    const csosn = resolveIcmsCsosn(crt)
+    const pisCofins = resolvePisCofinsCst(crt)
+    const ipi = resolveIpiTreatment()
+    const ibsCbs = resolveIbsCbsTestYear2026()
+
+    return {
+      sale_item_id: item.saleItemId,
+      product_id: item.productId,
+      variation_id: item.variationId,
+      description: requireField(item.description, `items[${label}].description`),
+      quantity: item.quantity,
+      unit: requireField(item.unit, `items[${label}].unit`),
+      unit_price: item.unitPrice,
+      discount_amount: item.discountAmount,
+      total_amount: Math.round((item.unitPrice * item.quantity - item.discountAmount) * 100) / 100,
+      ncm: requireField(item.ncm, `items[${label}].ncm`),
+      cest: item.cest,
+      origem: requireField(item.origem, `items[${label}].origem`),
+      cfop: NFCE_CFOP_INTERNO,
+      csosn_cst: csosn,
+      tax_details: {
+        icms_origem: requireField(item.origem, `items[${label}].origem`),
+        pis_cst: pisCofins.cst,
+        cofins_cst: pisCofins.cst,
+        ipi_cst: ipi.cst,
+        ipi_codigo_enquadramento_legal: ipi.codigoEnquadramentoLegal,
+        ibs_cbs_situacao_tributaria: ibsCbs.situacaoTributaria,
+        ibs_cbs_classificacao_tributaria: ibsCbs.classificacaoTributaria,
+        ibs_uf_aliquota: ibsCbs.aliquotaIbsUf,
+        ibs_mun_aliquota: ibsCbs.aliquotaIbsMunicipio,
+        cbs_aliquota: ibsCbs.aliquotaCbs,
+        ibs_valor_total: ibsCbs.valorIbsItem,
+        cbs_valor: ibsCbs.valorCbs,
+      },
+    }
+  })
+
+  return {
+    header: {
+      company_id: ctx.companyId,
+      sale_id: ctx.saleId,
+      document_type: 'nfce',
       provider: 'focus_nfe',
       environment: ctx.environment,
       provider_ref: ctx.providerRef,

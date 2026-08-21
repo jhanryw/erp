@@ -16,7 +16,9 @@ import { formatDate } from '@/lib/utils/date'
 import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
-import { EmitirNfeHomologacaoCard } from './_components/emitir-nfe-homologacao-card'
+import { DocumentoFiscalCard } from './_components/documento-fiscal-card'
+import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
+import { validateCPF, maskCPF } from '@/lib/utils/cpf'
 import type { SaleStatus } from '@/types/database.types'
 import { ArrowRightLeft } from 'lucide-react'
 
@@ -240,6 +242,14 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
 
   const isPickup = sale.shipment?.delivery_mode === 'pickup'
   const statusLabels = isPickup ? STATUS_LABELS_PICKUP : STATUS_LABELS_DELIVERY
+
+  // ─── Fiscal: resolução do documento (Fase Fiscal 4F, item 10 do pedido —
+  // nunca escolha manual, sempre decorrente da operação real da venda) ────
+  const fiscalResolverInput = { deliveryMode: sale.shipment?.delivery_mode ?? null, saleOrigin: sale.sale_origin ?? null }
+  const resolvedFiscalDocumentType = resolveFiscalDocumentType(fiscalResolverInput)
+  const fiscalBlockedReason = describeFiscalDocumentTypeBlockReason(fiscalResolverInput)
+  const customerCpf = sale.customers?.cpf ?? null
+  const maskedCustomerCpf = customerCpf && validateCPF(customerCpf) ? maskCPF(customerCpf) : null
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -551,7 +561,14 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
       )}
 
       {/* Fiscal — só admin (mesma regra de "Fiscal" bloqueado pra usuario, Fase Fiscal 1) */}
-      {profile?.role === 'admin' && <EmitirNfeHomologacaoCard saleId={sale.id} />}
+      {profile?.role === 'admin' && (
+        <DocumentoFiscalCard
+          saleId={sale.id}
+          resolvedType={resolvedFiscalDocumentType}
+          blockedReason={fiscalBlockedReason}
+          maskedCpf={maskedCustomerCpf}
+        />
+      )}
     </div>
   )
 }

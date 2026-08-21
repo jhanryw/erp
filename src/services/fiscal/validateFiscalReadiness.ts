@@ -1,21 +1,37 @@
 /**
  * Validações locais antes de qualquer emissão real (Fase Fiscal 2A, seção
- * 11 do pedido). Módulo PURO — só examina o `FiscalDocumentContext` já
- * carregado, nenhuma chamada de rede/banco, nunca lança (sempre devolve a
- * lista de erros, vazia quando tudo está pronto).
+ * 11 do pedido; separado por tipo de documento na Fase Fiscal 4). Módulo
+ * PURO — só examina o `FiscalDocumentContext` já carregado, nenhuma
+ * chamada de rede/banco, nunca lança (sempre devolve a lista de erros,
+ * vazia quando tudo está pronto).
  *
- * Roda ANTES de `buildNfePayload` na orquestração real — o preview mostra
- * os dois resultados juntos (payload best-effort + lista de erros), mas
- * `readyToTransmit` (nenhuma nota real deve ser enviada) depende só desta
- * função retornar `[]`.
+ * Roda ANTES de `buildNfePayload`/`buildNfcePayload` na orquestração real
+ * — `readyToTransmit` (nenhuma nota real deve ser enviada) depende só de
+ * `validateNfeReadiness`/`validateNfceReadiness` retornar `[]`.
+ *
+ * ─── Split NF-e/NFC-e (Fase Fiscal 4) ────────────────────────────────────
+ *
+ * Auditoria (`docs/fiscal-fase4-nfce-arquitetura-proposta.md`, §4)
+ * confirmou que o payload real de NFC-e da Focus não tem NENHUM campo de
+ * endereço de destinatário, e todo campo de destinatário é opcional (nem
+ * nome é exigido — venda de balcão sem CPF é o caminho feliz mais comum).
+ * As regras de emitente/itens/pagamentos/estado da venda são IDÊNTICAS
+ * pros dois documentos — só o bloco de destinatário diverge de verdade.
+ * Por isso: `validateCommonFiscalReadiness` concentra tudo que é
+ * compartilhado (nunca duplicado), e cada tipo de documento tem sua
+ * própria função de destinatário, pequena e nomeada. `validateNfeReadiness`
+ * reproduz EXATAMENTE o comportamento da antiga `validateFiscalReadiness`
+ * (mesmos códigos de erro, mesma ordem, mesmo texto) — nenhuma regressão
+ * de NF-e nesta revisão.
  */
 
 import { resolveFormaPagamento } from '@/lib/fiscal/paymentRules'
 import { FiscalRuleNotImplementedError, SUPPORTED_CRT } from '@/lib/fiscal/taxRules'
 import { normalizeNcm } from '@/lib/fiscal/ncmRules'
+import { validateCPF } from '@/lib/utils/cpf'
 import type { FiscalDocumentContext, FiscalValidationError } from './types'
 
-/** sales.status que nunca deveriam gerar uma NF-e nova — Fase Fiscal 3A. */
+/** sales.status que nunca deveriam gerar documento fiscal novo — Fase Fiscal 3A. */
 const SALE_STATUS_BLOCKS_EMISSION = new Set(['cancelled', 'returned'])
 
 /** Tolerância de arredondamento pra comparação de centavos — Fase Fiscal 3A. */
@@ -25,7 +41,14 @@ function err(code: string, message: string, field?: string): FiscalValidationErr
   return { code, field, message }
 }
 
-export function validateFiscalReadiness(ctx: FiscalDocumentContext): FiscalValidationError[] {
+/**
+ * Regras compartilhadas por NF-e E NFC-e: estado da venda, integração
+ * Focus, cadastro fiscal do emitente (incl. CRT suportado), itens
+ * (NCM/origem/unidade/descrição/quantidade), pagamentos. Nunca inclui
+ * nada de destinatário — isso é específico por tipo de documento, ver
+ * `validateNfeDestinatario`/`validateNfceDestinatario` abaixo.
+ */
+export function validateCommonFiscalReadiness(ctx: FiscalDocumentContext): FiscalValidationError[] {
   const errors: FiscalValidationError[] = []
 
   // ─── Estado da venda (Fase Fiscal 3A) ───────────────────────────────────
@@ -68,23 +91,6 @@ export function validateFiscalReadiness(ctx: FiscalDocumentContext): FiscalValid
     errors.push(err('emitente_endereco_incompleto', 'Endereço do emitente incompleto (logradouro/número/bairro/município/UF/CEP).', 'emitente.endereco'))
   }
   if (!e.municipioIbge) errors.push(err('emitente_municipio_ibge_missing', 'Código IBGE do município do emitente ausente.', 'emitente.municipioIbge'))
-
-  // ─── Destinatário ────────────────────────────────────────────────────────
-  const d = ctx.destinatario
-  if (!d.nome) errors.push(err('destinatario_nome_missing', 'Destinatário sem nome.', 'destinatario.nome'))
-  if (!d.cpf && !d.cnpj) errors.push(err('destinatario_documento_missing', 'Destinatário sem CPF nem CNPJ.', 'destinatario.cpf'))
-  if (!d.logradouro || !d.numero || !d.bairro || !d.municipio || !d.uf || !d.cep) {
-    errors.push(err('destinatario_endereco_incompleto', 'Endereço do destinatário incompleto (logradouro/número/bairro/município/UF/CEP).', 'destinatario.endereco'))
-  }
-  if (d.cep && !/^\d{8}$/.test(d.cep.replace(/\D/g, ''))) {
-    errors.push(err('destinatario_cep_invalido', 'CEP do destinatário não tem 8 dígitos.', 'destinatario.cep'))
-  }
-  if (d.uf && !/^[A-Z]{2}$/.test(d.uf.toUpperCase())) {
-    errors.push(err('destinatario_uf_invalida', 'UF do destinatário inválida.', 'destinatario.uf'))
-  }
-  if (!d.municipioIbge) {
-    errors.push(err('destinatario_municipio_ibge_missing', 'Código IBGE do município do destinatário ausente — não há fonte desse dado no ERP hoje (débito técnico, ver relatório da fase).', 'destinatario.municipioIbge'))
-  }
 
   // ─── Itens ───────────────────────────────────────────────────────────────
   if (ctx.items.length === 0) {
@@ -163,4 +169,60 @@ export function validateFiscalReadiness(ctx: FiscalDocumentContext): FiscalValid
   }
 
   return errors
+}
+
+/**
+ * Destinatário — NF-e modelo 55. Idêntico byte-a-byte ao bloco que existia
+ * dentro da antiga `validateFiscalReadiness` (mesmos códigos/mensagens) —
+ * NF-e exige destinatário identificável e endereço completo porque o
+ * documento se destina a operações com entrega/destino determinado.
+ */
+export function validateNfeDestinatario(ctx: FiscalDocumentContext): FiscalValidationError[] {
+  const errors: FiscalValidationError[] = []
+  const d = ctx.destinatario
+  if (!d.nome) errors.push(err('destinatario_nome_missing', 'Destinatário sem nome.', 'destinatario.nome'))
+  if (!d.cpf && !d.cnpj) errors.push(err('destinatario_documento_missing', 'Destinatário sem CPF nem CNPJ.', 'destinatario.cpf'))
+  if (!d.logradouro || !d.numero || !d.bairro || !d.municipio || !d.uf || !d.cep) {
+    errors.push(err('destinatario_endereco_incompleto', 'Endereço do destinatário incompleto (logradouro/número/bairro/município/UF/CEP).', 'destinatario.endereco'))
+  }
+  if (d.cep && !/^\d{8}$/.test(d.cep.replace(/\D/g, ''))) {
+    errors.push(err('destinatario_cep_invalido', 'CEP do destinatário não tem 8 dígitos.', 'destinatario.cep'))
+  }
+  if (d.uf && !/^[A-Z]{2}$/.test(d.uf.toUpperCase())) {
+    errors.push(err('destinatario_uf_invalida', 'UF do destinatário inválida.', 'destinatario.uf'))
+  }
+  if (!d.municipioIbge) {
+    errors.push(err('destinatario_municipio_ibge_missing', 'Código IBGE do município do destinatário ausente — não há fonte desse dado no ERP hoje (débito técnico, ver relatório da fase).', 'destinatario.municipioIbge'))
+  }
+  return errors
+}
+
+/**
+ * Destinatário — NFC-e modelo 65. Auditoria confirmou (`docs/fiscal-fase4-
+ * nfce-arquitetura-proposta.md`, §4-5): o payload real da Focus pra NFC-e
+ * não tem NENHUM campo de endereço de destinatário, e nome/documento são
+ * OPCIONAIS (consumidor não identificado é o caminho feliz mais comum de
+ * balcão). Nunca reutiliza as regras rígidas de `validateNfeDestinatario`
+ * — exigir endereço/IBGE aqui seria uma exigência artificial que a Focus
+ * nem aceita como campo. Única validação: SE um CPF foi informado
+ * (cliente pediu nota com CPF), o formato precisa ser um CPF válido
+ * (dígitos verificadores) — nunca exige, só valida quando presente.
+ */
+export function validateNfceDestinatario(ctx: FiscalDocumentContext): FiscalValidationError[] {
+  const errors: FiscalValidationError[] = []
+  const d = ctx.destinatario
+  if (d.cpf && !validateCPF(d.cpf)) {
+    errors.push(err('destinatario_cpf_invalido', `CPF do destinatário inválido ("${d.cpf}").`, 'destinatario.cpf'))
+  }
+  return errors
+}
+
+/** Readiness completo pra NF-e modelo 55 — comum + destinatário NF-e. Substitui a antiga `validateFiscalReadiness`, mesmo comportamento. */
+export function validateNfeReadiness(ctx: FiscalDocumentContext): FiscalValidationError[] {
+  return [...validateCommonFiscalReadiness(ctx), ...validateNfeDestinatario(ctx)]
+}
+
+/** Readiness completo pra NFC-e modelo 65 — comum + destinatário NFC-e (nunca exige endereço/IBGE/nome). */
+export function validateNfceReadiness(ctx: FiscalDocumentContext): FiscalValidationError[] {
+  return [...validateCommonFiscalReadiness(ctx), ...validateNfceDestinatario(ctx)]
 }
