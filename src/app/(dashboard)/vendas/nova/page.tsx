@@ -14,6 +14,7 @@ import { saleSchema, type SaleFormData, type PaymentEntry } from '@/lib/validato
 import { formatCurrency } from '@/lib/utils/currency'
 import { useDebounce } from '@/hooks/useDebounce'
 import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
+import { createAutoPrintController } from '@/lib/sales/autoPrintTab'
 import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
@@ -104,6 +105,21 @@ export default function NovaVendaPage() {
   const router      = useRouter()
   const submitting  = useRef(false)
   const supabase    = createClient()
+
+  // Comprovante não fiscal — impressão automática ao finalizar (retirada e
+  // entrega). Controller puro/testável em src/lib/sales/autoPrintTab.ts —
+  // aqui só instancia com o window.open real do navegador.
+  const autoPrintRef = useRef<ReturnType<typeof createAutoPrintController>>()
+  if (!autoPrintRef.current) {
+    autoPrintRef.current = createAutoPrintController({
+      openBlankWindow: () => window.open('about:blank', '_blank'),
+    })
+  }
+  const handleFinalizarClick = () => autoPrintRef.current!.handleFinalizarClick()
+  // Validação do react-hook-form falhou (campo obrigatório faltando etc.) —
+  // onSubmit nunca chega a rodar. Fecha a aba about:blank em vez de deixá-la
+  // parada pra sempre.
+  const handleFinalizarInvalid = () => autoPrintRef.current!.reset()
 
   const debouncedCustomer = useDebounce(customerSearch, 300)
 
@@ -409,6 +425,7 @@ export default function NovaVendaPage() {
   async function onSubmit(data: SaleFormData) {
     if (submitting.current) return
     if (!canFinalize) {
+      autoPrintRef.current!.reset()
       toast.error('Pagamentos incompletos', {
         description: `Falta ${formatCurrency(saldoRestante)} para totalizar a venda.`,
       })
@@ -424,6 +441,7 @@ export default function NovaVendaPage() {
 
     if (!responsibleSellerId) {
       submitting.current = false
+      autoPrintRef.current!.reset()
       toast.error('Selecione o vendedor responsável antes de confirmar a venda.')
       return
     }
@@ -446,6 +464,7 @@ export default function NovaVendaPage() {
         json = JSON.parse(text)
       } catch {
         submitting.current = false
+        autoPrintRef.current!.reset()
         toast.error('Erro ao registrar venda', {
           description: res.status === 401 || res.status === 403
             ? 'Sessão expirada. Faça login novamente.'
@@ -455,6 +474,7 @@ export default function NovaVendaPage() {
       }
       if (!res.ok) {
         submitting.current = false
+        autoPrintRef.current!.reset()
         // json.error pode ser objeto Zod — serializar para evitar React error #31
         const errMsg = typeof json.error === 'string'
           ? json.error
@@ -466,9 +486,25 @@ export default function NovaVendaPage() {
       toast.success('Venda registrada!', {
         description: `Pedido ${sale.sale_number} criado com sucesso.`,
       })
+
+      // Comprovante não fiscal — só agora, com a venda CONFIRMADA criada
+      // (nunca antes: se qualquer branch acima retornou, reset() já fechou
+      // a aba sem nunca navegar/imprimir nada). Redireciona a aba
+      // about:blank já aberta pro comprovante da venda — a própria página
+      // dispara window.print() sozinha assim que terminar de renderizar
+      // (PrintTrigger, com QR já presente no HTML inicial). Vale pra retirada
+      // e entrega igualmente — nenhuma dependência de NF-e/NFC-e emitida.
+      const printed = autoPrintRef.current!.redirectToReceipt(`/vendas/${sale.id}/comprovante`)
+      if (!printed) {
+        toast.info('Impressão automática do comprovante não pôde ser aberta (pop-up bloqueado)', {
+          description: 'Use "Imprimir Comprovante" na página da venda.',
+        })
+      }
+
       router.push(`/vendas/${sale.id}`)
     } catch (err) {
       submitting.current = false
+      autoPrintRef.current!.reset()
       toast.error('Erro inesperado', {
         description: err instanceof Error ? err.message : 'Verifique o console para detalhes.',
       })
@@ -509,7 +545,7 @@ export default function NovaVendaPage() {
         ))}
       </div>
 
-      <form id="sale-form" onSubmit={handleSubmit(onSubmit)}>
+      <form id="sale-form" onSubmit={handleSubmit(onSubmit, handleFinalizarInvalid)}>
 
         {/* ── Sticky bar mobile ──────────────────────────────────── */}
         <div className="lg:hidden fixed bottom-16 left-0 right-0 z-20 bg-bg-elevated/95 backdrop-blur-md border-t border-border shadow-elevated">
@@ -518,6 +554,7 @@ export default function NovaVendaPage() {
               <Button
                 type="submit"
                 form="sale-form"
+                onClick={handleFinalizarClick}
                 loading={isSubmitting}
                 disabled={!canFinalize}
                 className="w-full h-12 text-base font-semibold"
@@ -1363,6 +1400,7 @@ export default function NovaVendaPage() {
                   </Button>
                   <Button
                     type="submit"
+                    onClick={handleFinalizarClick}
                     loading={isSubmitting}
                     disabled={!canFinalize}
                     className="flex-1 h-11 hidden sm:flex"
@@ -1437,6 +1475,7 @@ export default function NovaVendaPage() {
                 <Button
                   type="submit"
                   form="sale-form"
+                  onClick={handleFinalizarClick}
                   loading={isSubmitting}
                   disabled={!canFinalize}
                   className="w-full mt-2"

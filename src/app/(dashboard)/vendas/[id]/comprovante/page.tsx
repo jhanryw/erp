@@ -55,11 +55,21 @@ export default async function ComprovantePage({ params }: { params: { id: string
       <PrintTrigger />
 
       <style>{`
-        @page { size: 80mm auto; margin: 3mm; }
+        /*
+          80mm é a largura FÍSICA do rolo — a área realmente imprimível em
+          impressoras térmicas de 80mm comuns costuma ficar em torno de
+          ~72mm (a maioria dos drivers/POS trata @page margin de forma
+          inconsistente nessas impressoras, então margem de segurança fica
+          no próprio bloco de conteúdo, centralizado, não confiando só no
+          @page margin do navegador).
+        */
+        @page { size: 80mm auto; margin: 0; }
         body { margin: 0; padding: 0; background: white; }
 
         .receipt {
-          width: 74mm;
+          width: 72mm;
+          margin: 0 auto;
+          padding: 2mm 0;
           font-family: 'Courier New', monospace;
           font-size: 9.5pt;
           color: #000;
