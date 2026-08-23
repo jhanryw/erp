@@ -115,6 +115,18 @@ export interface FocusNfeItemPayload {
   valor_unitario_comercial: number
   valor_bruto: number
   valor_desconto?: number
+  /**
+   * vFrete — frete atribuído a este item (Fase Fiscal 4I, rateio
+   * multi-item). Campo confirmado compartilhado NF-e/NFC-e — ver nota
+   * completa em `nfcePayload.types.ts`.
+   */
+  valor_frete?: number
+  /**
+   * vOutro — "Valor de outras despesas acessórias" (mesma fonte acima) —
+   * usado por `buildNfePayload.ts` pra propagar `sales.surcharge_amount`
+   * rateado entre itens.
+   */
+  valor_outras_despesas?: number
   codigo_ncm: string
   cest?: string
   /** 'SEM GTIN' — este ERP não modela GTIN/EAN de produto (confirmado, nenhuma coluna existe). */
@@ -214,4 +226,11 @@ export interface FocusNfePayload {
   items: FocusNfeItemPayload[]
   /** Fase Fiscal 3A — ver FocusFormaPagamento. Obrigatório ter ao menos 1 entrada (buildNfePayload valida). */
   formas_pagamento: FocusFormaPagamento[]
+  /**
+   * vTroco — Fase Fiscal 4I (troco real). DOCUMENTO-level, sibling de
+   * `formas_pagamento` — confirmado por leitura direta de
+   * campos.focusnfe.com.br/nfe/NotaFiscalXML.html (mesmo bloco
+   * compartilhado NF-e/NFC-e). Omitido quando não há troco (0).
+   */
+  valor_troco?: number
 }

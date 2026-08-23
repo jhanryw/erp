@@ -17,6 +17,7 @@ import { resolveFormaPagamento, resolveIndicadorPagamento, resolveBandeiraOperad
 import { normalizeNcm } from '@/lib/fiscal/ncmRules'
 import type { FocusNfeItemPayload, FocusNfePayload, FocusFormaPagamento } from '@/lib/integrations/focus/nfePayload.types'
 import type { FiscalDocumentContext, FiscalSaleItemContext, FiscalPaymentContext } from './types'
+import { applyOrderLevelAdjustments } from './allocateOrderAdjustments'
 
 export class FiscalBuildError extends Error {
   constructor(message: string) {
@@ -107,11 +108,20 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt, 
  * legado) — nunca capturado aqui, sobe pro chamador (submitNfeHomologacao/
  * preview) tratar explicitamente.
  */
+/**
+ * Troco real (Fase Fiscal 4I, hardening pré-produção) — `valor_pagamento`
+ * (vPag) é o TENDERED (bruto, entregue pelo cliente), nunca o líquido
+ * pós-troco. `amountTendered` cai pra `netAmount` quando ausente (mesmo
+ * padrão de `buildNfcePayload.ts`) — correto pra pagamento sem troco.
+ * Campo confirmado compartilhado NF-e/NFC-e (`formas_pagamento`, mesmo
+ * tipo `FormaPagamentoXML`, "Forma de pagamento para NF-e e NFC-e" —
+ * campos.focusnfe.com.br/nfe/NotaFiscalXML.html).
+ */
 function buildFormaPagamentoPayload(payment: FiscalPaymentContext): FocusFormaPagamento {
   const bandeira = resolveBandeiraOperadora(payment.cardBrand)
   return {
     forma_pagamento: resolveFormaPagamento(payment.method),
-    valor_pagamento: round2(payment.netAmount),
+    valor_pagamento: round2(payment.amountTendered ?? payment.netAmount),
     indicador_pagamento: resolveIndicadorPagamento(),
     ...(bandeira ? { bandeira_operadora: bandeira } : {}),
   }
@@ -185,6 +195,21 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
     items: ctx.items.map((item, index) => buildItemPayload(item, index, emitenteCrt, emitenteUf, destinatarioUf)),
     formas_pagamento: ctx.payments.map((payment) => buildFormaPagamentoPayload(payment)),
   }
+
+  // Fase Fiscal 4I (hardening pré-produção) — mesmo rateio determinístico
+  // de desconto/acréscimo/frete de PEDIDO já usado em `buildNfcePayload.ts`
+  // (ver `allocateOrderAdjustments.ts` pra prova matemática). Campos
+  // confirmados compartilhados NF-e/NFC-e (mesmo tipo complexo `det/prod`).
+  applyOrderLevelAdjustments(payload.items, {
+    discountAmount: ctx.saleDiscountAmount,
+    surchargeAmount: ctx.saleSurchargeAmount,
+    shippingCharged: ctx.saleShippingCharged,
+  })
+
+  // vTroco — mesmo campo documento-level confirmado compartilhado (ver
+  // `buildNfcePayload.ts` pra evidência completa).
+  const troco = ctx.payments.reduce((sum, p) => sum + (p.changeAmount ?? 0), 0)
+  if (troco > 0) payload.valor_troco = round2(troco)
 
   return payload
 }

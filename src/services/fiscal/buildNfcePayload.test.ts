@@ -119,6 +119,39 @@ describe('buildNfcePayload — formas_pagamento reaproveita paymentRules.ts (mes
   })
 })
 
+describe('buildNfcePayload — troco real (Fase Fiscal 4I, hardening pré-produção)', () => {
+  it('amountTendered/changeAmount ausentes (compatibilidade) → valor_pagamento cai pra netAmount, nenhum valor_troco', () => {
+    const ctx = nfceContext({ payments: [{ method: 'pix', netAmount: 79.8, cardBrand: null }] })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(79.8)
+    expect(payload.valor_troco).toBeUndefined()
+  })
+
+  it('dinheiro com troco real (total=80, entregue=100, troco=20 — cenário exato do pedido) → valor_pagamento=100 (tendered), valor_troco=20 no documento', () => {
+    const ctx = nfceContext({
+      items: [{ ...nfceContext().items[0], unitPrice: 80, quantity: 1, discountAmount: 0 }],
+      payments: [{ method: 'cash', netAmount: 80, cardBrand: null, amountTendered: 100, changeAmount: 20 }],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(100)
+    expect(payload.valor_troco).toBe(20)
+  })
+
+  it('PIX (sem troco) + dinheiro com troco → valor_troco reflete só o troco real', () => {
+    const ctx = nfceContext({
+      items: [{ ...nfceContext().items[0], unitPrice: 100, quantity: 1 }],
+      payments: [
+        { method: 'pix', netAmount: 60, cardBrand: null, amountTendered: 60, changeAmount: 0 },
+        { method: 'cash', netAmount: 40, cardBrand: null, amountTendered: 50, changeAmount: 10 },
+      ],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(60)
+    expect(payload.formas_pagamento[1].valor_pagamento).toBe(50)
+    expect(payload.valor_troco).toBe(10)
+  })
+})
+
 describe('buildNfcePayload — campos obrigatórios ausentes lançam FiscalBuildError', () => {
   it('NCM ausente → lança', () => {
     const ctx = nfceContext({ items: [{ ...nfceContext().items[0], ncm: null }] })

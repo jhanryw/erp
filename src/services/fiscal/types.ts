@@ -96,6 +96,26 @@ export interface FiscalPaymentContext {
   method: string
   netAmount: number
   cardBrand: string | null
+  /**
+   * `sale_payments.amount_tendered` — valor efetivamente entregue pelo
+   * cliente (bruto, ANTES do troco) — Fase Fiscal 4I (hardening
+   * pré-produção, troco real). Fiscalmente é o valor que vai em
+   * `valor_pagamento`/vPag (nunca `netAmount` quando há troco — ver
+   * `buildNfcePayload.ts`/`buildNfePayload.ts`, `buildFormaPagamentoPayload`).
+   * OPCIONAL por compatibilidade: quando ausente/undefined, os builders
+   * caem pra `netAmount` (correto pra pagamento sem troco, que é o único
+   * cenário testado antes desta fase). `loadSaleFiscalContext.ts` sempre
+   * popula este campo a partir do banco real.
+   */
+  amountTendered?: number
+  /**
+   * `sale_payments.change_amount` — troco devolvido NESTE pagamento.
+   * Invariante do banco: `netAmount = amountTendered - changeAmount`
+   * (`20260522_rpc_create_sale_payments.sql`). Normalmente só `method:
+   * 'cash'` tem valor > 0. OPCIONAL — ausente/undefined tratado como 0
+   * (nenhum troco) pelos builders.
+   */
+  changeAmount?: number
 }
 
 export interface FiscalDocumentContext {

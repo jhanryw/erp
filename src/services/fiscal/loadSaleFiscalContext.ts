@@ -97,7 +97,7 @@ export async function loadSaleFiscalContext({
       .maybeSingle(),
     (admin as any)
       .from('sale_payments')
-      .select('method, net_amount, card_brand')
+      .select('method, net_amount, card_brand, amount_tendered, change_amount')
       .eq('sale_id', saleId),
     resolveFocusIntegration(companyId),
   ])
@@ -141,6 +141,13 @@ export async function loadSaleFiscalContext({
     method: row.method,
     netAmount: Number(row.net_amount),
     cardBrand: row.card_brand ?? null,
+    // Fase Fiscal 4I (troco real): amount_tendered/change_amount reais do
+    // banco — amount_tendered cai pra net_amount quando ausente (mesma
+    // semântica já usada pela própria RPC de sale_payments,
+    // `20260522_rpc_create_sale_payments.sql`, que também assume
+    // amount_tendered = net_amount quando não informado).
+    amountTendered: Number(row.amount_tendered ?? row.net_amount),
+    changeAmount: Number(row.change_amount ?? 0),
   }))
 
   return {

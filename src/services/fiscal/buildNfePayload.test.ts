@@ -209,6 +209,39 @@ describe('buildNfePayload — formas_pagamento (Fase Fiscal 3A)', () => {
   })
 })
 
+describe('buildNfePayload — troco real (Fase Fiscal 4I, hardening pré-produção)', () => {
+  it('amountTendered/changeAmount ausentes (compatibilidade) → valor_pagamento cai pra netAmount, nenhum valor_troco', () => {
+    const ctx = baseFiscalContext({ payments: [{ method: 'pix', netAmount: 79.8, cardBrand: null }] })
+    const payload = buildNfePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(79.8)
+    expect(payload.valor_troco).toBeUndefined()
+  })
+
+  it('dinheiro com troco real (total=80, entregue=100, troco=20) → valor_pagamento=100 (tendered), valor_troco=20 no documento', () => {
+    const ctx = baseFiscalContext({
+      items: [{ ...baseFiscalContext().items[0], unitPrice: 40, quantity: 2, discountAmount: 0 }], // 80 total
+      payments: [{ method: 'cash', netAmount: 80, cardBrand: null, amountTendered: 100, changeAmount: 20 }],
+    })
+    const payload = buildNfePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(100)
+    expect(payload.valor_troco).toBe(20)
+  })
+
+  it('PIX (sem troco) + dinheiro com troco → valor_troco reflete só o troco real, PIX usa seu próprio valor exato', () => {
+    const ctx = baseFiscalContext({
+      items: [{ ...baseFiscalContext().items[0], unitPrice: 100, quantity: 1 }],
+      payments: [
+        { method: 'pix', netAmount: 60, cardBrand: null, amountTendered: 60, changeAmount: 0 },
+        { method: 'cash', netAmount: 40, cardBrand: null, amountTendered: 50, changeAmount: 10 },
+      ],
+    })
+    const payload = buildNfePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(60)
+    expect(payload.formas_pagamento[1].valor_pagamento).toBe(50)
+    expect(payload.valor_troco).toBe(10)
+  })
+})
+
 describe('buildNfePayload — PIS/COFINS sempre explicitamente zerados (Fase 2B, confirmado por XML real — NUNCA omitidos)', () => {
   it('pis_base_calculo/pis_aliquota_porcentual/pis_valor presentes e iguais a 0', () => {
     const item = buildNfePayload(baseFiscalContext()).items[0]

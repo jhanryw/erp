@@ -163,6 +163,14 @@ export interface FocusNfcePayload {
 
   items: FocusNfceItemPayload[]
   formas_pagamento: FocusFormaPagamentoNfce[]
+  /**
+   * vTroco — Fase Fiscal 4I. DOCUMENTO-level, sibling de `formas_pagamento`
+   * (confirmado por leitura direta de campos.focusnfe.com.br/nfe/
+   * NotaFiscalXML.html: `valor_troco` aparece FORA do array de
+   * `formas_pagamento`, não em cada entrada). Omitido quando não há troco
+   * (0) — mesmo padrão de todos os campos opcionais deste tipo.
+   */
+  valor_troco?: number
 
   /** Opcional — Focus atribui automaticamente quando omitido (mesmo padrão de NF-e). Nunca enviado por este ERP. */
   numero?: string

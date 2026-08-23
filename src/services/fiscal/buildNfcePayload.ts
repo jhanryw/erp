@@ -39,6 +39,7 @@ import { normalizeNcm } from '@/lib/fiscal/ncmRules'
 import type { FocusNfceItemPayload, FocusNfcePayload, FocusFormaPagamentoNfce } from '@/lib/integrations/focus/nfcePayload.types'
 import type { FiscalDocumentContext, FiscalSaleItemContext, FiscalPaymentContext } from './types'
 import { FiscalBuildError } from './buildNfePayload'
+import { applyOrderLevelAdjustments } from './allocateOrderAdjustments'
 
 function required<T>(value: T | null | undefined, label: string): T {
   if (value === null || value === undefined || value === '') {
@@ -62,43 +63,6 @@ function round2(value: number): number {
  * '5102'` é o mesmo pra CRT 1 e CRT 4 quando NÃO interestadual).
  */
 export const NFCE_CFOP_INTERNO = '5102'
-
-/**
- * Propaga os ajustes de NÍVEL DO PEDIDO (`sales.discount_amount`/
- * `surcharge_amount`/`shipping_charged`) pro payload — Fase Fiscal 4H,
- * achado real (venda 626, rejeição SEFAZ 866: "ausência de troco quando
- * valor dos pagamentos informados for maior que o total da nota").
- *
- * CAUSA RAIZ do 866: a Focus computa o total da nota (`valor_produtos`)
- * somando só `valor_bruto - valor_desconto` de cada item — nunca lê
- * `formas_pagamento`. Antes desta correção, `surcharge_amount`/
- * `shipping_charged`/`discount_amount` do PEDIDO nunca eram propagados pro
- * payload (não existiam nem em `FiscalDocumentContext`), então a soma dos
- * itens ficava sistematicamente menor que o total real da venda sempre que
- * qualquer um desses três fosse != 0 — SEFAZ via pagamento > total da nota,
- * sem troco declarado (não havia troco real, PIX).
- *
- * O schema NFe/NFCe (mesmo tipo complexo `det/prod`, confirmado em
- * `nfcePayload.types.ts`) só representa frete/outras despesas/desconto em
- * nível de ITEM — nunca em nível de documento (confirmado por leitura
- * direta de campos.focusnfe.com.br/nfe/NotaFiscalXML.html: vFrete/vOutro/
- * vDesc estão todos dentro do bloco `det/prod`). Este ERP não modela qual
- * item específico "causou" o frete/acréscimo/desconto do PEDIDO — em vez
- * de fabricar uma distribuição proporcional sem nenhuma evidência de que é
- * assim que a venda foi composta, o valor total de cada ajuste é atribuído
- * inteiramente ao PRIMEIRO item (índice 0), de forma determinística e
- * documentada. `items.length > 0` já é garantido pelo chamador antes desta
- * função rodar.
- */
-function applyOrderLevelAdjustments(items: FocusNfceItemPayload[], ctx: FiscalDocumentContext): void {
-  const { saleDiscountAmount: discount, saleSurchargeAmount: surcharge, saleShippingCharged: shipping } = ctx
-  if (discount === 0 && surcharge === 0 && shipping === 0) return
-
-  const first = items[0]
-  if (discount > 0) first.valor_desconto = round2((first.valor_desconto ?? 0) + discount)
-  if (surcharge > 0) first.valor_outras_despesas = round2(surcharge)
-  if (shipping > 0) first.valor_frete = round2(shipping)
-}
 
 function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt): FocusNfceItemPayload {
   const label = item.sku ?? `sale_item_id=${item.saleItemId}`
@@ -179,12 +143,25 @@ function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt):
  *
  * `indicador_pagamento` (indPag) NÃO existe no schema de NFC-e — confirmado
  * pela ausência total do campo em `FormaPagamentoNFCe` (diferente de NF-e).
+ *
+ * ─── Troco real (Fase Fiscal 4I, hardening pré-produção) ─────────────────
+ * `valor_pagamento` (vPag) é o valor TENDERED (bruto, entregue pelo
+ * cliente) — nunca o líquido pós-troco. Pra métodos sem troco (pix/
+ * cartão), `amountTendered` é sempre igual a `netAmount` (invariante do
+ * banco: `net_amount = amount_tendered - change_amount`, `change_amount`
+ * só é != 0 pra dinheiro) — este código não precisa distinguir métodos,
+ * só usa o valor certo em cada caso. `amountTendered` é OPCIONAL no tipo
+ * (`FiscalPaymentContext`) por compatibilidade — ausente cai pra
+ * `netAmount` (comportamento anterior a esta fase, ainda correto pra
+ * pagamento sem troco). Ver `valor_troco` (documento) em
+ * `buildNfcePayload` pra onde o troco em si é declarado — NUNCA aqui
+ * (vPag nunca é líquido de troco quando há troco real).
  */
 function buildFormaPagamentoPayload(payment: FiscalPaymentContext): FocusFormaPagamentoNfce {
   const bandeira = resolveBandeiraOperadora(payment.cardBrand)
   return {
     forma_pagamento: resolveFormaPagamento(payment.method),
-    valor_pagamento: round2(payment.netAmount),
+    valor_pagamento: round2(payment.amountTendered ?? payment.netAmount),
     ...(bandeira ? { bandeira_operadora: bandeira } : {}),
   }
 }
@@ -223,7 +200,19 @@ export function buildNfcePayload(ctx: FiscalDocumentContext): FocusNfcePayload {
     formas_pagamento: ctx.payments.map((payment) => buildFormaPagamentoPayload(payment)),
   }
 
-  applyOrderLevelAdjustments(payload.items, ctx)
+  applyOrderLevelAdjustments(payload.items, {
+    discountAmount: ctx.saleDiscountAmount,
+    surchargeAmount: ctx.saleSurchargeAmount,
+    shippingCharged: ctx.saleShippingCharged,
+  })
+
+  // vTroco (documento, sibling de formas_pagamento — confirmado por
+  // leitura direta de campos.focusnfe.com.br/nfe/NotaFiscalXML.html,
+  // mesmo bloco compartilhado NF-e/NFC-e) — soma do troco de TODOS os
+  // pagamentos (na prática só dinheiro tem troco > 0). Omitido quando 0
+  // (mesmo padrão de todos os campos opcionais deste builder).
+  const troco = ctx.payments.reduce((sum, p) => sum + (p.changeAmount ?? 0), 0)
+  if (troco > 0) payload.valor_troco = round2(troco)
 
   return payload
 }
