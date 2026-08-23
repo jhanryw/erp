@@ -109,9 +109,39 @@ describe('validateNfeReadiness — destinatário', () => {
     expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_documento_missing')
   })
 
-  it('endereço incompleto (sem bairro) → destinatario_endereco_incompleto', () => {
+  it('endereço incompleto (sem bairro) → destinatario_bairro_missing, campo específico (Fase Fiscal 5C)', () => {
     const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, bairro: null } })
-    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_endereco_incompleto')
+    const codes = validateNfeReadiness(ctx).map((e) => e.code)
+    expect(codes).toContain('destinatario_bairro_missing')
+    expect(codes).not.toContain('destinatario_logradouro_missing')
+    expect(codes).not.toContain('destinatario_numero_missing')
+  })
+
+  it('sem CEP → destinatario_cep_missing (distinto de CEP presente mas com formato inválido)', () => {
+    const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, cep: null } })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_cep_missing')
+  })
+
+  it('sem logradouro → destinatario_logradouro_missing', () => {
+    const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, logradouro: null } })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_logradouro_missing')
+  })
+
+  it('sem número → destinatario_numero_missing', () => {
+    const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, numero: null } })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_numero_missing')
+  })
+
+  it('sem município → destinatario_municipio_missing', () => {
+    const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, municipio: null } })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('destinatario_municipio_missing')
+  })
+
+  it('sem UF → destinatario_uf_missing (distinto de UF presente mas com formato inválido)', () => {
+    const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, uf: null } })
+    const codes = validateNfeReadiness(ctx).map((e) => e.code)
+    expect(codes).toContain('destinatario_uf_missing')
+    expect(codes).not.toContain('destinatario_uf_invalida')
   })
 
   it('CEP com formato inválido → destinatario_cep_invalido', () => {
@@ -204,7 +234,8 @@ describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBG
     const codes = validateNfceReadiness(ctx).map((e) => e.code)
     expect(codes).not.toContain('destinatario_nome_missing')
     expect(codes).not.toContain('destinatario_documento_missing')
-    expect(codes).not.toContain('destinatario_endereco_incompleto')
+    expect(codes).not.toContain('destinatario_cep_missing')
+    expect(codes).not.toContain('destinatario_logradouro_missing')
     expect(codes).not.toContain('destinatario_municipio_ibge_missing')
     expect(codes).not.toContain('destinatario_cpf_invalido')
   })
@@ -247,5 +278,77 @@ describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBG
       focusIntegration: { available: false, reason: 'integration_not_found' },
     })
     expect(() => validateNfceReadiness(ctx)).not.toThrow()
+  })
+})
+
+describe('compatibilidade com a UI (card fiscal) — múltiplas pendências, mensagens legíveis', () => {
+  // O card fiscal (src/app/(dashboard)/vendas/[id]/_components/documento-
+  // fiscal-card.tsx:169) renderiza `{e.message}` para cada erro — o `code`
+  // só é usado como `key` do React, NUNCA mostrado na tela. Este bloco
+  // prova, no nível de dado (sem precisar de infraestrutura de teste de
+  // componente React, inexistente neste repo), que TODO erro devolvido por
+  // validateNfeReadiness tem uma mensagem humana e legível — nunca o
+  // código bruto reaparecendo como texto, e a resposta HTTP real de
+  // POST /api/fiscal/nfe/preview repassa esse array sem alterar
+  // (src/app/api/fiscal/nfe/preview/route.ts:101, `validationErrors,`).
+  it('venda com MÚLTIPLAS pendências simultâneas (destinatário incompleto de vários campos) → cada erro tem mensagem legível, nunca igual ao código', () => {
+    const ctx = baseFiscalContext({
+      destinatario: {
+        nome: null, isAnonymous: false, cpf: null, cnpj: null, inscricaoEstadual: null,
+        telefone: null, email: null,
+        logradouro: null, numero: null, complemento: null, bairro: null,
+        municipio: null, municipioIbge: null, uf: null, cep: null,
+      },
+    })
+    const errors = validateNfeReadiness(ctx)
+
+    // Múltiplas pendências de verdade — não um caso degenerado de 1 erro só.
+    expect(errors.length).toBeGreaterThanOrEqual(8)
+
+    const codes = errors.map((e) => e.code)
+    expect(codes).toEqual(expect.arrayContaining([
+      'destinatario_nome_missing',
+      'destinatario_documento_missing',
+      'destinatario_cep_missing',
+      'destinatario_logradouro_missing',
+      'destinatario_numero_missing',
+      'destinatario_bairro_missing',
+      'destinatario_municipio_missing',
+      'destinatario_uf_missing',
+      'destinatario_municipio_ibge_missing',
+    ]))
+
+    for (const e of errors) {
+      // Nunca vazio.
+      expect(e.message.trim().length).toBeGreaterThan(0)
+      // Nunca o código bruto reaparecendo como mensagem (ex.: um bug que
+      // esquecesse de escrever a mensagem e usasse err(code, code)).
+      expect(e.message).not.toBe(e.code)
+      // Nunca snake_case puro disfarçado de mensagem (heurística: uma
+      // mensagem humana em PT-BR sempre tem pelo menos um espaço).
+      expect(e.message).toMatch(/\s/)
+      // Sempre termina com pontuação de frase — sinal de frase completa,
+      // não de um identificador técnico colado.
+      expect(e.message.trim()).toMatch(/[.!?]$/)
+    }
+  })
+
+  it('cada código granular novo (Fase Fiscal 5C) aponta pro campo certo e descreve o campo certo na mensagem', () => {
+    const cases: { field: 'cep' | 'logradouro' | 'numero' | 'bairro' | 'municipio' | 'uf', code: string, mustMention: string }[] = [
+      { field: 'cep', code: 'destinatario_cep_missing', mustMention: 'CEP' },
+      { field: 'logradouro', code: 'destinatario_logradouro_missing', mustMention: 'Logradouro' },
+      { field: 'numero', code: 'destinatario_numero_missing', mustMention: 'Número' },
+      { field: 'bairro', code: 'destinatario_bairro_missing', mustMention: 'Bairro' },
+      { field: 'municipio', code: 'destinatario_municipio_missing', mustMention: 'Município' },
+      { field: 'uf', code: 'destinatario_uf_missing', mustMention: 'UF' },
+    ]
+
+    for (const { field, code, mustMention } of cases) {
+      const ctx = baseFiscalContext({ destinatario: { ...baseFiscalContext().destinatario, [field]: null } })
+      const found = validateNfeReadiness(ctx).find((e) => e.code === code)
+      expect(found, `esperava o código ${code} quando ${field} está ausente`).toBeDefined()
+      expect(found!.message).toContain(mustMention)
+      expect(found!.field).toBe(`destinatario.${field}`)
+    }
   })
 })

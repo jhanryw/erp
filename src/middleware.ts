@@ -31,6 +31,11 @@ const PUBLIC_PATHS = [
   '/api/alerts/daily',       // cron de alerta diário — protegida por CRON_SECRET próprio, não sessão
                               // (path exato, não o prefixo /api/alerts/ inteiro — não liberar
                               // futuras rotas sob /api/alerts/ sem decisão própria)
+  '/comprovante/',           // verificação pública de comprovante não fiscal — protegida só pelo
+                              // token aleatório/imutável na URL (sales.receipt_token), nunca por
+                              // sessão; a própria página não expõe dado sensível (sem custo/margem,
+                              // sem CPF/nome de cliente) e ações de troca dentro dela exigem sessão
+                              // própria (link só aparece para usuário autenticado/autorizado)
 ]
 
 export async function middleware(request: NextRequest) {

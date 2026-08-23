@@ -16,6 +16,30 @@ export interface SaleItem {
   unit_price: number
   unit_cost: number
   discount_amount: number
+  /** Fase Fiscal 5C — acréscimo individual do item, simétrico a discount_amount. */
+  surcharge_amount: number
+  /** Fase Fiscal 5C — preço de tabela no momento da venda, puramente informativo (nunca entra em nenhum total). */
+  list_price_snapshot?: number | null
+}
+
+/** Fase Fiscal 5C — destinatário/endereço de entrega, snapshot imutável por venda. */
+export interface DeliveryRecipientInput {
+  nome: string
+  cpf?: string | null
+  cnpj?: string | null
+  telefone?: string | null
+  cep: string
+  logradouro: string
+  numero: string
+  complemento?: string | null
+  bairro: string
+  municipio: string
+  uf: string
+  municipio_ibge?: string | null
+  /** Qual camada resolveu municipio_ibge — 'viacep' | 'resolve_municipio_ibge' | null. */
+  ibge_source?: string | null
+  customer_address_id?: number | null
+  save_as_customer_address?: boolean
 }
 
 export interface PaymentEntry {
@@ -50,6 +74,14 @@ export interface CreateSaleInput {
   cashSessionId?: number | null
   /** Vendedor responsável pela venda (sellers.id). Obrigatório em vendas normais; nullable em trocas/devoluções. */
   responsible_seller_id: number | null
+  /**
+   * Fase Fiscal 5C (revisão — Blocker 1) — snapshot de destinatário/
+   * endereço de entrega, persistido ATOMICAMENTE com a venda (dentro da
+   * mesma transação do RPC, via p_delivery_recipient). `null`/ausente para
+   * retirada — nunca obrigatório aqui, a exigência é imposta na validação
+   * de entrada da API (Zod), não neste service.
+   */
+  deliveryRecipient?: DeliveryRecipientInput | null
 }
 
 export interface SaleResult {
@@ -350,6 +382,16 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   //   - payments undefined    → passa null: RPC usa p_payment_method (path legado)
   const p_payments = input.payments !== undefined ? input.payments : null
 
+  // Fase Fiscal 5C (revisão — Blocker 1): o snapshot de destinatário/
+  // endereço de entrega vai DENTRO do mesmo parâmetro/transação da venda —
+  // nunca mais uma segunda chamada não-atômica depois do INSERT em sales.
+  // uf é normalizada aqui (maiúscula) porque a RPC não normaliza texto
+  // vindo de JSON — mesma disciplina de nunca confiar em formatação do
+  // cliente sem reafirmar no servidor.
+  const p_delivery_recipient = input.deliveryRecipient
+    ? { ...input.deliveryRecipient, uf: input.deliveryRecipient.uf.toUpperCase() }
+    : null
+
   const rpcParams = {
     p_customer_id:           input.customer_id,
     p_seller_id:             input.systemUserId,
@@ -366,6 +408,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
     p_payments,
     p_cash_session_id:       input.cashSessionId ?? null,
     p_responsible_seller_id: input.responsible_seller_id,
+    p_delivery_recipient,
   }
 
   const { data: sale, error } = await (admin as any)
@@ -376,6 +419,8 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
 
   if (error) {
     // P0001 = RAISE EXCEPTION do PL/pgSQL = violação de regra de negócio
+    // (inclui, agora, falha no snapshot de destinatário — a venda inteira
+    // sofre ROLLBACK junto, nunca fica órfã).
     const status = error.code === 'P0001' ? 400 : 500
     return failure(error.message, status)
   }

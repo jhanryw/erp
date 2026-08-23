@@ -13,6 +13,8 @@ import { createClient } from '@/lib/supabase/client'
 import { saleSchema, type SaleFormData, type PaymentEntry } from '@/lib/validators'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useDebounce } from '@/hooks/useDebounce'
+import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
+import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +34,23 @@ const METHOD_LABELS: Record<string, string> = {
   credit_card: 'Crédito',
   debit_card:  'Débito',
   cashback:    'Crédito de Troca',
+}
+
+// Fase Fiscal 5C — mínimo operacional pra CONCLUIR a venda de entrega
+// (não é o mesmo mínimo exigido pra emitir NF-e, que inclui CPF/CNPJ e
+// código IBGE — ver validateNfeReadiness/validateNfeDestinatario). Aqui só
+// bloqueia avançar sem o suficiente pra entrega física acontecer.
+function isDeliveryRecipientReady(recipient: DeliveryRecipientValue | null): boolean {
+  if (!recipient) return false
+  return Boolean(
+    recipient.nome.trim() &&
+    /^\d{8}$/.test(recipient.cep) &&
+    recipient.logradouro.trim() &&
+    recipient.numero.trim() &&
+    recipient.bairro.trim() &&
+    recipient.municipio.trim() &&
+    /^[A-Za-z]{2}$/.test(recipient.uf)
+  )
 }
 
 export default function NovaVendaPage() {
@@ -67,6 +86,9 @@ export default function NovaVendaPage() {
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
+
+  // ── Endereço de entrega (Fase Fiscal 5C) ─────────────────────────────────────
+  const [deliveryRecipient, setDeliveryRecipient] = useState<DeliveryRecipientValue | null>(null)
 
   // ── Multi-pagamento ──────────────────────────────────────────────────────────
   const [payments, setPayments]               = useState<PaymentEntry[]>([])
@@ -121,6 +143,7 @@ export default function NovaVendaPage() {
       cashback_used:    0,
       shipping_charged: 0,
       delivery_mode:    'delivery',
+      delivery_recipient: null,
     },
   })
 
@@ -204,6 +227,7 @@ export default function NovaVendaPage() {
     setValue('customer_id', 0)
     setValue('cashback_action', 'accumulate')
     setValue('cashback_used', 0)
+    setDeliveryRecipient(null) // endereço pertence ao cliente anterior — nunca reaproveitar
   }
 
   // ── Handlers: produto ─────────────────────────────────────────────────────────
@@ -238,8 +262,29 @@ export default function NovaVendaPage() {
       unit_price:      item.price,
       unit_cost:       item.cost,
       discount_amount: 0,
+      surcharge_amount: 0,
+      // Fase Fiscal 5C — preço de tabela capturado no momento em que o
+      // item entra no carrinho, congelado daqui pra frente (nunca lido de
+      // volta do catálogo). unit_price continua sendo a única fonte da
+      // verdade editável — este campo é só para exibir/derivar desconto ou
+      // acréscimo implícito quando o vendedor mudar unit_price depois.
+      list_price_snapshot: item.price,
       total_price:     item.price,
     })
+  }
+
+  // ── Handlers: preço negociado por item (Fase Fiscal 5C) ──────────────────────
+  // Single source of truth = unit_price digitado pelo vendedor. discount_amount
+  // e surcharge_amount de nível de ITEM continuam existindo no schema para o
+  // caso raro de um ajuste explícito documentado separadamente (ex.: cupom
+  // aplicado a um item específico) — mas o fluxo padrão desta tela é só
+  // editar o preço vendido; desconto/acréscimo são DERIVADOS pra exibição
+  // (computeItemAdjustmentFromListPrice), nunca uma segunda fonte digitável
+  // aqui, pra não abrir espaço pra dupla contagem.
+  function handleItemPriceChange(index: number, value: string) {
+    const price = parseFloat(value)
+    if (!Number.isFinite(price) || price <= 0) return
+    setValue(`items.${index}.unit_price`, price)
   }
 
   // ── Handlers: desconto R$ ↔ % ────────────────────────────────────────────────
@@ -272,10 +317,19 @@ export default function NovaVendaPage() {
   const cashbackAction  = watch('cashback_action')  ?? 'accumulate'
   const saleOrigin      = watch('sale_origin')
 
-  const subtotal            = items.reduce((s, item) => s + item.unit_price * item.quantity - item.discount_amount, 0)
+  // Fase Fiscal 5C — single source of truth da aritmética de preço é
+  // src/lib/sales/pricing.ts, o mesmo módulo que espelha a fórmula do RPC
+  // (rpc_create_sale) e é coberto pelos testes de invariante da fase.
+  // Nunca duplicar esta conta inline.
+  const subtotal            = computeSubtotal(items.map((item) => ({
+    unitPrice: item.unit_price, quantity: item.quantity,
+    discountAmount: item.discount_amount, surchargeAmount: item.surcharge_amount ?? 0,
+  })))
   const currentDiscountPct  = subtotal > 0 && discountAmount > 0 ? (discountAmount / subtotal) * 100 : 0
-  const gross               = Math.max(0, subtotal - discountAmount + shippingCharged + surchargeAmount)
-  const total    = Math.max(0, gross - cashbackUsed)
+  const gross               = computeGrandTotal({
+    subtotal, discountAmount, surchargeAmount, shippingCharged, cashbackUsed: 0,
+  })
+  const total = computeGrandTotal({ subtotal, discountAmount, surchargeAmount, shippingCharged, cashbackUsed })
 
   // Invalida o token de desconto se o valor mudar depois da autorização
   // Quando o crédito cobre 100% do valor, limpa pagamentos já adicionados
@@ -285,6 +339,13 @@ export default function NovaVendaPage() {
       setPayments(prev => prev.length > 0 ? [] : prev)
     }
   }, [total, cashbackUsed])
+
+  // Fase Fiscal 5C — sincroniza o estado do endereço de entrega (gerenciado
+  // fora do react-hook-form, mesmo padrão já usado para `payments[]`) com o
+  // campo `delivery_recipient` validado por saleSchema no submit.
+  useEffect(() => {
+    setValue('delivery_recipient', deliveryMode === 'delivery' ? deliveryRecipient : null)
+  }, [deliveryRecipient, deliveryMode, setValue])
 
   const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
   const saldoRestante = total - totalPaid
@@ -563,8 +624,14 @@ export default function NovaVendaPage() {
                       const meta     = productMeta[varId]
                       const qty      = items[i]?.quantity ?? 1
                       const price    = items[i]?.unit_price ?? 0
+                      const listPrice = items[i]?.list_price_snapshot ?? null
                       const maxStock = meta?.stock ?? Infinity
                       const atLimit  = qty >= maxStock
+                      // Fase Fiscal 5C — single source of truth = unit_price;
+                      // desconto/acréscimo são sempre DERIVADOS pra exibição,
+                      // nunca uma segunda entrada digitável em paralelo (evita
+                      // o vendedor calcular na mão e evita dupla contagem).
+                      const adjustment = computeItemAdjustmentFromListPrice(price, listPrice)
                       return (
                         <div key={field.id} className="p-3.5 rounded-xl bg-bg-overlay space-y-2.5">
                           <div className="flex items-start justify-between gap-2">
@@ -577,7 +644,6 @@ export default function NovaVendaPage() {
                                   {meta.sku     && <span className="font-mono">{meta.sku}</span>}
                                 </p>
                               )}
-                              <p className="text-xs text-text-muted mt-0.5">{formatCurrency(price)} / unidade</p>
                             </div>
                             <button
                               type="button"
@@ -587,6 +653,41 @@ export default function NovaVendaPage() {
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
+
+                          {/* ── Preço original / preço vendido / desconto-acréscimo derivado ── */}
+                          <div className="flex items-end gap-3 flex-wrap">
+                            <div className="min-w-[7rem]">
+                              <label className="text-[11px] text-text-muted block mb-0.5">
+                                Preço vendido {listPrice != null && (
+                                  <span className="text-text-muted/70">(tabela: {formatCurrency(listPrice)})</span>
+                                )}
+                              </label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0.01"
+                                inputMode="decimal"
+                                className="h-9 text-sm"
+                                defaultValue={price}
+                                onBlur={(e) => {
+                                  handleItemPriceChange(i, e.target.value)
+                                  const newPrice = parseFloat(e.target.value)
+                                  if (Number.isFinite(newPrice) && newPrice > 0) {
+                                    setValue(`items.${i}.total_price`, newPrice * qty - (items[i]?.discount_amount ?? 0) + (items[i]?.surcharge_amount ?? 0))
+                                  }
+                                }}
+                              />
+                            </div>
+                            {(adjustment.desconto > 0 || adjustment.acrescimo > 0) && (
+                              <p className={`text-xs font-medium pb-2 ${adjustment.desconto > 0 ? 'text-success' : 'text-warning'}`}>
+                                {adjustment.desconto > 0
+                                  ? `− ${formatCurrency(adjustment.desconto)} de desconto`
+                                  : `+ ${formatCurrency(adjustment.acrescimo)} de acréscimo`}
+                                {' '}/ unidade
+                              </p>
+                            )}
+                          </div>
+
                           <div className="flex items-center justify-between">
                             <div className="flex items-center gap-3">
                               <button
@@ -1135,6 +1236,17 @@ export default function NovaVendaPage() {
                   </div>
                 )}
 
+                {/* Fase Fiscal 5C — endereço de entrega, só para delivery_mode='delivery' */}
+                {selectedCustomer && deliveryMode === 'delivery' && (
+                  <DeliveryAddressForm
+                    customerId={selectedCustomer.id}
+                    defaultNome={selectedCustomer.name}
+                    defaultCpf={selectedCustomer.cpf}
+                    value={deliveryRecipient}
+                    onChange={setDeliveryRecipient}
+                  />
+                )}
+
                 <div className="flex gap-3 pt-1">
                   <Button type="button" variant="secondary" onClick={() => setStep(0)} className="flex-1 h-11">
                     Voltar
@@ -1142,7 +1254,7 @@ export default function NovaVendaPage() {
                   <Button
                     type="button"
                     onClick={() => setStep(2)}
-                    disabled={!selectedCustomer}
+                    disabled={!selectedCustomer || (deliveryMode === 'delivery' && !isDeliveryRecipientReady(deliveryRecipient))}
                     className="flex-1 h-11"
                   >
                     Continuar
@@ -1169,7 +1281,15 @@ export default function NovaVendaPage() {
                   </div>
                   <div className="flex justify-between py-3">
                     <span className="text-text-secondary">Entrega</span>
-                    <span className="font-medium">{deliveryMode === 'pickup' ? '📦 Retirada' : '🚚 Envio'}</span>
+                    <span className="font-medium text-right">
+                      {deliveryMode === 'pickup' ? '📦 Retirada' : '🚚 Envio'}
+                      {deliveryMode === 'delivery' && deliveryRecipient && (
+                        <span className="block text-xs text-text-muted font-normal mt-0.5">
+                          {deliveryRecipient.logradouro}, {deliveryRecipient.numero} — {deliveryRecipient.municipio}/{deliveryRecipient.uf}
+                          {!deliveryRecipient.municipio_ibge && <span className="text-warning"> · sem IBGE</span>}
+                        </span>
+                      )}
+                    </span>
                   </div>
                   {subtotal > 0 && (
                     <div className="flex justify-between py-3">
@@ -1230,6 +1350,7 @@ export default function NovaVendaPage() {
                     <p className="font-semibold">Corrija os erros antes de continuar:</p>
                     {errors.customer_id     && <p>• Cliente: {errors.customer_id.message}</p>}
                     {errors.sale_origin     && <p>• Origem da venda: obrigatória — volte ao passo Itens e selecione.</p>}
+                    {errors.delivery_recipient && <p>• Entrega: {errors.delivery_recipient.message ?? 'endereço de entrega incompleto'} — volte ao passo Cliente.</p>}
                     {errors.items           && <p>• Itens: {typeof errors.items.message === 'string' ? errors.items.message : 'Verifique os itens'}</p>}
                     {errors.discount_amount && <p>• Desconto: {errors.discount_amount.message}</p>}
                     {!canFinalize           && <p>• Pagamentos: informe ao menos um pagamento que totalize o valor da venda.</p>}

@@ -81,7 +81,44 @@ export const saleItemSchema = z.object({
   unit_price: z.number().positive('Preço obrigatório'),
   unit_cost: z.number().min(0),
   discount_amount: z.number().min(0).default(0),
+  // Fase Fiscal 5C — acréscimo individual do item, simétrico a
+  // discount_amount (ver sale_items.surcharge_amount).
+  surcharge_amount: z.number().min(0).default(0),
+  // Preço de tabela no momento da venda — puramente informativo (nunca
+  // entra em nenhum total), capturado automaticamente ao adicionar o item
+  // ao carrinho. Pode ser null (ex.: item sem preço de catálogo resolvido).
+  list_price_snapshot: z.number().min(0).nullable().optional(),
   total_price: z.number().min(0),
+})
+
+// ─── Destinatário/endereço de entrega (Fase Fiscal 5C) ────────────────────────
+// Só exigido quando delivery_mode === 'delivery' — ver refine em saleSchema.
+// Snapshot imutável: estes valores, não o cadastro atual de
+// customer_addresses, é o que vira sale_recipients no momento da venda.
+export const deliveryRecipientSchema = z.object({
+  nome:       z.string().min(2, 'Nome do destinatário obrigatório'),
+  cpf:        z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cnpj:       z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  telefone:   z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cep:        z.string().regex(/^\d{8}$/, 'CEP deve ter 8 dígitos'),
+  logradouro: z.string().min(1, 'Logradouro obrigatório'),
+  numero:     z.string().min(1, 'Número obrigatório'),
+  complemento: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  bairro:     z.string().min(1, 'Bairro obrigatório'),
+  municipio:  z.string().min(1, 'Município obrigatório'),
+  uf:         z.string().length(2, 'UF deve ter 2 letras'),
+  // Resolvido automaticamente (ViaCEP → resolveMunicipioIbge) — nunca
+  // digitado pelo vendedor. Pode chegar null se as duas camadas falharem
+  // (venda de entrega ainda pode ser CONCLUÍDA sem IBGE — só a emissão de
+  // NF-e fica bloqueada por validateNfeReadiness, não a venda em si).
+  municipio_ibge: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().regex(/^\d{7}$/).nullable().optional()),
+  // Se o destinatário foi escolhido a partir de um customer_addresses já
+  // existente — rastreabilidade (sale_recipients.source_address_id), nunca
+  // fonte de verdade.
+  customer_address_id: z.preprocess((v) => (v === '' || v == null ? null : v), z.number().int().positive().nullable().optional()),
+  // Se true e não veio de um endereço já existente, a API também cria uma
+  // linha reutilizável em customer_addresses (além do snapshot imutável).
+  save_as_customer_address: z.boolean().default(false),
 })
 
 // ─── Pagamento individual (novo fluxo multi-pagamento) ────────────────────────
@@ -125,7 +162,13 @@ export const saleSchema = z.object({
   shipping_charged: z.number().min(0).default(0),
   notes:            z.string().nullable().optional(),
   items:            z.array(saleItemSchema).min(1, 'Adicione pelo menos 1 item'),
-})
+  // Fase Fiscal 5C — obrigatório operacionalmente quando delivery_mode ===
+  // 'delivery' (ver refine abaixo); ausente/ignorado em retirada.
+  delivery_recipient: deliveryRecipientSchema.nullable().optional(),
+}).refine(
+  (d) => d.delivery_mode !== 'delivery' || d.delivery_recipient != null,
+  { message: 'Endereço de entrega obrigatório para venda com entrega.', path: ['delivery_recipient'] }
+)
 
 // ─── Entrada de Estoque ───────────────────────────────────────────────────────
 export const stockLotSchema = z.object({

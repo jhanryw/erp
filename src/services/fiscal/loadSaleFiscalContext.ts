@@ -8,13 +8,19 @@
  *
  * Fontes por campo (schema real confirmado nesta fase, não presumido):
  *   - Emitente: `company_fiscal_settings` (criada na Fase Fiscal 1).
- *   - Destinatário: `customers` (nome/cpf) + `customer_addresses` via
- *     `shipments.address_id` (endereço) — `customers` NÃO tem colunas de
- *     endereço nem CNPJ (confirmado); por isso `cnpj_destinatario` fica
- *     sempre `null` nesta fase (lacuna de schema real, não suporta PJ
- *     ainda). `codigo_municipio_destinatario` é resolvido dinamicamente
- *     via `resolveMunicipioIbge` (cache + API pública do IBGE) — Fase
- *     Fiscal 2B, nunca hardcoded.
+ *   - Destinatário (Fase Fiscal 5C — endereço/CPF-CNPJ):
+ *     `sale_recipients` (snapshot imutável da venda), quando existe uma
+ *     linha para esta venda — nunca `customer_addresses`/
+ *     `shipments.address_id` diretamente quando o snapshot existe (evita
+ *     que uma alteração posterior no cadastro do cliente altere
+ *     semanticamente uma venda antiga). Nome vem sempre de `customers`
+ *     (não duplicado no snapshot para esse campo). Para vendas SEM
+ *     snapshot (anteriores à Fase 5C, ou de origem sem esse fluxo ainda —
+ *     ex. Nuvemshop), cai no caminho legado: `customer_addresses` via
+ *     `shipments.address_id`, com `codigo_municipio_destinatario`
+ *     resolvido dinamicamente via `resolveMunicipioIbge` (cache + API
+ *     pública do IBGE) — Fase Fiscal 2B. `customers` continua sem CNPJ —
+ *     por isso `cnpj_destinatario` só é possível quando vier do snapshot.
  *   - Itens: `sale_items` → `product_variations` → `products` (ncm/cest/
  *     origem/unidade_med/sku/name).
  *   - Pagamentos (Fase Fiscal 3A): `sale_payments` por `sale_id`
@@ -75,7 +81,7 @@ export async function loadSaleFiscalContext({
   if (saleError) throw new FiscalContextError(`Falha ao carregar venda ${saleId}: ${saleError.message}`)
   if (!sale) throw new FiscalContextError(`Venda ${saleId} não encontrada nesta empresa.`)
 
-  const [{ data: settings }, { data: customer }, { data: saleItems }, { data: shipment }, { data: salePayments }, focusIntegrationResult] = await Promise.all([
+  const [{ data: settings }, { data: customer }, { data: saleItems }, { data: shipment }, { data: salePayments }, { data: recipientSnapshot }, focusIntegrationResult] = await Promise.all([
     (admin as any)
       .from('company_fiscal_settings')
       .select('cnpj, razao_social, inscricao_estadual, crt, logradouro, numero_endereco, complemento, bairro, municipio, municipio_ibge, uf, cep')
@@ -99,11 +105,19 @@ export async function loadSaleFiscalContext({
       .from('sale_payments')
       .select('method, net_amount, card_brand, amount_tendered, change_amount')
       .eq('sale_id', saleId),
+    // Fase Fiscal 5C — snapshot imutável do destinatário, quando existe.
+    (admin as any)
+      .from('sale_recipients')
+      .select('cpf, cnpj, telefone, cep, logradouro, numero, complemento, bairro, municipio, municipio_ibge, uf')
+      .eq('sale_id', saleId)
+      .maybeSingle(),
     resolveFocusIntegration(companyId),
   ])
 
   let address: { street: string | null; number: string | null; complement: string | null; neighborhood: string | null; city: string | null; state: string | null; cep: string | null } | null = null
-  if (shipment?.address_id) {
+  if (!recipientSnapshot && shipment?.address_id) {
+    // Caminho legado — só usado quando não existe snapshot da Fase 5C
+    // (venda anterior à fase, ou origem que ainda não gera snapshot).
     const { data } = await (admin as any)
       .from('customer_addresses')
       .select('street, number, complement, neighborhood, city, state, cep')
@@ -116,11 +130,12 @@ export async function loadSaleFiscalContext({
     throw new FiscalContextError(`Falha ao resolver integração Focus NFe: ${focusIntegrationResult.error}`)
   }
 
-  // Resolução dinâmica contra o cache/API pública do IBGE — nunca uma
-  // lista de cidades no código (ver resolveMunicipioIbge.ts). `null` em
-  // caso de falha de rede/sem correspondência — validateFiscalReadiness já
-  // trata isso como campo ausente, não precisa de tratamento especial aqui.
-  const destinatarioMunicipioIbge = await resolveMunicipioIbge(address?.state ?? null, address?.city ?? null)
+  // `sale_recipients` já traz o código IBGE resolvido no momento da venda
+  // (congelado — nunca recalculado na emissão). Só recorre à resolução
+  // dinâmica (cache/API pública do IBGE) no caminho legado, sem snapshot.
+  const destinatarioMunicipioIbge = recipientSnapshot
+    ? (recipientSnapshot.municipio_ibge ?? null)
+    : await resolveMunicipioIbge(address?.state ?? null, address?.city ?? null)
 
   const items = (saleItems ?? []).map((row: any) => ({
     saleItemId: row.id,
@@ -177,22 +192,27 @@ export async function loadSaleFiscalContext({
     destinatario: {
       nome: customer?.is_anonymous ? null : customer?.name ?? null,
       isAnonymous: customer?.is_anonymous ?? false,
-      cpf: customer?.is_anonymous ? null : customer?.cpf ?? null,
-      // customers não tem coluna cnpj/IE — não existe suporte a PJ hoje (ver relatório, seção G).
-      cnpj: null,
+      // CPF: snapshot (se existir) tem prioridade — é o CPF informado no
+      // MOMENTO da venda, que pode divergir do cadastro atual do cliente.
+      // Sem snapshot, cai no cadastro atual (comportamento legado).
+      cpf: customer?.is_anonymous ? null : (recipientSnapshot?.cpf ?? customer?.cpf ?? null),
+      // CNPJ só existe via snapshot — `customers` não tem essa coluna
+      // (não há suporte a PJ no cadastro de cliente ainda).
+      cnpj: recipientSnapshot?.cnpj ?? null,
       inscricaoEstadual: null,
-      telefone: customer?.phone ?? null,
+      telefone: recipientSnapshot?.telefone ?? customer?.phone ?? null,
       email: customer?.email ?? null,
-      logradouro: address?.street ?? null,
-      numero: address?.number ?? null,
-      complemento: address?.complement ?? null,
-      bairro: address?.neighborhood ?? null,
-      municipio: address?.city ?? null,
-      // Resolvido dinamicamente (cache + API pública do IBGE) — nunca
+      logradouro: recipientSnapshot?.logradouro ?? address?.street ?? null,
+      numero: recipientSnapshot?.numero ?? address?.number ?? null,
+      complemento: recipientSnapshot?.complemento ?? address?.complement ?? null,
+      bairro: recipientSnapshot?.bairro ?? address?.neighborhood ?? null,
+      municipio: recipientSnapshot?.municipio ?? address?.city ?? null,
+      // Snapshot já traz o código congelado no momento da venda; caminho
+      // legado resolve dinamicamente (cache + API pública do IBGE) — nunca
       // hardcoded. `null` quando não há endereço ou a resolução falha.
       municipioIbge: destinatarioMunicipioIbge,
-      uf: address?.state ?? null,
-      cep: address?.cep ?? null,
+      uf: recipientSnapshot?.uf ?? address?.state ?? null,
+      cep: recipientSnapshot?.cep ?? address?.cep ?? null,
     },
     items,
     payments,

@@ -180,19 +180,27 @@ export function validateCommonFiscalReadiness(ctx: FiscalDocumentContext): Fisca
 export function validateNfeDestinatario(ctx: FiscalDocumentContext): FiscalValidationError[] {
   const errors: FiscalValidationError[] = []
   const d = ctx.destinatario
+
+  // Fase Fiscal 5C — erros granulares por campo (antes: um único código
+  // `destinatario_endereco_incompleto` para qualquer combinação de campo
+  // de endereço ausente). A UI agora consegue apontar exatamente qual
+  // campo falta, em vez de "endereço incompleto" genérico.
   if (!d.nome) errors.push(err('destinatario_nome_missing', 'Destinatário sem nome.', 'destinatario.nome'))
   if (!d.cpf && !d.cnpj) errors.push(err('destinatario_documento_missing', 'Destinatário sem CPF nem CNPJ.', 'destinatario.cpf'))
-  if (!d.logradouro || !d.numero || !d.bairro || !d.municipio || !d.uf || !d.cep) {
-    errors.push(err('destinatario_endereco_incompleto', 'Endereço do destinatário incompleto (logradouro/número/bairro/município/UF/CEP).', 'destinatario.endereco'))
-  }
-  if (d.cep && !/^\d{8}$/.test(d.cep.replace(/\D/g, ''))) {
+  if (!d.cep) errors.push(err('destinatario_cep_missing', 'CEP do destinatário ausente.', 'destinatario.cep'))
+  else if (!/^\d{8}$/.test(d.cep.replace(/\D/g, ''))) {
     errors.push(err('destinatario_cep_invalido', 'CEP do destinatário não tem 8 dígitos.', 'destinatario.cep'))
   }
-  if (d.uf && !/^[A-Z]{2}$/.test(d.uf.toUpperCase())) {
+  if (!d.logradouro) errors.push(err('destinatario_logradouro_missing', 'Logradouro do destinatário ausente.', 'destinatario.logradouro'))
+  if (!d.numero) errors.push(err('destinatario_numero_missing', 'Número do destinatário ausente.', 'destinatario.numero'))
+  if (!d.bairro) errors.push(err('destinatario_bairro_missing', 'Bairro do destinatário ausente.', 'destinatario.bairro'))
+  if (!d.municipio) errors.push(err('destinatario_municipio_missing', 'Município do destinatário ausente.', 'destinatario.municipio'))
+  if (!d.uf) errors.push(err('destinatario_uf_missing', 'UF do destinatário ausente.', 'destinatario.uf'))
+  else if (!/^[A-Z]{2}$/.test(d.uf.toUpperCase())) {
     errors.push(err('destinatario_uf_invalida', 'UF do destinatário inválida.', 'destinatario.uf'))
   }
   if (!d.municipioIbge) {
-    errors.push(err('destinatario_municipio_ibge_missing', 'Código IBGE do município do destinatário ausente — não há fonte desse dado no ERP hoje (débito técnico, ver relatório da fase).', 'destinatario.municipioIbge'))
+    errors.push(err('destinatario_municipio_ibge_missing', 'Código IBGE do município do destinatário ausente — não foi possível resolver automaticamente (ViaCEP/API do IBGE); corrija o CEP/município ou informe manualmente.', 'destinatario.municipioIbge'))
   }
   return errors
 }

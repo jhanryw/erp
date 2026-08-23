@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-interface ViaCEPResponse {
+export interface ViaCEPResponse {
   cep: string
   logradouro: string
   complemento: string

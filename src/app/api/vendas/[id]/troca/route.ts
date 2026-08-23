@@ -149,6 +149,7 @@ export async function POST(
           unit_price:           i.unit_price,
           unit_cost:            0,   // custo resolvido pelo RPC via stock.avg_cost
           discount_amount:      0,
+          surcharge_amount:     0,
         })),
         responsible_seller_id: originalSale.responsible_seller_id,
       })

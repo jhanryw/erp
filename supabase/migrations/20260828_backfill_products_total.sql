@@ -1,0 +1,76 @@
+-- Fase Fiscal 5C — backfill de `sales.products_total`.
+--
+-- ⚠️ NÃO APLICADO ainda — auditoria read-only concluída com dados reais
+-- (ver docs/fiscal-fase5c-blockers-revisao.md, seção Backfill, e
+-- docs/products_total_backfill_audit_readonly.sql), mas ainda pendente da
+-- sua autorização final para rodar contra o banco real. Diferente das
+-- demais migrations desta fase (schema/RPC, puramente estruturais e
+-- seguras de reverter), este arquivo é uma TRANSFORMAÇÃO DE DADOS —
+-- tratado separadamente de propósito, nunca aplicado "de brinde" junto com
+-- as outras.
+--
+-- ESCOPO — decisão confirmada pelo usuário após auditoria real: um único
+-- backfill cobrindo DOIS universos, não dois backfills separados:
+--
+--   A. `products_total IS NULL` (regressão documentada em
+--      docs/products-total-regression-analysis.md — silenciosa desde
+--      20260614). Confirmado com dado real: 490 vendas (486 paid, 1
+--      cancelled, 3 returned; 15/06 a 22/08/2026).
+--
+--   B. `products_total` JÁ preenchido, mas divergente da fórmula
+--      DEFINITIVA (as vendas anteriores à regressão, de
+--      20260613_shipping_fiscal_ready.sql, usaram a fórmula original SEM
+--      `+ surcharge_amount` — correta na época, mas incompleta frente à
+--      invariante oficial atual). Confirmado com dado real: 45 vendas (41
+--      paid, 4 cancelled; 09/04 a 13/06/2026), soma de divergência
+--      R$ 308,68, maior divergência R$ 89,54 (venda #117).
+--
+-- Racional da decisão (do usuário, registrado aqui): "Se products_total
+-- passa a ter como invariante oficial subtotal - discount_amount +
+-- surcharge_amount, não quero manter registros conhecidos usando outra
+-- semântica." Nenhum dos dois universos é tratado como mais correto que o
+-- outro — a fórmula é uma coisa só, aplicada uniformemente.
+--
+-- FÓRMULA — definitiva pós-Blocker 2 (idêntica à que
+-- 20260828_rpc_create_sale_pricing_and_products_total.sql grava para
+-- vendas novas):
+--   products_total = subtotal - discount_amount + surcharge_amount
+-- (ambos os campos de nível de PEDIDO; nunca shipping_charged).
+--
+-- NÚMEROS REAIS CONFIRMADOS (auditoria desta sessão, ver
+-- docs/fiscal-fase5c-blockers-revisao.md para o detalhe completo):
+--   - Total de linhas que este UPDATE afeta: 535 (490 do universo A + 45
+--     do universo B — confirmado por COUNT(*) com este mesmo WHERE,
+--     rodado ao vivo antes de escrever esta versão do arquivo).
+--   - Impacto financeiro total do ajuste: R$ 859,05 (universo A) +
+--     R$ 308,68 (universo B) = R$ 1.167,73 — sempre para CIMA (surcharge
+--     nunca é negativo), nunca reduz products_total de nenhuma venda.
+--   - Divergência = sempre exatamente `surcharge_amount` da venda,
+--     confirmado linha a linha contra dado real (nunca discount_amount,
+--     que já era considerado igualmente pelas duas fórmulas).
+--   - Checagem de integridade `sales.subtotal` × soma de
+--     `sale_items.total_price`: ZERO inconsistências, rodada
+--     separadamente para os universos A e B.
+--
+-- Idempotente: o WHERE abaixo só casa linhas que ainda precisam de
+-- correção — rodar de novo depois de aplicado não muda nada (products_total
+-- já bateria com a fórmula, então nenhuma linha voltaria a casar o WHERE).
+--
+-- NÃO é reversível automaticamente. Para o universo A (490 linhas), o
+-- estado anterior era NULL — reversível manualmente (`SET products_total =
+-- NULL WHERE id IN (...)`) se a lista de IDs for guardada antes de rodar.
+-- Para o universo B (45 linhas), o estado anterior tinha um valor real
+-- (não NULL) — reversível só se o valor antigo for salvo antes do UPDATE.
+-- Nenhum "DOWN" automático incluído aqui de propósito — reversão de
+-- transformação de dado histórico é decisão deliberada, não automática.
+--
+-- Inclui todas as vendas independentemente de status (paid/cancelled/
+-- returned) em ambos os universos — mesmo precedente do backfill original
+-- de 20260613_shipping_fiscal_ready.sql, que não discriminou por status.
+-- `products_total` é um fato histórico do momento da venda, não um
+-- indicador de situação atual.
+
+UPDATE public.sales
+SET products_total = ROUND(COALESCE(subtotal, 0) - COALESCE(discount_amount, 0) + COALESCE(surcharge_amount, 0), 2)
+WHERE products_total IS NULL
+   OR ROUND(products_total, 2) <> ROUND(COALESCE(subtotal, 0) - COALESCE(discount_amount, 0) + COALESCE(surcharge_amount, 0), 2);

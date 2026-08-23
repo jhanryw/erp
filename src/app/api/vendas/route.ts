@@ -161,6 +161,28 @@ const itemSchema = z.object({
   unit_price:           z.number().positive(),
   unit_cost:            z.number().min(0),
   discount_amount:      z.number().min(0).default(0),
+  // Fase Fiscal 5C — acréscimo individual do item, simétrico a discount_amount.
+  surcharge_amount:     z.number().min(0).default(0),
+  // Preço de tabela no momento da venda — informativo, nunca usado em cálculo.
+  list_price_snapshot:  z.number().min(0).nullable().optional(),
+})
+
+const deliveryRecipientSchema = z.object({
+  nome:       z.string().min(2),
+  cpf:        z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cnpj:       z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  telefone:   z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cep:        z.string().regex(/^\d{8}$/, 'CEP deve ter 8 dígitos'),
+  logradouro: z.string().min(1),
+  numero:     z.string().min(1),
+  complemento: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  bairro:     z.string().min(1),
+  municipio:  z.string().min(1),
+  uf:         z.string().length(2),
+  municipio_ibge: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().regex(/^\d{7}$/).nullable().optional()),
+  ibge_source: z.preprocess((v) => (v === '' || v == null ? null : v), z.enum(['viacep', 'resolve_municipio_ibge']).nullable().optional()),
+  customer_address_id: z.preprocess((v) => (v === '' || v == null ? null : v), z.number().int().positive().nullable().optional()),
+  save_as_customer_address: z.boolean().default(false),
 })
 
 const paymentEntrySchema = z.object({
@@ -195,9 +217,14 @@ const schema = z.object({
   items:                   z.array(itemSchema).min(1),
   cash_session_id:                  z.number().int().positive().nullable().optional(),
   discount_authorization_token_id:  z.string().uuid().optional(),
+  // Fase Fiscal 5C — obrigatório quando delivery_mode === 'delivery' (ver refine abaixo).
+  delivery_recipient: deliveryRecipientSchema.nullable().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
   { message: 'Informe payment_method ou payments[].' }
+).refine(
+  (d) => d.delivery_mode !== 'delivery' || d.delivery_recipient != null,
+  { message: 'Endereço de entrega obrigatório para venda com entrega.', path: ['delivery_recipient'] }
 )
 
 export async function POST(request: Request) {
@@ -303,12 +330,14 @@ export async function POST(request: Request) {
       cashback_used:   parsed.data.cashback_action === 'accumulate' ? 0 : parsed.data.cashback_used,
     }
 
-    // Criar venda via service (sale + itens + estoque + finance)
+    // Criar venda via service (sale + itens + estoque + finance + snapshot
+    // de destinatário, tudo na mesma transação — Fase Fiscal 5C, Blocker 1)
     const result = await createSale({
       ...saleData,
       systemUserId:          user.id,
       cashSessionId:         parsed.data.cash_session_id ?? null,
       responsible_seller_id: parsed.data.responsible_seller_id,
+      deliveryRecipient:     parsed.data.delivery_mode === 'delivery' ? (parsed.data.delivery_recipient ?? null) : null,
     })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
@@ -357,7 +386,14 @@ export async function POST(request: Request) {
       user.company_id,
     ).catch((err) => console.error('[POST /api/vendas] Push notification error', err))
 
-    // Criar envio automaticamente após a venda
+    // Criar envio automaticamente após a venda. Nota (Fase Fiscal 5C):
+    // ainda não-atômico em relação à venda — diferente do snapshot de
+    // destinatário (sale_recipients), que agora é gravado dentro da mesma
+    // transação do rpc_create_sale (ver createSale/deliveryRecipient
+    // acima). shipments continua com o mesmo padrão pré-existente
+    // ("erro no shipment é não-fatal"); permanece um débito conhecido,
+    // fora do escopo deste blocker (que era especificamente sobre o
+    // snapshot fiscal do destinatário).
     const { delivery_mode } = saleData
     const shipmentStatus = delivery_mode === 'pickup' ? 'aguardando_retirada' : 'aguardando_confirmacao'
     await (admin as any)

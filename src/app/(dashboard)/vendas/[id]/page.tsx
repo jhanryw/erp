@@ -337,6 +337,14 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
               </Button>
             </Link>
           )}
+          {/* Comprovante não fiscal — sempre disponível, independente de NF-e/NFC-e
+              emitida ou não (comercial e fiscal são independentes por design). */}
+          <Link href={`/vendas/${sale.id}/comprovante`} target="_blank">
+            <Button variant="outline" size="sm">
+              <Printer className="w-3.5 h-3.5 mr-1.5" />
+              Imprimir Comprovante
+            </Button>
+          </Link>
           {canExchange && (
             <Link href={`/vendas/${sale.id}/troca`}>
               <Button variant="secondary" size="sm">
