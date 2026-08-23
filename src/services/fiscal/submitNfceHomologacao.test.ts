@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { submitNfceHomologacao } from './submitNfceHomologacao'
+import { submitNfceHomologacao, consultAndUpdateNfceDocument, extractFocusAccessKey, FocusAccessKeyError } from './submitNfceHomologacao'
 import { buildProviderRef } from './submitNfeHomologacao'
 import * as resolveModule from './resolveFocusIntegration'
 import * as loadModule from './loadSaleFiscalContext'
@@ -220,6 +220,182 @@ describe('submitNfceHomologacao — concorrência (mesma garantia claim → begi
     const rows = fake.tables.fiscal_documents.filter((r: any) => r.sale_id === SALE_ID)
     expect(rows).toHaveLength(1)
     expect(rows[0].document_type).toBe('nfce')
+  })
+})
+
+describe('extractFocusAccessKey — normalização da chave de acesso (achado real, venda 626 tentativa 3: Postgres rejeitou "value too long for type character(44)")', () => {
+  it('chave já bare (44 dígitos, sem prefixo) — passa direto', () => {
+    const chave = '1'.repeat(44)
+    expect(extractFocusAccessKey(chave)).toBe(chave)
+  })
+
+  it('chave real da doc oficial Focus (exemplo "NFCeAutorizada", com prefixo "NFe") — remove o prefixo e devolve os 44 dígitos', () => {
+    // Valor EXATO do exemplo oficial (doc.focusnfe.com.br/reference/emitir_nfce.md,
+    // curl bruto — não resumo de IA): "chave_nfe": "NFe4119061234567800012365...484310".
+    // O mesmo valor sem prefixo reaparece em qrcode_url (p=...) no mesmo exemplo,
+    // confirmando que os 44 dígitos após "NFe" são a chave de acesso real.
+    const chaveComPrefixo = 'NFe41190612345678000123650010000000121743484310'
+    const chaveEsperada = '41190612345678000123650010000000121743484310'
+    expect(chaveComPrefixo.length).toBe(47)
+    expect(chaveEsperada.length).toBe(44)
+    expect(extractFocusAccessKey(chaveComPrefixo)).toBe(chaveEsperada)
+  })
+
+  it('ausente (null/undefined) → lança FocusAccessKeyError, nunca persiste null silenciosamente disfarçado de sucesso', () => {
+    expect(() => extractFocusAccessKey(null)).toThrow(FocusAccessKeyError)
+    expect(() => extractFocusAccessKey(undefined)).toThrow(FocusAccessKeyError)
+  })
+
+  it('comprimento errado mesmo após remover prefixo → lança com mensagem diagnóstica clara (nunca trunca)', () => {
+    expect(() => extractFocusAccessKey('NFe123')).toThrow(FocusAccessKeyError)
+    try {
+      extractFocusAccessKey('NFe123')
+      expect.unreachable()
+    } catch (err) {
+      expect(err).toBeInstanceOf(FocusAccessKeyError)
+      expect((err as Error).message).toMatch(/44 dígitos/)
+      expect((err as Error).message).toMatch(/nada foi persistido/)
+    }
+  })
+
+  it('contém caractere não-numérico após normalizar → lança (nunca aceita "quase válido")', () => {
+    expect(() => extractFocusAccessKey('NFe' + '1'.repeat(43) + 'X')).toThrow(FocusAccessKeyError)
+  })
+})
+
+describe('submitNfceHomologacao — chave de acesso com prefixo "NFe" da Focus (achado real, venda 626 tentativa 3)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('resposta REALISTA de NFC-e autorizada (mesmo formato do exemplo oficial "NFCeAutorizada") — path de EMISSÃO DIRETA (issueFocusNfce) persiste number/series/access_key(44, sem prefixo)/authorization_protocol/xml_path/danfe_path/authorized_at', async () => {
+    const fake = setupFake()
+    mockHappyPathDependencies()
+    vi.spyOn(httpClient, 'issueFocusNfce').mockResolvedValue({
+      cnpj_emitente: '12345678000123',
+      ref: buildProviderRef(COMPANY_ID, SALE_ID, 'nfce'),
+      status: 'autorizado',
+      status_sefaz: '100',
+      mensagem_sefaz: 'Autorizado o uso da NFC-e',
+      chave_nfe: 'NFe41190612345678000123650010000000121743484310',
+      numero: '12',
+      serie: '1',
+      numero_protocolo: '141190000123456',
+      caminho_xml_nota_fiscal: '/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml',
+      caminho_danfe: '/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html',
+      qrcode_url: 'http://www.fazenda.pr.gov.br/nfce/qrcode/?p=41190612345678000123650010000000121743484310|2|2|1|5E264C0E28D801197219894CDFCF2FCCC5237F08',
+    })
+
+    const before = Date.now()
+    const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('authorized')
+      expect(result.data.number).toBe('12')
+      expect(result.data.series).toBe('1')
+      expect(result.data.accessKey).toBe('41190612345678000123650010000000121743484310')
+      expect(result.data.accessKey).toHaveLength(44)
+      expect(result.data.accessKey?.startsWith('NFe')).toBe(false)
+      expect(result.data.authorizationProtocol).toBe('141190000123456')
+      expect(result.data.xmlPath).toBe('/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml')
+      expect(result.data.danfePath).toBe('/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html')
+    }
+    // authorized_at não é exposto em SubmitNfeResult — confirmado direto na linha persistida no fake.
+    const persisted = fake.tables.fiscal_documents.find((r: any) => r.sale_id === SALE_ID && r.document_type === 'nfce')
+    expect(persisted.authorized_at).toBeTruthy()
+    expect(new Date(persisted.authorized_at).getTime()).toBeGreaterThanOrEqual(before)
+  })
+
+  it('chave_nfe malformada (nem 44 dígitos, nem prefixo "NFe" reconhecível) → NUNCA lança pro chamador; cai em status pending com mensagem diagnóstica clara, nunca o erro genérico do Postgres', async () => {
+    setupFake()
+    mockHappyPathDependencies()
+    vi.spyOn(httpClient, 'issueFocusNfce').mockResolvedValue({
+      status: 'autorizado', chave_nfe: 'algo-completamente-diferente', numero: '1', serie: '1',
+    })
+
+    const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('pending')
+      expect(result.data.statusMessage).toMatch(/chave_nfe da Focus não corresponde/)
+      expect(result.data.statusMessage).not.toMatch(/character/) // nunca o erro cru do Postgres
+      expect(result.data.accessKey).toBeNull() // nada foi persistido como chave
+    }
+  })
+})
+
+describe('consultAndUpdateNfceDocument — falha de persistência nunca vira falso "autorizado" (achado real, venda 626, item 7 da auditoria)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('Focus confirma autorizado, mas a escrita no banco falha → resultado é FALHA (nunca status=authorized), linha no banco continua como estava antes', async () => {
+    const fake = setupFake()
+    const seeded = fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfce', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'nfce'),
+      status: 'pending', submission_started_at: new Date().toISOString(),
+    })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfce').mockResolvedValue({
+      status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado',
+      chave_nfe: '4'.repeat(44), numero: '1', serie: '1',
+    })
+    // Simula a MESMA falha real (CHAR(44) overflow, ou qualquer outra
+    // falha de escrita) — antes da correção, isso era engolido em
+    // silêncio e a função devolvia 'authorized' mesmo assim.
+    fake.forceNextUpdateError('fiscal_documents', 'value too long for type character(44)')
+
+    const result = await consultAndUpdateNfceDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(false) // NUNCA um success com status='authorized' sem persistência real
+    const rowNoBanco = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(rowNoBanco.status).toBe('pending') // continua exatamente como estava — nada foi gravado
+  })
+
+  it('resposta REALISTA de NFC-e autorizada (mesmo formato do exemplo oficial "NFCeAutorizada") — path de RECONCILIAÇÃO (consultFocusNfce) persiste number/series/access_key(44, sem prefixo)/authorization_protocol/xml_path/danfe_path/authorized_at, exatamente como o path de emissão direta', async () => {
+    const fake = setupFake()
+    const seeded = fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfce', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'nfce'),
+      status: 'pending', submission_started_at: new Date().toISOString(),
+    })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfce').mockResolvedValue({
+      cnpj_emitente: '12345678000123',
+      ref: (seeded as any).provider_ref,
+      status: 'autorizado',
+      status_sefaz: '100',
+      mensagem_sefaz: 'Autorizado o uso da NFC-e',
+      chave_nfe: 'NFe41190612345678000123650010000000121743484310',
+      numero: '12',
+      serie: '1',
+      numero_protocolo: '141190000123456',
+      caminho_xml_nota_fiscal: '/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml',
+      caminho_danfe: '/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html',
+    })
+
+    const before = Date.now()
+    const result = await consultAndUpdateNfceDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.status).toBe('authorized')
+      expect(result.data.number).toBe('12')
+      expect(result.data.series).toBe('1')
+      expect(result.data.accessKey).toBe('41190612345678000123650010000000121743484310')
+      expect(result.data.accessKey).toHaveLength(44)
+      expect(result.data.accessKey?.startsWith('NFe')).toBe(false)
+      expect(result.data.authorizationProtocol).toBe('141190000123456')
+      expect(result.data.xmlPath).toBe('/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml')
+      expect(result.data.danfePath).toBe('/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html')
+    }
+    const persisted = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(persisted.authorized_at).toBeTruthy()
+    expect(new Date(persisted.authorized_at).getTime()).toBeGreaterThanOrEqual(before)
+    expect(persisted.authorization_protocol).toBe('141190000123456')
   })
 })
 

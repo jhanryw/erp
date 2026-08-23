@@ -71,6 +71,7 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
   }
   let nextId = 1000
   let claimTokenSeq = 0
+  let forcedUpdateError: { table: string; message: string } | null = null
 
   function matchesFilters(row: any, filters: Array<[string, any]>) {
     return filters.every(([col, val]) => row[col] === val)
@@ -118,6 +119,20 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
       },
       then(resolve: (v: any) => void) {
         if (pendingUpdate) {
+          // Achado real (venda 626, Fase Fiscal 4H — item 7 da auditoria):
+          // `applyFocusNfceResponse` nunca checava `error` de `.update()` —
+          // uma falha de escrita real (ex.: CHAR(44) overflow de
+          // access_key) era engolida em silêncio, e a função devolvia
+          // `domainStatus='authorized'` mesmo sem NADA persistido. Este
+          // seam de teste simula exatamente essa falha de escrita (sem
+          // depender de um Postgres real com constraint de coluna) pra
+          // provar que o chamador agora propaga o erro em vez de mentir.
+          if (forcedUpdateError && forcedUpdateError.table === table) {
+            const err = forcedUpdateError
+            forcedUpdateError = null
+            resolve({ error: { message: err.message }, data: null })
+            return
+          }
           const rows = applyFilters()
           rows.forEach((r) => Object.assign(r, pendingUpdate))
           resolve({ error: null, data: rows })
@@ -327,6 +342,10 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
       const full = { id: nextId++, created_at: new Date(nextId).toISOString(), ...defaultFiscalDocumentFields('fiscal_documents'), ...row }
       tables.fiscal_documents.push(full)
       return full
+    },
+    /** Faz a PRÓXIMA chamada `.update()` nesta tabela resolver com `{error}` em vez de escrever — consumido uma única vez. */
+    forceNextUpdateError(table: string, message: string) {
+      forcedUpdateError = { table, message }
     },
   }
 }

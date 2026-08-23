@@ -88,6 +88,47 @@ function mapFocusNfceStatus(status: FocusNfceConsultaResponse['status']): Fiscal
   }
 }
 
+export class FocusAccessKeyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'FocusAccessKeyError'
+  }
+}
+
+/**
+ * Normaliza `chave_nfe` da resposta Focus pra chave de acesso real (44
+ * dígitos numéricos — `fiscal_documents.access_key CHAR(44)`) — achado
+ * real (venda 626, tentativa 3: Postgres rejeitou com "value too long for
+ * type character(44)"). CONFIRMADO por leitura direta (curl bruto, não
+ * resumo de IA) do exemplo oficial `"NFCeAutorizada"` em
+ * `doc.focusnfe.com.br/reference/emitir_nfce.md`:
+ * `"chave_nfe": "NFe41190612345678000123650010000000121743484310"` — 47
+ * caracteres: prefixo literal `"NFe"` (3 chars) + 44 dígitos numéricos (o
+ * mesmo valor, sem o prefixo, reaparece em `qrcode_url` — `p=
+ * 41190612345678000123650010000000121743484310|...`). O mesmo padrão foi
+ * confirmado em `emitir_nfe.md` (exemplo `"NFeAutorizada"`) — o bug
+ * EXISTE IGUALMENTE do lado de NF-e (`submitNfeHomologacao.ts`), mas não
+ * foi corrigido aqui — fora de escopo desta correção (NFC-e only).
+ *
+ * NUNCA trunca silenciosamente pra caber em 44 chars — trunca seria pior
+ * que o erro do Postgres (uma chave de acesso ERRADA persistida com
+ * aparência de válida). Se, depois de remover um prefixo `"NFe"` literal,
+ * o resultado não for exatamente 44 dígitos numéricos, lança com uma
+ * mensagem diagnóstica clara — nunca deixa a coluna receber lixo.
+ */
+export function extractFocusAccessKey(chaveNfe: string | null | undefined): string {
+  if (!chaveNfe) {
+    throw new FocusAccessKeyError('Focus retornou status "autorizado" sem chave_nfe na resposta — não é seguro persistir a autorização sem a chave de acesso.')
+  }
+  const semPrefixo = chaveNfe.startsWith('NFe') ? chaveNfe.slice(3) : chaveNfe
+  if (!/^\d{44}$/.test(semPrefixo)) {
+    throw new FocusAccessKeyError(
+      `chave_nfe da Focus não corresponde a uma chave de acesso válida (esperado 44 dígitos numéricos após remover um eventual prefixo "NFe"; recebido "${chaveNfe}" — ${semPrefixo.length} caractere(s) depois de normalizar) — nada foi persistido.`,
+    )
+  }
+  return semPrefixo
+}
+
 async function applyFocusNfceResponse(
   admin: ReturnType<typeof createAdminClient>,
   fiscalDocumentId: number,
@@ -111,13 +152,38 @@ async function applyFocusNfceResponse(
   if (domainStatus === 'authorized') {
     patch.number = response.numero ?? null
     patch.series = response.serie ?? null
-    patch.access_key = response.chave_nfe ?? null
+    // Lança FocusAccessKeyError se malformada — nunca persiste lixo, nunca
+    // deixa o Postgres reportar um erro genérico de coluna.
+    patch.access_key = extractFocusAccessKey(response.chave_nfe)
+    // Débito técnico fechado (achado da auditoria da venda 626, item 1):
+    // `numero_protocolo` é FLAT na resposta de NFC-e (`FocusNfceConsultaResponse`,
+    // diferente de NF-e, que aninha em `protocolo_nota_fiscal.numero_protocolo`)
+    // — nunca era mapeado pra `authorization_protocol`, ficava sempre null
+    // mesmo em nota autorizada.
+    patch.authorization_protocol = response.numero_protocolo ?? null
     patch.xml_path = response.caminho_xml_nota_fiscal ?? null
     patch.danfe_path = response.caminho_danfe ?? null
     patch.authorized_at = new Date().toISOString()
   }
 
-  await (admin as any).from('fiscal_documents').update(patch).eq('id', fiscalDocumentId)
+  // ACHADO REAL (venda 626, item 7 da auditoria): esta chamada NUNCA
+  // checava `error` — uma falha de escrita (ex.: a MESMA rejeição
+  // CHAR(44) de access_key, ou qualquer outro erro de banco) era
+  // SILENCIOSAMENTE ignorada, e a função devolvia `domainStatus`
+  // ('authorized') mesmo que NADA tivesse sido gravado —
+  // `consultAndUpdateNfceDocument` repassava esse status pro chamador
+  // (rota → UI), que mostrava "Autorizada" com a persistência
+  // efetivamente FALHA. Corrigido: qualquer erro de escrita agora
+  // propaga (lança), nunca é engolido — o chamador cai no branch de
+  // erro e NUNCA afirma um status que não foi persistido.
+  const { error: updateError } = await (admin as any).from('fiscal_documents').update(patch).eq('id', fiscalDocumentId)
+  if (updateError) {
+    const context = domainStatus === 'authorized'
+      ? 'Focus confirmou autorização, mas a gravação no banco falhou — NUNCA considere esta NFC-e autorizada até uma reconciliação confirmar o estado real persistido.'
+      : `Falha ao persistir status fiscal (documento ${fiscalDocumentId}).`
+    throw new Error(`${context} Causa: ${updateError.message}`)
+  }
+
   return domainStatus
 }
 
@@ -310,6 +376,13 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
   try {
     const response = await issueFocusNfce(providerRef, payload, { token, environment })
     const status = mapFocusNfceStatus(response.status)
+    // Extraída ANTES de chamar completeFiscalEmission — se malformada,
+    // lança aqui (FocusAccessKeyError) e cai no catch abaixo, que marca
+    // 'pending' com uma mensagem diagnóstica CLARA (nunca o erro genérico
+    // do Postgres "value too long...") e preserva submission_started_at,
+    // forçando reconciliação na próxima tentativa — mesmo mecanismo de
+    // segurança já usado pra timeout/rede.
+    const accessKey = status === 'authorized' ? extractFocusAccessKey(response.chave_nfe) : null
 
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
@@ -321,7 +394,11 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
       ...(status === 'authorized' ? {
         number: response.numero ?? null,
         series: response.serie ?? null,
-        accessKey: response.chave_nfe ?? null,
+        accessKey,
+        // Débito técnico fechado (achado da auditoria da venda 626, item
+        // 1): `numero_protocolo` é FLAT na resposta de NFC-e — ver mesma
+        // nota em applyFocusNfceResponse.
+        authorizationProtocol: response.numero_protocolo ?? null,
         xmlPath: response.caminho_xml_nota_fiscal ?? null,
         danfePath: response.caminho_danfe ?? null,
         authorizedAt: new Date().toISOString(),
