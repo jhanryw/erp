@@ -201,6 +201,184 @@ describe('buildNfcePayload — grupos proibidos no modelo 65 (achado real, rejei
   })
 })
 
+/**
+ * Total fiscal reconstituído exatamente como a Focus computa (soma de
+ * `valor_bruto - valor_desconto + valor_frete + valor_outras_despesas` de
+ * cada item) — mesma fórmula da identidade exigida pelo pedido:
+ * "valor total dos itens - descontos + frete + outras despesas = total
+ * fiscal da nota".
+ */
+function reconciledNfceTotal(payload: ReturnType<typeof buildNfcePayload>): number {
+  const itemsTotal = payload.items.reduce(
+    (sum, item) => sum + item.valor_bruto - (item.valor_desconto ?? 0) + (item.valor_frete ?? 0) + (item.valor_outras_despesas ?? 0),
+    0,
+  )
+  return Math.round(itemsTotal * 100) / 100
+}
+
+function paymentsTotal(payload: ReturnType<typeof buildNfcePayload>): number {
+  return Math.round(payload.formas_pagamento.reduce((sum, f) => sum + f.valor_pagamento, 0) * 100) / 100
+}
+
+describe('buildNfcePayload — reconciliação monetária (achado real, rejeição SEFAZ 866, venda 626)', () => {
+  it('venda sem acréscimo/frete/desconto de pedido — primeiro item não ganha nenhum campo extra', () => {
+    const payload = buildNfcePayload(nfceContext())
+    expect(payload.items[0].valor_frete).toBeUndefined()
+    expect(payload.items[0].valor_outras_despesas).toBeUndefined()
+    expect(payload.items[0].valor_desconto).toBeUndefined()
+    expect(reconciledNfceTotal(payload)).toBe(paymentsTotal(payload))
+  })
+
+  it('venda com acréscimo (surcharge_amount) — vai pro primeiro item como valor_outras_despesas (vOutro), nunca vira troco nem é ignorado', () => {
+    const ctx = nfceContext({
+      saleSurchargeAmount: 10,
+      saleTotal: 89.8,
+      payments: [{ method: 'pix', netAmount: 89.8, cardBrand: null }],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.items[0].valor_outras_despesas).toBe(10)
+    expect(payload.items[0].valor_frete).toBeUndefined()
+    expect(reconciledNfceTotal(payload)).toBe(89.8)
+    expect(reconciledNfceTotal(payload)).toBe(paymentsTotal(payload))
+  })
+
+  it('venda com frete (shipping_charged) — vai pro primeiro item como valor_frete (vFrete), distinto de outras despesas', () => {
+    const ctx = nfceContext({
+      saleShippingCharged: 8,
+      saleTotal: 87.8,
+      payments: [{ method: 'pix', netAmount: 87.8, cardBrand: null }],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.items[0].valor_frete).toBe(8)
+    expect(payload.items[0].valor_outras_despesas).toBeUndefined()
+    expect(reconciledNfceTotal(payload)).toBe(87.8)
+  })
+
+  it('venda com desconto de pedido (sales.discount_amount) — SOMA ao valor_desconto do primeiro item, nunca substitui desconto por item já existente', () => {
+    const ctx = nfceContext({
+      items: [{ ...nfceContext().items[0], discountAmount: 2 }],
+      saleDiscountAmount: 5,
+      saleTotal: 72.8, // 79.8 - 2 (item) - 5 (pedido)
+      payments: [{ method: 'pix', netAmount: 72.8, cardBrand: null }],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.items[0].valor_desconto).toBe(7) // 2 (item) + 5 (pedido), nunca 5 sozinho
+    expect(reconciledNfceTotal(payload)).toBe(72.8)
+  })
+
+  it('combinação desconto + acréscimo — os dois aparecem simultaneamente no primeiro item, reconciliação continua exata', () => {
+    const ctx = nfceContext({
+      saleDiscountAmount: 5,
+      saleSurchargeAmount: 10,
+      saleTotal: 84.8, // 79.8 - 5 + 10
+      payments: [{ method: 'pix', netAmount: 84.8, cardBrand: null }],
+    })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.items[0].valor_desconto).toBe(5)
+    expect(payload.items[0].valor_outras_despesas).toBe(10)
+    expect(reconciledNfceTotal(payload)).toBe(84.8)
+    expect(reconciledNfceTotal(payload)).toBe(paymentsTotal(payload))
+  })
+
+  it('PIX exato, sem troco — pagamentos batem exatamente com o total fiscal, nenhum campo de troco existe no tipo do payload (prova estática)', () => {
+    const payload = buildNfcePayload(nfceContext())
+    expect(paymentsTotal(payload)).toBe(reconciledNfceTotal(payload))
+    // FocusNfcePayload não declara nenhum campo de troco — não há como
+    // enviar um valor de troco mesmo por engano (prova estática, não em runtime).
+    expect('valor_troco' in payload).toBe(false)
+  })
+
+  it('dinheiro com troco real — sale_payments.net_amount já vem líquido (amount_tendered - change_amount, invariante garantida pelo banco), então o troco NUNCA precisa ser declarado à Focus: o valor enviado já é o que a loja efetivamente ficou', () => {
+    // Cenário real: cliente paga R$ 100,00 em dinheiro (amount_tendered) por
+    // uma compra de R$ 79,80, recebe R$ 20,20 de troco (change_amount).
+    // `sale_payments.net_amount` (79.8) é o que chega em `FiscalPaymentContext.
+    // netAmount` — nunca o valor tendered bruto. O troco nunca vaza pro
+    // payload fiscal, então a reconciliação bate sem nenhum campo extra.
+    const ctx = nfceContext({ payments: [{ method: 'cash', netAmount: 79.8, cardBrand: null }] })
+    const payload = buildNfcePayload(ctx)
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(79.8)
+    expect(reconciledNfceTotal(payload)).toBe(79.8)
+    expect(reconciledNfceTotal(payload)).toBe(paymentsTotal(payload))
+  })
+
+  it('garantia geral: para qualquer combinação de desconto/frete/acréscimo, total fiscal reconstituído dos itens == soma de formas_pagamento (nunca diverge, nunca precisa de troco fabricado)', () => {
+    const scenarios: Array<{ saleDiscountAmount: number; saleSurchargeAmount: number; saleShippingCharged: number; total: number }> = [
+      { saleDiscountAmount: 0, saleSurchargeAmount: 0, saleShippingCharged: 0, total: 79.8 },
+      { saleDiscountAmount: 0, saleSurchargeAmount: 10, saleShippingCharged: 0, total: 89.8 },
+      { saleDiscountAmount: 0, saleSurchargeAmount: 0, saleShippingCharged: 15, total: 94.8 },
+      { saleDiscountAmount: 20, saleSurchargeAmount: 0, saleShippingCharged: 0, total: 59.8 },
+      { saleDiscountAmount: 20, saleSurchargeAmount: 10, saleShippingCharged: 15, total: 84.8 },
+    ]
+    for (const s of scenarios) {
+      const ctx = nfceContext({
+        saleDiscountAmount: s.saleDiscountAmount,
+        saleSurchargeAmount: s.saleSurchargeAmount,
+        saleShippingCharged: s.saleShippingCharged,
+        saleTotal: s.total,
+        payments: [{ method: 'pix', netAmount: s.total, cardBrand: null }],
+      })
+      const payload = buildNfcePayload(ctx)
+      expect(reconciledNfceTotal(payload)).toBe(paymentsTotal(payload))
+      expect(reconciledNfceTotal(payload)).toBe(s.total)
+    }
+  })
+})
+
+describe('buildNfcePayload — venda 626 real (regressão específica, dados confirmados no banco: subtotal=19.99, discount_amount=0, surcharge_amount=10.00, shipping_charged=0, total=29.99, PIX)', () => {
+  function venda626Context() {
+    return nfceContext({
+      items: [{
+        saleItemId: 6260001, productId: 1, variationId: 1, description: 'Item real venda 626', sku: 'SKU-626',
+        quantity: 1, unitPrice: 19.99, discountAmount: 0, unit: 'UN', ncm: '61091000', cest: null, origem: 2,
+      }],
+      saleDiscountAmount: 0,
+      saleSurchargeAmount: 10.00,
+      saleShippingCharged: 0,
+      saleTotal: 29.99,
+      payments: [{ method: 'pix', netAmount: 29.99, cardBrand: null }],
+    })
+  }
+
+  it('produz exatamente o payload esperado: item com valor_bruto=19.99 e valor_outras_despesas=10.00, forma_pagamento PIX "20" com valor_pagamento=29.99', () => {
+    const payload = buildNfcePayload(venda626Context())
+
+    expect(payload.items).toHaveLength(1)
+    expect(payload.items[0].valor_bruto).toBe(19.99)
+    expect(payload.items[0].valor_outras_despesas).toBe(10.00)
+    // shipping_charged=0 e discount_amount=0 reais desta venda — nenhum
+    // campo artificial deve aparecer.
+    expect(payload.items[0].valor_frete).toBeUndefined()
+    expect(payload.items[0].valor_desconto).toBeUndefined()
+
+    expect(payload.formas_pagamento).toHaveLength(1)
+    expect(payload.formas_pagamento[0].forma_pagamento).toBe('20')
+    expect(payload.formas_pagamento[0].valor_pagamento).toBe(29.99)
+
+    // Nenhum grupo IPI (regressão da correção anterior, SEFAZ 742) — continua valendo aqui.
+    expect((payload.items[0] as any).ipi_situacao_tributaria).toBeUndefined()
+  })
+
+  it('reconciliação exata: produtos 19.99 + outras despesas 10.00 = total fiscal 29.99 = pagamentos 29.99, troco 0.00', () => {
+    const payload = buildNfcePayload(venda626Context())
+
+    const produtos = payload.items.reduce((sum, i) => sum + i.valor_bruto, 0)
+    const desconto = payload.items.reduce((sum, i) => sum + (i.valor_desconto ?? 0), 0)
+    const frete = payload.items.reduce((sum, i) => sum + (i.valor_frete ?? 0), 0)
+    const outrasDespesas = payload.items.reduce((sum, i) => sum + (i.valor_outras_despesas ?? 0), 0)
+    const totalFiscal = Math.round((produtos - desconto + frete + outrasDespesas) * 100) / 100
+    const pagamentos = payload.formas_pagamento.reduce((sum, f) => sum + f.valor_pagamento, 0)
+    const troco = 0 // nenhum campo de troco existe no payload — nunca fabricado
+
+    expect(produtos).toBe(19.99)
+    expect(desconto).toBe(0)
+    expect(frete).toBe(0)
+    expect(outrasDespesas).toBe(10.00)
+    expect(totalFiscal).toBe(29.99)
+    expect(pagamentos).toBe(29.99)
+    expect(pagamentos - troco).toBe(totalFiscal)
+  })
+})
+
 describe('buildNfcePayload — determinismo (puro, sem I/O)', () => {
   it('mesma entrada → mesma saída (exceto data_emissao, que varia com o relógio)', () => {
     const ctx = nfceContext()

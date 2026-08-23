@@ -21,6 +21,9 @@ export function baseFiscalContext(overrides: Partial<FiscalDocumentContext> = {}
     environment: 'homologacao',
     saleStatus: 'paid',
     saleTotal: 79.8, // 2 × 39.90 (item único do fixture) — bate com o pagamento abaixo
+    saleDiscountAmount: 0,
+    saleSurchargeAmount: 0,
+    saleShippingCharged: 0,
     emitente: {
       cnpj: '11222333000181',
       razaoSocial: 'Empresa Teste Fiscal LTDA',

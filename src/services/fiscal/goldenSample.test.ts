@@ -54,6 +54,9 @@ function goldenSample1(): FiscalDocumentContext {
     environment: 'homologacao',
     saleStatus: 'paid',
     saleTotal: 170.98, // vNF real do XML
+    saleDiscountAmount: 0,
+    saleSurchargeAmount: 0,
+    saleShippingCharged: 0,
     emitente: EMITENTE_REAL,
     destinatario: {
       nome: 'Cliente Golden Sample 1 — ofuscado',
@@ -93,6 +96,9 @@ function goldenSample2(): FiscalDocumentContext {
     environment: 'homologacao',
     saleStatus: 'paid',
     saleTotal: 156.72, // vNF real do XML
+    saleDiscountAmount: 0,
+    saleSurchargeAmount: 0,
+    saleShippingCharged: 0,
     emitente: EMITENTE_REAL,
     destinatario: {
       nome: 'Cliente Golden Sample 2 — ofuscado',

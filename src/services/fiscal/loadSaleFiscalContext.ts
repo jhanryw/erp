@@ -67,10 +67,10 @@ export async function loadSaleFiscalContext({
 
   const { data: sale, error: saleError } = await (admin as any)
     .from('sales')
-    .select('id, company_id, customer_id, status, total')
+    .select('id, company_id, customer_id, status, total, discount_amount, surcharge_amount, shipping_charged')
     .eq('id', saleId)
     .eq('company_id', companyId)
-    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number; status: string; total: number } | null; error: { message: string } | null }
+    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number; status: string; total: number; discount_amount: number | null; surcharge_amount: number | null; shipping_charged: number | null } | null; error: { message: string } | null }
 
   if (saleError) throw new FiscalContextError(`Falha ao carregar venda ${saleId}: ${saleError.message}`)
   if (!sale) throw new FiscalContextError(`Venda ${saleId} não encontrada nesta empresa.`)
@@ -150,6 +150,9 @@ export async function loadSaleFiscalContext({
     environment,
     saleStatus: sale.status,
     saleTotal: Number(sale.total),
+    saleDiscountAmount: Number(sale.discount_amount ?? 0),
+    saleSurchargeAmount: Number(sale.surcharge_amount ?? 0),
+    saleShippingCharged: Number(sale.shipping_charged ?? 0),
     emitente: {
       cnpj: settings?.cnpj ?? null,
       razaoSocial: settings?.razao_social ?? null,

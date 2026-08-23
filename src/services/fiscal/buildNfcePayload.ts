@@ -63,6 +63,43 @@ function round2(value: number): number {
  */
 export const NFCE_CFOP_INTERNO = '5102'
 
+/**
+ * Propaga os ajustes de NÍVEL DO PEDIDO (`sales.discount_amount`/
+ * `surcharge_amount`/`shipping_charged`) pro payload — Fase Fiscal 4H,
+ * achado real (venda 626, rejeição SEFAZ 866: "ausência de troco quando
+ * valor dos pagamentos informados for maior que o total da nota").
+ *
+ * CAUSA RAIZ do 866: a Focus computa o total da nota (`valor_produtos`)
+ * somando só `valor_bruto - valor_desconto` de cada item — nunca lê
+ * `formas_pagamento`. Antes desta correção, `surcharge_amount`/
+ * `shipping_charged`/`discount_amount` do PEDIDO nunca eram propagados pro
+ * payload (não existiam nem em `FiscalDocumentContext`), então a soma dos
+ * itens ficava sistematicamente menor que o total real da venda sempre que
+ * qualquer um desses três fosse != 0 — SEFAZ via pagamento > total da nota,
+ * sem troco declarado (não havia troco real, PIX).
+ *
+ * O schema NFe/NFCe (mesmo tipo complexo `det/prod`, confirmado em
+ * `nfcePayload.types.ts`) só representa frete/outras despesas/desconto em
+ * nível de ITEM — nunca em nível de documento (confirmado por leitura
+ * direta de campos.focusnfe.com.br/nfe/NotaFiscalXML.html: vFrete/vOutro/
+ * vDesc estão todos dentro do bloco `det/prod`). Este ERP não modela qual
+ * item específico "causou" o frete/acréscimo/desconto do PEDIDO — em vez
+ * de fabricar uma distribuição proporcional sem nenhuma evidência de que é
+ * assim que a venda foi composta, o valor total de cada ajuste é atribuído
+ * inteiramente ao PRIMEIRO item (índice 0), de forma determinística e
+ * documentada. `items.length > 0` já é garantido pelo chamador antes desta
+ * função rodar.
+ */
+function applyOrderLevelAdjustments(items: FocusNfceItemPayload[], ctx: FiscalDocumentContext): void {
+  const { saleDiscountAmount: discount, saleSurchargeAmount: surcharge, saleShippingCharged: shipping } = ctx
+  if (discount === 0 && surcharge === 0 && shipping === 0) return
+
+  const first = items[0]
+  if (discount > 0) first.valor_desconto = round2((first.valor_desconto ?? 0) + discount)
+  if (surcharge > 0) first.valor_outras_despesas = round2(surcharge)
+  if (shipping > 0) first.valor_frete = round2(shipping)
+}
+
 function buildItemPayload(item: FiscalSaleItemContext, index: number, crt: Crt): FocusNfceItemPayload {
   const label = item.sku ?? `sale_item_id=${item.saleItemId}`
 
@@ -185,6 +222,8 @@ export function buildNfcePayload(ctx: FiscalDocumentContext): FocusNfcePayload {
     items: ctx.items.map((item, index) => buildItemPayload(item, index, emitenteCrt)),
     formas_pagamento: ctx.payments.map((payment) => buildFormaPagamentoPayload(payment)),
   }
+
+  applyOrderLevelAdjustments(payload.items, ctx)
 
   return payload
 }

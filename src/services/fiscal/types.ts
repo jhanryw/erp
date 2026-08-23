@@ -107,6 +107,32 @@ export interface FiscalDocumentContext {
   saleStatus: string
   /** sales.total — usado pra validar que a soma dos pagamentos bate com o total da venda (Fase Fiscal 3A). */
   saleTotal: number
+  /**
+   * `sales.discount_amount` — desconto no NÍVEL DO PEDIDO, DISTINTO do
+   * desconto por item (`FiscalSaleItemContext.discountAmount`, já
+   * capturado em `sale_items.discount_amount`). Achado real (Fase Fiscal
+   * 4H, venda 626, rejeição SEFAZ 866): nenhum builder propagava este
+   * valor pro payload, então a soma dos itens não batia com
+   * `formas_pagamento` sempre que a venda tinha acréscimo/frete/desconto
+   * de pedido. Ver `buildNfcePayload.ts` pra como isso é representado no
+   * payload real (campo `valor_desconto`, nível de item, único nível que
+   * o schema NFe/NFCe suporta).
+   */
+  saleDiscountAmount: number
+  /**
+   * `sales.surcharge_amount` — acréscimo genérico do PEDIDO (ex.: taxa de
+   * serviço/juros), SEMANTICAMENTE DISTINTO de `saleShippingCharged`
+   * (auditado no schema/RPC real — `20260627_rpc_create_sale_v4.sql`:
+   * `p_surcharge_amount`/`p_shipping_charged` são parâmetros SEPARADOS,
+   * ambos somados independentemente em `v_gross`). NUNCA presumir que um
+   * cobre o outro.
+   */
+  saleSurchargeAmount: number
+  /**
+   * `sales.shipping_charged` — frete cobrado do cliente. Ver nota de
+   * `saleSurchargeAmount` sobre a distinção real dos dois campos.
+   */
+  saleShippingCharged: number
   emitente: FiscalEmitenteContext
   destinatario: FiscalDestinatarioContext
   items: FiscalSaleItemContext[]

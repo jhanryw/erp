@@ -90,6 +90,22 @@ export interface FocusNfceItemPayload {
   valor_unitario_tributavel: number
   valor_bruto: number
   valor_desconto?: number
+  /**
+   * vFrete — frete atribuído a este item. Só existe em nível de ITEM no
+   * schema real (confirmado por leitura direta do HTML de
+   * campos.focusnfe.com.br/nfe/NotaFiscalXML.html — não há campo de frete
+   * em nível de documento). Usado por `buildNfcePayload.ts` pra propagar
+   * `sales.shipping_charged` (achado real, Fase Fiscal 4H, venda 626,
+   * SEFAZ 866).
+   */
+  valor_frete?: number
+  /**
+   * vOutro — "Valor de outras despesas acessórias" (mesma fonte acima).
+   * Único campo do schema real capaz de representar `sales.
+   * surcharge_amount` (acréscimo genérico do pedido) — NUNCA confundir
+   * com `valor_frete` (semânticas diferentes, auditado no RPC real).
+   */
+  valor_outras_despesas?: number
   codigo_ncm: string
 
   icms_situacao_tributaria: string
