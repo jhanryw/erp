@@ -49,3 +49,14 @@ export function formatShortReceiptCode(token: string): string {
   const hex = token.replace(/-/g, '').toUpperCase()
   return `${hex.slice(0, 4)}-${hex.slice(4, 8)}`
 }
+
+/**
+ * Monta a URL pública de verificação a partir de uma origem já resolvida
+ * (ver resolvePublicOrigin em page.tsx — lê o host real da requisição via
+ * next/headers, não depende só de NEXT_PUBLIC_APP_URL). Função pura,
+ * separada só pra ficar testável sem precisar de contexto de requisição do
+ * Next.js.
+ */
+export function buildVerificationUrl(origin: string, token: string): string {
+  return `${origin.replace(/\/$/, '')}/comprovante/${token}`
+}

@@ -71,3 +71,64 @@ describe('comprovante (impressão interna) — Server Component nunca passa onCl
     expect(printTriggerSource.trimStart().startsWith("'use client'")).toBe(true)
   })
 })
+
+// Regressão: o shell inteiro do ERP (Sidebar/Topbar/BottomTabBar) aparecia
+// na tela E na impressão de /vendas/[id]/comprovante porque a rota vivia
+// sob o route group (dashboard), cujo layout.tsx renderiza esse shell pra
+// TODA página filha. Corrigido movendo a rota pro route group (print),
+// isolado, com layout.tsx próprio que só repassa children.
+describe('comprovante (impressão interna) — isolado do shell do ERP', () => {
+  it('a rota vive sob o route group (print), não (dashboard)', () => {
+    // __dirname aqui é .../src/app/(print)/vendas/[id]/comprovante
+    expect(__dirname).toContain(`${join('src', 'app', '(print)', 'vendas')}`)
+    expect(__dirname).not.toContain(`${join('(dashboard)', 'vendas', '[id]', 'comprovante')}`)
+  })
+
+  it('(print)/layout.tsx existe e NÃO importa Sidebar/Topbar/BottomTabBar/UserRoleProvider', () => {
+    const printLayoutPath = join(__dirname, '..', '..', '..', 'layout.tsx')
+    const printLayoutSource = readFileSync(printLayoutPath, 'utf-8')
+    // Só o código (sem comentários) — o próprio layout.tsx documenta em
+    // prosa por que esses componentes NÃO estão aqui, o que faria uma
+    // checagem de texto ingênua contra o arquivo inteiro dar falso positivo.
+    const codeOnly = printLayoutSource
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n')
+    expect(codeOnly).not.toMatch(/Sidebar|Topbar|BottomTabBar|UserRoleProvider/)
+  })
+})
+
+describe('comprovante (impressão interna) — QR usa a origem real da requisição', () => {
+  it('resolve a URL de verificação a partir de headers() da requisição, não só de NEXT_PUBLIC_APP_URL', () => {
+    expect(SOURCE).toMatch(/from 'next\/headers'/)
+    expect(SOURCE).toMatch(/headers\(\)/)
+    expect(SOURCE).toMatch(/x-forwarded-host/)
+  })
+
+  it('NEXT_PUBLIC_APP_URL agora é só fallback secundário (usado somente quando headers() não tem host)', () => {
+    const idx = SOURCE.indexOf('NEXT_PUBLIC_APP_URL')
+    expect(idx).toBeGreaterThan(-1)
+    const before = SOURCE.slice(0, idx)
+    expect(before).toContain('x-forwarded-host')
+  })
+})
+
+describe('comprovante (impressão interna) — conteúdo do modelo aprovado', () => {
+  it('nome da loja não é mais lido de company_fiscal_settings/companies (removido do arquivo)', () => {
+    expect(SOURCE).not.toMatch(/company_fiscal_settings|nome_fantasia|razao_social/)
+  })
+
+  it('contém a seção de Trocas com o texto literal informado', () => {
+    expect(SOURCE).toMatch(/Trocas em até 7 dias mediante apresentação deste comprovante\./)
+  })
+
+  it('contém o disclaimer final em duas linhas (Comprovante não fiscal. / Não substitui NF-e\\/NFC-e.)', () => {
+    expect(SOURCE).toMatch(/Comprovante não fiscal\./)
+    expect(SOURCE).toMatch(/Não substitui NF-e\/NFC-e\./)
+  })
+
+  it('happy path do QR usa o rótulo "Código curto:"', () => {
+    expect(SOURCE).toMatch(/Código curto: \{formatShortReceiptCode/)
+  })
+})

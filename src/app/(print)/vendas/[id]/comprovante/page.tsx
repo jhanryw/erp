@@ -12,9 +12,10 @@
 
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
+import { headers } from 'next/headers'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getReceiptForSalePrint } from '@/lib/receipts/getReceiptData'
-import { generateReceiptQr, formatShortReceiptCode } from '@/lib/receipts/generateReceiptQr'
+import { generateReceiptQr, formatShortReceiptCode, buildVerificationUrl } from '@/lib/receipts/generateReceiptQr'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { PrintTrigger } from './PrintTrigger'
@@ -31,10 +32,28 @@ const PAYMENT_LABELS: Record<string, string> = {
   cashback: 'Crédito de Troca',
 }
 
-async function buildVerificationUrl(token: string): Promise<string | null> {
+/**
+ * Resolve a origem pública (protocolo+host) pra montar a URL do QR.
+ * Prioridade: cabeçalhos da REQUISIÇÃO REAL (x-forwarded-host/host,
+ * x-forwarded-proto) — funciona em qualquer ambiente sem precisar de
+ * configuração manual, e é o que estava faltando: NEXT_PUBLIC_APP_URL só
+ * existe em .env.local (desenvolvimento), nunca foi configurada no
+ * ambiente de produção, então o QR sempre caía no fallback. Cabeçalhos de
+ * requisição sempre refletem o domínio real usado pelo navegador — este
+ * app já roda atrás de proxy reverso (EasyPanel, ver comentário em
+ * src/lib/errors/log.ts), que encaminha x-forwarded-host/x-forwarded-proto
+ * normalmente. NEXT_PUBLIC_APP_URL vira só um fallback secundário, pro
+ * caso raro de o proxy não enviar esses cabeçalhos.
+ */
+function resolvePublicOrigin(): string | null {
+  const h = headers()
+  const host = h.get('x-forwarded-host') ?? h.get('host')
+  if (host) {
+    const proto = h.get('x-forwarded-proto') ?? (host.startsWith('localhost') || host.startsWith('127.0.0.1') ? 'http' : 'https')
+    return `${proto}://${host}`
+  }
   const appUrl = process.env.NEXT_PUBLIC_APP_URL
-  if (!appUrl) return null
-  return `${appUrl.replace(/\/$/, '')}/comprovante/${token}`
+  return appUrl ? appUrl.replace(/\/$/, '') : null
 }
 
 export default async function ComprovantePage({ params }: { params: { id: string } }) {
@@ -45,7 +64,8 @@ export default async function ComprovantePage({ params }: { params: { id: string
   const receipt = await getReceiptForSalePrint({ saleId, companyId: profile.company_id })
   if (!receipt) notFound()
 
-  const verificationUrl = await buildVerificationUrl(receipt.sale.receipt_token)
+  const origin = resolvePublicOrigin()
+  const verificationUrl = origin ? buildVerificationUrl(origin, receipt.sale.receipt_token) : null
   const qrSvg = verificationUrl ? await generateReceiptQr(verificationUrl, receipt.sale.id) : null
 
   return (
@@ -217,21 +237,45 @@ export default async function ComprovantePage({ params }: { params: { id: string
           (formatShortReceiptCode) — representação visual, não chave de
           autenticação, nunca substitui o token real.
         */}
-        {qrSvg && (
-          <div className="qr-wrap" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+        {qrSvg ? (
+          <>
+            <div className="qr-wrap" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+            <div className="center" style={{ margin: '1mm 0 2mm' }}>
+              <div style={{ fontSize: '8pt', color: '#333' }}>Consulte sua compra</div>
+              <div className="bold" style={{ fontSize: '10pt', letterSpacing: '1px', marginTop: '1mm' }}>
+                Código curto: {formatShortReceiptCode(receipt.sale.receipt_token)}
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="center" style={{ margin: '2mm 0' }}>
+            <div style={{ fontSize: '8pt', color: '#333' }}>Consulte sua compra com o código abaixo</div>
+            <div className="bold" style={{ fontSize: '10pt', letterSpacing: '1px', marginTop: '1mm' }}>
+              Código: {formatShortReceiptCode(receipt.sale.receipt_token)}
+            </div>
+          </div>
         )}
-        <div className="center" style={{ margin: '2mm 0' }}>
-          <div style={{ fontSize: '8pt', color: '#333' }}>
-            {qrSvg ? 'Consulte sua compra' : 'Consulte sua compra com o código abaixo'}
-          </div>
-          <div className="bold" style={{ fontSize: '10pt', letterSpacing: '1px', marginTop: '1mm' }}>
-            Código: {formatShortReceiptCode(receipt.sale.receipt_token)}
-          </div>
+
+        <div className="divider" />
+
+        {/*
+          Texto de política de troca — literal, informado explicitamente
+          pelo usuário nesta revisão (não existe configuração de política de
+          troca armazenada no ERP; não inventado aqui, é a regra de negócio
+          real repassada em texto). Se um dia existir um campo próprio pra
+          isso, este texto passa a vir de lá — hoje é fixo de propósito.
+        */}
+        <div className="bold" style={{ marginBottom: '1mm' }}>Trocas</div>
+        <div style={{ fontSize: '8.5pt', color: '#333' }}>
+          Trocas em até 7 dias mediante apresentação deste comprovante.
         </div>
 
+        <div className="divider" />
+
         <div className="disclaimer center">
-          Comprovante não fiscal — apenas controle de compra/troca.
-          Guarde para eventuais trocas.
+          Comprovante não fiscal.
+          <br />
+          Não substitui NF-e/NFC-e.
         </div>
       </div>
     </>

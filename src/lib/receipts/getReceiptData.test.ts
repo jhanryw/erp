@@ -36,8 +36,6 @@ const SALE_ROW = {
 }
 
 const BASE_TABLES: Record<string, { data: any; error: any }> = {
-  company_fiscal_settings: { data: null, error: null },
-  companies: { data: { name: 'Santtorini' }, error: null },
   sale_items: {
     data: [{ id: 501, quantity: 2, unit_price: 45, total_price: 90, product_variation_id: 9 }],
     error: null,
@@ -137,6 +135,12 @@ describe('getReceiptByToken', () => {
     setupMock()
     const result = await getReceiptByToken(VALID_TOKEN)
     expect(result?.customer).toBeNull()
+  })
+
+  it('nome da loja é sempre "Santtorini Lingerie" — fixo, não lido de company_fiscal_settings/companies', async () => {
+    setupMock()
+    const result = await getReceiptByToken(VALID_TOKEN)
+    expect(result?.store.name).toBe('Santtorini Lingerie')
   })
 
   it('quantidade já trocada reduz a elegibilidade', async () => {

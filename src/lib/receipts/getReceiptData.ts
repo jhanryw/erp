@@ -93,12 +93,6 @@ async function buildReceipt(
   includeCustomer: boolean,
 ): Promise<ReceiptData> {
   const stage2 = await Promise.all([
-    (admin as any)
-      .from('company_fiscal_settings')
-      .select('nome_fantasia, razao_social')
-      .eq('company_id', saleBase.company_id)
-      .maybeSingle(),
-    admin.from('companies').select('name').eq('id', saleBase.company_id).maybeSingle(),
     admin
       .from('sale_items')
       .select('id, quantity, unit_price, total_price, product_variation_id')
@@ -118,16 +112,12 @@ async function buildReceipt(
   ])
 
   const [
-    { data: fiscalSettings, error: fiscalSettingsError },
-    { data: company, error: companyError },
     { data: saleItems, error: saleItemsError },
     { data: payments, error: paymentsError },
     { data: exchangeItems, error: exchangeItemsError },
     { data: customer, error: customerError },
   ] = stage2 as any[]
 
-  logQueryError(fiscalSettingsError as PgErrorLike, `${ROUTE} (fiscal_settings)`, { sale_id: saleBase.id })
-  logQueryError(companyError as PgErrorLike, `${ROUTE} (company)`, { sale_id: saleBase.id })
   logQueryError(saleItemsError as PgErrorLike, `${ROUTE} (sale_items)`, { sale_id: saleBase.id })
   logQueryError(paymentsError as PgErrorLike, `${ROUTE} (sale_payments)`, { sale_id: saleBase.id })
   logQueryError(exchangeItemsError as PgErrorLike, `${ROUTE} (exchange_items)`, { sale_id: saleBase.id })
@@ -202,11 +192,14 @@ async function buildReceipt(
         }))
       : [{ method: saleBase.payment_method, amount_tendered: saleBase.total, change_amount: 0, change_method: null }]
 
-  const storeName =
-    (fiscalSettings as any)?.nome_fantasia ||
-    (fiscalSettings as any)?.razao_social ||
-    (company as any)?.name ||
-    'Santtorini'
+  // Nome comercial fixo do comprovante — deliberadamente NÃO lido de
+  // company_fiscal_settings.razao_social/nome_fantasia. Comercial e fiscal
+  // são independentes por design nesta fase: a razão social é o nome
+  // LEGAL/fiscal (usado em NF-e/NFC-e), diferente do nome de marca que o
+  // comprovante não fiscal deve exibir pro cliente. Mesmo padrão já usado
+  // em vendas/[id]/imprimir/page.tsx, que também usa um nome fixo
+  // ("SANTTORINI"), não lido do banco.
+  const storeName = 'Santtorini Lingerie'
 
   return {
     sale: {

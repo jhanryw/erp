@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import QRCode from 'qrcode'
 import { logError } from '@/lib/errors/log'
-import { generateReceiptQr, formatShortReceiptCode } from './generateReceiptQr'
+import { generateReceiptQr, formatShortReceiptCode, buildVerificationUrl } from './generateReceiptQr'
 
 vi.mock('qrcode', () => ({ default: { toString: vi.fn() } }))
 vi.mock('@/lib/errors/log', () => ({ logError: vi.fn() }))
@@ -71,6 +71,28 @@ describe('generateReceiptQr', () => {
 
     const call = (logError as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]
     expect(call.context.error_name).toBe('string')
+  })
+})
+
+describe('buildVerificationUrl', () => {
+  const TOKEN = 'a1b2c3d4-e5f6-4789-a012-3456789abcde'
+
+  it('monta a URL de verificação a partir da origem + token completo', () => {
+    expect(buildVerificationUrl('https://erp.example.com', TOKEN)).toBe(
+      `https://erp.example.com/comprovante/${TOKEN}`,
+    )
+  })
+
+  it('remove barra final da origem antes de concatenar (evita // duplicado)', () => {
+    expect(buildVerificationUrl('https://erp.example.com/', TOKEN)).toBe(
+      `https://erp.example.com/comprovante/${TOKEN}`,
+    )
+  })
+
+  it('funciona com origem http (ambiente local)', () => {
+    expect(buildVerificationUrl('http://localhost:3000', TOKEN)).toBe(
+      `http://localhost:3000/comprovante/${TOKEN}`,
+    )
   })
 })
 
