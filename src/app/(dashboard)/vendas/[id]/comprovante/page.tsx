@@ -12,9 +12,9 @@
 
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import QRCode from 'qrcode'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getReceiptForSalePrint } from '@/lib/receipts/getReceiptData'
+import { generateReceiptQr, formatShortReceiptCode } from '@/lib/receipts/generateReceiptQr'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { PrintTrigger } from './PrintTrigger'
@@ -46,9 +46,7 @@ export default async function ComprovantePage({ params }: { params: { id: string
   if (!receipt) notFound()
 
   const verificationUrl = await buildVerificationUrl(receipt.sale.receipt_token)
-  const qrSvg = verificationUrl
-    ? await QRCode.toString(verificationUrl, { type: 'svg', margin: 0, width: 130 })
-    : null
+  const qrSvg = verificationUrl ? await generateReceiptQr(verificationUrl, receipt.sale.id) : null
 
   return (
     <>
@@ -96,7 +94,6 @@ export default async function ComprovantePage({ params }: { params: { id: string
         .grand-total { font-size: 11pt; font-weight: 900; }
         .qr-wrap { display: flex; justify-content: center; margin: 3mm 0 1mm; }
         .qr-wrap svg { width: 28mm; height: 28mm; }
-        .token-fallback { font-size: 7.5pt; word-break: break-all; text-align: center; color: #333; }
         .disclaimer { font-size: 7.5pt; color: #333; margin-top: 2mm; }
 
         .screen-only {
@@ -212,15 +209,24 @@ export default async function ComprovantePage({ params }: { params: { id: string
 
         <div className="divider" />
 
-        {qrSvg ? (
+        {/*
+          O receipt_token COMPLETO nunca aparece visualmente pro cliente —
+          nem aqui nem na página pública /comprovante/[token]. Ele só vive no
+          banco, na URL interna do QR e na busca interna (getReceiptByToken).
+          O que aparece pro cliente, sempre, é só o código curto derivado
+          (formatShortReceiptCode) — representação visual, não chave de
+          autenticação, nunca substitui o token real.
+        */}
+        {qrSvg && (
           <div className="qr-wrap" dangerouslySetInnerHTML={{ __html: qrSvg }} />
-        ) : (
-          <div className="center" style={{ fontSize: '7.5pt', color: '#a00', margin: '2mm 0' }}>
-            (QR indisponível — NEXT_PUBLIC_APP_URL não configurada)
-          </div>
         )}
-        <div className="token-fallback">
-          Código: {receipt.sale.receipt_token}
+        <div className="center" style={{ margin: '2mm 0' }}>
+          <div style={{ fontSize: '8pt', color: '#333' }}>
+            {qrSvg ? 'Consulte sua compra' : 'Consulte sua compra com o código abaixo'}
+          </div>
+          <div className="bold" style={{ fontSize: '10pt', letterSpacing: '1px', marginTop: '1mm' }}>
+            Código: {formatShortReceiptCode(receipt.sale.receipt_token)}
+          </div>
         </div>
 
         <div className="disclaimer center">

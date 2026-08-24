@@ -1,42 +1,29 @@
 // Página pública de verificação de comprovante não fiscal.
 //
 // Rota pública (ver PUBLIC_PATHS em src/middleware.ts — protegida só pelo
-// token aleatório/imutável na URL, nunca por sessão). Por isso o que
-// aparece aqui é deliberadamente mínimo: existência da venda, data, itens,
-// quantidades, situação, quantidade já trocada/devolvida, quantidade ainda
-// elegível. NUNCA nome/CPF de cliente, NUNCA custo/margem, NUNCA taxa de
+// token aleatório/imutável na URL, nunca por sessão). Decisão definitiva:
+// esta página é a página do CLIENTE, sempre read-only, nunca mostra
+// nenhuma ação administrativa — mesmo quando o navegador tiver uma sessão
+// ERP autenticada aberta. O que aparece aqui é deliberadamente mínimo:
+// existência da venda, data, itens, quantidades, situação, quantidade já
+// trocada/devolvida, quantidade ainda elegível (informativo, não uma
+// ação). NUNCA nome/CPF de cliente, NUNCA custo/margem, NUNCA taxa de
 // cartão/valor líquido de pagamento — getReceiptByToken já não retorna
-// nada disso (includeCustomer=false).
+// nada disso (includeCustomer=false). NUNCA o receipt_token completo.
 //
-// "Registrar troca" só aparece para quem tem sessão ERP autenticada E
-// autorizada (mesmo mínimo de 'usuario' já exigido pela rota de troca) E
-// pertence à MESMA empresa da venda — nunca para um visitante anônimo.
+// O fluxo administrativo de troca (registrar troca de verdade) existe
+// SOMENTE dentro do ERP autenticado: /vendas/[id] → botão "Registrar
+// Troca" → /vendas/[id]/troca. Esta página nunca linka pra lá, nunca checa
+// sessão/role — não há nenhum ramo condicional de "administrador" aqui.
 
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
-import { createClient } from '@/lib/supabase/server'
-import { getUserProfile } from '@/lib/auth/getProfile'
-import { hasMinRole } from '@/types/roles'
 import { getReceiptByToken } from '@/lib/receipts/getReceiptData'
 import { SaleStatusBadge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import type { SaleStatus } from '@/types/database.types'
 
 export const dynamic = 'force-dynamic'
-
-async function canRegisterExchange(companyId: number): Promise<boolean> {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return false
-
-  const profile = await getUserProfile(user.id, user.email)
-  if (!hasMinRole(profile.role, 'usuario')) return false
-  if (profile.company_id !== companyId) return false
-
-  return true
-}
 
 export default async function ComprovanteVerificacaoPage({ params }: { params: { token: string } }) {
   const receipt = await getReceiptByToken(params.token)
@@ -46,7 +33,6 @@ export default async function ComprovanteVerificacaoPage({ params }: { params: {
 
   const hasAvailable = items.some((i) => i.available_to_return > 0)
   const canExchangeStatus = ['paid', 'delivered'].includes(sale.status)
-  const showExchangeButton = canExchangeStatus && hasAvailable && (await canRegisterExchange(sale.company_id))
 
   return (
     <div className="min-h-screen bg-bg-root flex justify-center px-4 py-8">
@@ -110,12 +96,12 @@ export default async function ComprovanteVerificacaoPage({ params }: { params: {
           </div>
         </div>
 
-        {showExchangeButton && (
-          <Link href={`/vendas/${sale.id}/troca`}>
-            <Button className="w-full">Registrar troca</Button>
-          </Link>
-        )}
-
+        {/*
+          Só informativo — situação de elegibilidade pro cliente entender se
+          a venda ainda pode ser trocada. Nenhuma ação/link aqui: registrar
+          troca de verdade é sempre dentro do ERP autenticado
+          (/vendas/[id]/troca), nunca a partir desta página pública.
+        */}
         {!canExchangeStatus && (
           <p className="text-center text-xs text-text-muted">
             Esta venda está com status &quot;{sale.status}&quot; e não está elegível para troca.
