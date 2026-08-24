@@ -37,3 +37,37 @@ describe('comprovante (impressão interna) — receipt_token nunca renderizado c
     expect(SOURCE).not.toMatch(/Código: \{receipt\.sale\.receipt_token\}/)
   })
 })
+
+// Regressão do crash real de produção (digest 655379705, em
+// vendas/[id]/imprimir — feature irmã que compartilha exatamente este
+// padrão de Server Component + botão de imprimir): "Event handlers cannot
+// be passed to Client Component props". Este arquivo (comprovante/page.tsx)
+// já nasceu correto (onClick sempre isolado em PrintButton.tsx), mas ganha
+// o mesmo guard estrutural pra nunca regredir.
+describe('comprovante (impressão interna) — Server Component nunca passa onClick', () => {
+  const PAGE_CODE_ONLY = SOURCE
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .map((line) => line.replace(/\/\/.*$/, ''))
+    .join('\n')
+
+  it('page.tsx é Server Component (sem "use client")', () => {
+    expect(SOURCE.trimStart().startsWith("'use client'")).toBe(false)
+  })
+
+  it('page.tsx não contém nenhum onClick — a interatividade fica em PrintButton/PrintTrigger', () => {
+    expect(PAGE_CODE_ONLY).not.toMatch(/onClick/)
+  })
+
+  it('usa <PrintButton /> e <PrintTrigger /> (Client Components dedicados) em vez de handler inline', () => {
+    expect(PAGE_CODE_ONLY).toMatch(/<PrintButton\s*\/>/)
+    expect(PAGE_CODE_ONLY).toMatch(/<PrintTrigger\s*\/>/)
+  })
+
+  it('PrintButton.tsx e PrintTrigger.tsx são Client Components', () => {
+    const printButtonSource = readFileSync(join(__dirname, 'PrintButton.tsx'), 'utf-8')
+    const printTriggerSource = readFileSync(join(__dirname, 'PrintTrigger.tsx'), 'utf-8')
+    expect(printButtonSource.trimStart().startsWith("'use client'")).toBe(true)
+    expect(printTriggerSource.trimStart().startsWith("'use client'")).toBe(true)
+  })
+})

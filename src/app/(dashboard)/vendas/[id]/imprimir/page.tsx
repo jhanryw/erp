@@ -2,6 +2,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import { PrintTrigger } from './PrintTrigger'
+import { PrintButton } from './PrintButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -256,9 +257,7 @@ export default async function ImprimirEtiquetaPage({ params }: { params: { id: s
 
       {/* Barra de ações (visível só na tela) */}
       <div className="screen-only">
-        <button className="btn-print" onClick={() => window.print()}>
-          🖨️ Imprimir
-        </button>
+        <PrintButton />
         <a href={`/vendas/${params.id}`} className="btn-back">
           ← Voltar para a venda
         </a>
