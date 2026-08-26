@@ -5,7 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ncmFieldSchema, cestFieldSchema, origemFieldSchema } from '@/lib/validators'
+import { ncmFieldSchema, cestFieldSchema, origemFieldSchema, wholesalePriceFieldSchema } from '@/lib/validators'
 
 import { generateParentSKU, generateSKUFromCodes } from '@/lib/sku/sku-map'
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
@@ -18,6 +18,8 @@ const variantSchema = z.object({
   size_value_id: z.number().int().positive().nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
   cost_override: z.coerce.number().min(0).nullable().optional(),
+  // Fundação varejo/atacado (2026-08-31) — espelha price_override.
+  wholesale_price_override: z.coerce.number().positive().nullable().optional(),
   initial_stock: z.coerce.number().int().min(0).default(0),
 })
 
@@ -47,6 +49,8 @@ const schema = z.object({
   cest: cestFieldSchema(),
   origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN').optional(),
+  // Fundação varejo/atacado (2026-08-31).
+  wholesale_price: wholesalePriceFieldSchema(),
 }).superRefine((data, ctx) => {
   if (!data.modelo_value_id && !data.modelo) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['modelo'], message: 'Modelo é obrigatório.' })
@@ -246,6 +250,7 @@ export async function POST(request: Request) {
             product_id:    product.id,
             cost_override: v.cost_override ?? null,
             price_override: v.price_override ?? null,
+            wholesale_price_override: v.wholesale_price_override ?? null,
             active: true,
           },
           admin,

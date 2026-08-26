@@ -15,7 +15,10 @@ import type { ServiceOutcome } from './produtos.service'
 
 export interface CustomerInput {
   name: string
-  cpf?: string
+  // Fundação varejo/atacado (2026-08-31): CPF não é mais requisito para o
+  // cadastro existir — nullable propositalmente distinto de "ausente"
+  // (undefined = não enviado no PATCH; null = limpar/nunca informado).
+  cpf?: string | null
   phone: string
   birth_date?: string | null
   city?: string | null
@@ -116,14 +119,14 @@ export async function getCustomerSnapshot(customerId: number, companyId?: number
 // ─── Operações de escrita ─────────────────────────────────────────────────────
 
 /**
- * Cria um novo cliente.
- * Retorna conflito (409) se CPF já existir.
+ * Cria um novo cliente. CPF é opcional (fundação varejo/atacado,
+ * 2026-08-31) — retorna conflito (409) se um CPF informado já existir.
  */
 export async function createCustomer(
-  input: CustomerInput & { cpf: string },
+  input: CustomerInput,
   createdBy: string,
   companyId: number | null
-): Promise<ServiceOutcome<{ id: number | string; name: string; cpf: string; phone: string }>> {
+): Promise<ServiceOutcome<{ id: number | string; name: string; cpf: string | null; phone: string }>> {
   const admin = createAdminClient() // admin client: INSERT em customers
 
   const { data, error } = await admin

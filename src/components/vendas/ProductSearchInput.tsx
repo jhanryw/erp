@@ -2,19 +2,29 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Search, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useDebounce } from '@/hooks/useDebounce'
 import { useQuery } from '@tanstack/react-query'
 import { formatCurrency } from '@/lib/utils/currency'
 import type { ProductSearchItem } from '@/app/api/produtos/buscar/route'
+import type { SaleType } from '@/lib/pricing/resolveSalePrice'
 
 export type { ProductSearchItem }
 
 interface Props {
   onSelect: (item: ProductSearchItem) => void
   disabled?: boolean
+  /**
+   * PDV atacado/varejo (2026-09-02) — modalidade da venda em andamento.
+   * Repassada ao backend (`GET /api/produtos/buscar?sale_type=`), que é o
+   * único lugar que resolve preço (nunca recalculado aqui). Default
+   * 'retail' — retrocompatível com qualquer tela que ainda não passe este
+   * prop.
+   */
+  saleType?: SaleType
 }
 
-export function ProductSearchInput({ onSelect, disabled }: Props) {
+export function ProductSearchInput({ onSelect, disabled, saleType = 'retail' }: Props) {
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
   const [cursor, setCursor] = useState(-1)
@@ -24,9 +34,9 @@ export function ProductSearchInput({ onSelect, disabled }: Props) {
   const debouncedQuery = useDebounce(query, 300)
 
   const { data, isFetching, isError } = useQuery({
-    queryKey: ['produtos-buscar', debouncedQuery],
+    queryKey: ['produtos-buscar', debouncedQuery, saleType],
     queryFn: async () => {
-      const res = await fetch(`/api/produtos/buscar?q=${encodeURIComponent(debouncedQuery)}`)
+      const res = await fetch(`/api/produtos/buscar?q=${encodeURIComponent(debouncedQuery)}&sale_type=${saleType}`)
       if (!res.ok) throw new Error('Erro ao buscar produtos')
       const json = await res.json()
       return json.items as ProductSearchItem[]
@@ -49,6 +59,16 @@ export function ProductSearchInput({ onSelect, disabled }: Props) {
 
   const handleSelect = useCallback(
     (item: ProductSearchItem) => {
+      // PDV atacado/varejo (2026-09-02) — nunca cai silenciosamente pro
+      // preço de varejo: produto sem preço de atacado cadastrado é
+      // bloqueado aqui, com mensagem clara, mesmo que o vendedor tente
+      // selecioná-lo (requisito 6 do pedido).
+      if (item.missing_wholesale_price) {
+        toast.error('Preço de atacado não cadastrado', {
+          description: `"${item.product_name}" não tem preço de atacado definido — cadastre em Produtos antes de vender no atacado.`,
+        })
+        return
+      }
       onSelect(item)
       setQuery('')
       setOpen(false)
@@ -129,6 +149,7 @@ export function ProductSearchInput({ onSelect, disabled }: Props) {
                 type="button"
                 onMouseDown={() => handleSelect(item)}
                 className={`w-full text-left px-4 py-2.5 flex items-center justify-between gap-3 transition-colors
+                  ${item.missing_wholesale_price ? 'opacity-60' : ''}
                   ${i === cursor ? 'bg-brand/10 text-brand' : 'hover:bg-bg-overlay text-text-primary'}`}
               >
                 <div className="min-w-0">
@@ -140,7 +161,11 @@ export function ProductSearchInput({ onSelect, disabled }: Props) {
                   </p>
                 </div>
                 <div className="shrink-0 text-right">
-                  <p className="text-sm font-semibold">{formatCurrency(item.price)}</p>
+                  {item.missing_wholesale_price ? (
+                    <p className="text-xs font-medium text-warning">Atacado não cadastrado</p>
+                  ) : (
+                    <p className="text-sm font-semibold">{formatCurrency(item.price as number)}</p>
+                  )}
                   <p className="text-xs text-text-muted">{item.stock} em estoque</p>
                 </div>
               </button>

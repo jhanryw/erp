@@ -15,6 +15,40 @@ export type ImportRow = {
   custo?: number | string
   estoque_inicial?: number | string
   ativo?: string | boolean
+  /** Fundação varejo/atacado (2026-08-31) — preço de atacado, mesma granularidade de `preco` (produto-pai, com override por variante quando diverge). */
+  preco_atacado?: number | string
+  /** NCM (8 dígitos) — campo fiscal já existente em products.ncm, agora importável em lote. */
+  ncm?: string
+  /** Origem fiscal ICMS (0-8) — products.origem. NUNCA confundir com o campo `origem` acima (fabricação própria/terceiro). */
+  origem_fiscal?: number | string
+  /** CST — reservado/informativo (ver products.cst), não confundir com CSOSN. */
+  cst?: string
+  /**
+   * Conclusão da fundação varejo/atacado (2026-09-01) — identificador de
+   * UPDATE. Quando presente (não vazio), a linha inteira é tratada como
+   * atualização de um produto/variação JÁ EXISTENTE (por
+   * product_variations.sku_variation — o único identificador real do
+   * catálogo, nunca products.sku, que não é único) e os campos
+   * tipo/modelo/ano/categoria/fornecedor/cor/tamanho/estoque_inicial/ativo
+   * são ignorados (não fazem sentido pra update, que não recria a
+   * identidade do produto). Quando ausente/vazio, a linha continua sendo
+   * CREATE, comportamento idêntico ao de sempre.
+   */
+  sku?: string
+}
+
+/** Uma linha de ATUALIZAÇÃO de produto/variação existente por SKU — só
+ * chaves de campos EFETIVAMENTE preenchidos no CSV existem no objeto
+ * (célula vazia = chave ausente, nunca `null`) — é isso que garante que o
+ * update funcione como PATCH (célula vazia nunca apaga valor existente). */
+export type ParsedProductUpdate = {
+  client_index: number
+  sku: string
+  price_override?: number
+  wholesale_price_override?: number
+  ncm?: string
+  origem?: number
+  cst?: string
 }
 
 export type ParsedProduct = {
@@ -28,6 +62,11 @@ export type ParsedProduct = {
   base_cost: number
   base_price: number
   active: boolean
+  /** Fundação varejo/atacado (2026-08-31) — undefined = não informado no CSV (produto fica sem preço de atacado, não é erro). */
+  wholesale_price?: number
+  ncm?: string
+  origem_fiscal?: number
+  cst?: string
   variants: {
     sku_variation: string
     color_value_id?: number
@@ -36,6 +75,7 @@ export type ParsedProduct = {
     size_name?: string
     price_override?: number
     cost_override?: number
+    wholesale_price_override?: number
     initial_stock: number
   }[]
 }
@@ -66,6 +106,7 @@ export type DbData = {
 export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
   const newIssues: ErrorWarning[] = []
   const productMap = new Map<string, ParsedProduct>()
+  const parsedUpdates: ParsedProductUpdate[] = []
 
   // Build a set of existing ERP product keys for fast lookup
   const existingKeys = new Set(
@@ -75,9 +116,76 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
   )
   // Track which products in this CSV already triggered the "exists in ERP" error
   const alreadyReportedErpConflict = new Set<string>()
+  // SKU duplicado dentro do PRÓPRIO CSV (entre linhas de update) — aviso
+  // cedo na prévia. NÃO bloqueia o envio (não é 'error'): o servidor
+  // (rpc_update_products_by_sku_batch) já detecta e reporta isso como erro
+  // por linha no resultado final — é a fonte de verdade, este é só um
+  // heads-up antecipado pro usuário.
+  const seenUpdateSkus = new Set<string>()
 
   rawRows.forEach((row, index) => {
     const rowNum = index + 2 // row 1 is the header
+
+    // ── Conclusão da fundação varejo/atacado (2026-09-01) — linha de UPDATE ──
+    // SKU preenchido = atualizar produto/variação existente, nunca criar.
+    // Bypassa inteiramente a resolução de tipo/modelo/categoria/cor/tamanho
+    // (irrelevantes pra update — não recriamos identidade de produto).
+    //
+    // Validação aqui é só PRÉVIA (vira 'warning', nunca bloqueia o botão
+    // Importar) — o servidor é a fonte de verdade e reporta erro por linha
+    // no resultado final ("atomicidade por linha" real). Um campo com valor
+    // que não parseia como número válido NUNCA é enviado como chave (evita
+    // o risco real de Number('abc') virar NaN → JSON.stringify(NaN) ===
+    // 'null' → chave presente com valor null no JSONB → apagaria um campo
+    // que na verdade só estava malformado, violando a regra de "célula
+    // vazia nunca apaga" para um caso que não é realmente vazio).
+    const skuRaw = String(row.sku || '').trim()
+    if (skuRaw) {
+      if (seenUpdateSkus.has(skuRaw)) {
+        newIssues.push({ row: rowNum, message: `SKU '${skuRaw}' duplicado dentro do CSV — apenas a primeira ocorrência será considerada, as demais serão reportadas como erro`, type: 'warning' })
+      }
+      seenUpdateSkus.add(skuRaw)
+
+      const update: ParsedProductUpdate = { client_index: parsedUpdates.length, sku: skuRaw }
+
+      if (row.preco != null && String(row.preco).trim() !== '') {
+        const v = Number(row.preco)
+        if (isNaN(v) || v <= 0) {
+          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': preço de varejo inválido (deve ser maior que zero) — não será atualizado`, type: 'warning' })
+        } else {
+          update.price_override = v
+        }
+      }
+      if (row.preco_atacado != null && String(row.preco_atacado).trim() !== '') {
+        const v = Number(row.preco_atacado)
+        if (isNaN(v) || v <= 0) {
+          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': preço de atacado inválido (deve ser maior que zero) — não será atualizado`, type: 'warning' })
+        } else {
+          update.wholesale_price_override = v
+        }
+      }
+      const ncmVal = String(row.ncm || '').trim()
+      if (ncmVal) {
+        if (!/^\d{8}$/.test(ncmVal)) {
+          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': NCM inválido (esperado exatamente 8 dígitos) — não será atualizado`, type: 'warning' })
+        } else {
+          update.ncm = ncmVal
+        }
+      }
+      if (row.origem_fiscal != null && String(row.origem_fiscal).trim() !== '') {
+        const v = Number(row.origem_fiscal)
+        if (isNaN(v) || v < 0 || v > 8 || !Number.isInteger(v)) {
+          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': origem fiscal inválida (esperado inteiro de 0 a 8) — não será atualizada`, type: 'warning' })
+        } else {
+          update.origem = v
+        }
+      }
+      const cstVal = String(row.cst || '').trim()
+      if (cstVal) update.cst = cstVal
+
+      parsedUpdates.push(update)
+      return
+    }
 
     const nome_produto = String(row.nome_produto || row.nome || '')
     const tipo         = String(row.tipo    || '')
@@ -92,6 +200,18 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     const pCusto       = Number(row.custo)
     const estoque      = Number(row.estoque_inicial || 0)
     const ativo        = String(row.ativo).toLowerCase() === 'false' ? false : true
+
+    // Fundação varejo/atacado (2026-08-31) — todos opcionais, ausência não é erro.
+    const precoAtacadoRaw = row.preco_atacado
+    const pPrecoAtacado = precoAtacadoRaw != null && String(precoAtacadoRaw).trim() !== ''
+      ? Number(precoAtacadoRaw)
+      : undefined
+    const ncmRaw = String(row.ncm || '').trim() || undefined
+    const origemFiscalRaw = row.origem_fiscal
+    const pOrigemFiscal = origemFiscalRaw != null && String(origemFiscalRaw).trim() !== ''
+      ? Number(origemFiscalRaw)
+      : undefined
+    const cstRaw = String(row.cst || '').trim() || undefined
 
     // Empty name — can't aggregate anything for this row
     if (!nome_produto.trim()) {
@@ -117,6 +237,15 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     if (isNaN(pCusto) || pCusto < 0)  newIssues.push({ row: rowNum, message: 'Custo inválido', type: 'error' })
     if (isNaN(estoque) || estoque < 0) newIssues.push({ row: rowNum, message: 'Estoque não pode ser negativo', type: 'error' })
     if (pPreco < pCusto) newIssues.push({ row: rowNum, message: 'Preço abaixo do custo (margem negativa)', type: 'warning' })
+    if (pPrecoAtacado !== undefined && (isNaN(pPrecoAtacado) || pPrecoAtacado <= 0)) {
+      newIssues.push({ row: rowNum, message: 'Preço de atacado inválido (deve ser maior que zero)', type: 'error' })
+    }
+    if (pOrigemFiscal !== undefined && (isNaN(pOrigemFiscal) || pOrigemFiscal < 0 || pOrigemFiscal > 8 || !Number.isInteger(pOrigemFiscal))) {
+      newIssues.push({ row: rowNum, message: 'Origem fiscal inválida (esperado inteiro de 0 a 8)', type: 'error' })
+    }
+    if (ncmRaw !== undefined && !/^\d{8}$/.test(ncmRaw)) {
+      newIssues.push({ row: rowNum, message: 'NCM inválido (esperado exatamente 8 dígitos)', type: 'error' })
+    }
 
     const cat = dbData.categories.find(c => c.name.toLowerCase() === categoriaStr.trim().toLowerCase())
     const category_id = cat?.id ?? 0
@@ -186,6 +315,10 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
         base_cost:  pCusto,
         base_price: pPreco,
         active: ativo,
+        wholesale_price: pPrecoAtacado,
+        ncm: ncmRaw,
+        origem_fiscal: pOrigemFiscal,
+        cst: cstRaw,
         variants: [],
       })
     }
@@ -206,6 +339,8 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
         size_value_id,
         cost_override:  pCusto !== product.base_cost  ? pCusto  : undefined,
         price_override: pPreco !== product.base_price ? pPreco  : undefined,
+        wholesale_price_override:
+          pPrecoAtacado !== undefined && pPrecoAtacado !== product.wholesale_price ? pPrecoAtacado : undefined,
         initial_stock: estoque,
       })
     }
@@ -222,6 +357,8 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
 
   return {
     parsedProducts: Array.from(productMap.values()),
+    /** Conclusão da fundação varejo/atacado (2026-09-01) — linhas com SKU preenchido (update por SKU existente). */
+    parsedUpdates,
     issues: newIssues,
     hasErrors,
   }

@@ -326,6 +326,29 @@ describe('buildNfePayload — indicador_inscricao_estadual_destinatario (arquite
     })
     expect(buildNfePayload(ctx).indicador_inscricao_estadual_destinatario).toBe(2)
   })
+
+  // Fase Fiscal 6, seção 14 do pedido: indicador explícito (sale_recipients.indicador_ie)
+  // sempre vence a heurística, mesmo quando contradiz o que a heurística inferiria sozinha.
+  it('indicadorIe explícito=9 vence mesmo com CNPJ+IE preenchidos (nunca infere por presença de IE quando há indicador real)', () => {
+    const ctx = baseFiscalContext({
+      destinatario: { ...baseFiscalContext().destinatario, cpf: null, cnpj: '11222333000181', inscricaoEstadual: '123456789', indicadorIe: 9 },
+    })
+    expect(buildNfePayload(ctx).indicador_inscricao_estadual_destinatario).toBe(9)
+  })
+
+  it('indicadorIe explícito=2 vence mesmo com IE preenchida (heurística sozinha diria 1)', () => {
+    const ctx = baseFiscalContext({
+      destinatario: { ...baseFiscalContext().destinatario, cpf: null, cnpj: '11222333000181', inscricaoEstadual: '123456789', indicadorIe: 2 },
+    })
+    expect(buildNfePayload(ctx).indicador_inscricao_estadual_destinatario).toBe(2)
+  })
+
+  it('indicadorIe ausente (null) preserva a heurística legada — nenhuma regressão', () => {
+    const ctx = baseFiscalContext({
+      destinatario: { ...baseFiscalContext().destinatario, cpf: null, cnpj: '11222333000181', inscricaoEstadual: '123456789', indicadorIe: null },
+    })
+    expect(buildNfePayload(ctx).indicador_inscricao_estadual_destinatario).toBe(1)
+  })
 })
 
 describe('buildNfePayload — IBS/CBS valores calculados sempre explícitos (nunca omitidos)', () => {

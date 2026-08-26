@@ -10,6 +10,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
 import { AuthorizationModal } from '@/components/auth/AuthorizationModal'
+import type { SaleType } from '@/lib/pricing/resolveSalePrice'
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -53,11 +54,18 @@ interface Props {
   customerName:  string
   items:         ExchangeItem[]
   requiresAuth?: boolean
+  /**
+   * PDV atacado/varejo (2026-09-02) — modalidade da venda ORIGINAL, herdada
+   * pela troca (Fase 1 já garante isso no backend). Usada aqui só pra
+   * buscar/precificar as peças novas na MESMA modalidade — nenhum seletor
+   * livre que permita trocar a modalidade da venda-filha.
+   */
+  saleType: SaleType
 }
 
 // ── Componente ───────────────────────────────────────────────────────────────
 
-export function ExchangeForm({ saleId, customerId, customerName, items, requiresAuth }: Props) {
+export function ExchangeForm({ saleId, customerId, customerName, items, requiresAuth, saleType }: Props) {
   const router = useRouter()
 
   // Seção 1: Devolvendo
@@ -94,6 +102,17 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
 
   // ── Busca de produtos ─────────────────────────────────────────────────────
   function addNewItem(item: ProductSearchItem) {
+    // PDV atacado/varejo (2026-09-02) — mesma defesa de vendas/nova: a
+    // busca já bloqueia seleção sem preço de atacado, mas nunca confiar só
+    // nisso antes de gravar unit_price.
+    if (item.price == null) {
+      toast.error('Preço de atacado não cadastrado', {
+        description: `"${item.product_name}" não pode ser adicionado em atacado sem preço cadastrado.`,
+      })
+      return
+    }
+    const resolvedPrice = item.price // narrowed pra number aqui — usado abaixo em vez de item.price dentro do closure de setNewItems
+
     const variationParts = [item.cor, item.tamanho].filter(Boolean)
     const variationLabel = variationParts.length > 0 ? variationParts.join(' / ') : 'Padrão'
 
@@ -112,7 +131,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
         sku_variation:   item.sku,
         variation_label: variationLabel,
         quantity:        1,
-        unit_price:      item.price,
+        unit_price:      resolvedPrice,
         current_qty:     item.stock,
       }]
     })
@@ -283,13 +302,22 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
       {hasReturning && (
         <Card>
           <CardHeader>
-            <h2 className="text-base font-semibold">Peça que a cliente vai levar</h2>
-            <p className="text-sm text-text-muted">Opcional — deixe em branco para gerar só o crédito</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-semibold">Peça que a cliente vai levar</h2>
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                saleType === 'wholesale' ? 'bg-purple-500/15 text-purple-400' : 'bg-blue-500/15 text-blue-400'
+              }`}>
+                {saleType === 'wholesale' ? 'ATACADO' : 'VAREJO'}
+              </span>
+            </div>
+            <p className="text-sm text-text-muted">
+              Opcional — deixe em branco para gerar só o crédito. Preço segue a modalidade da venda original.
+            </p>
           </CardHeader>
           <CardContent className="space-y-4">
 
             {/* Busca */}
-            <ProductSearchInput onSelect={addNewItem} />
+            <ProductSearchInput onSelect={addNewItem} saleType={saleType} />
 
             {/* Itens selecionados */}
             {newItems.length > 0 && (
@@ -392,7 +420,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
             <div className="border-t border-border pt-2 mt-2 space-y-1.5">
               {toPay > 0.009 && (
                 <div className="flex justify-between font-semibold">
-                  <span className="text-text-primary">A cobrar ({PAYMENT_LABELS[paymentMethod]})</span>
+                  <span className="text-text-primary">A cobrar ({PAYMENT_LABELS[paymentMethod] ?? paymentMethod})</span>
                   <span className="text-warning text-base">{formatCurrency(toPay)}</span>
                 </div>
               )}

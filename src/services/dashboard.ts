@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
 import { ORIGIN_LABELS } from '@/lib/constants/origins'
+import { computeModalityComparison, type ModalityComparison } from '@/lib/analytics/modalityMetrics'
 export { ORIGIN_LABELS, ORIGIN_COLORS, ALL_ORIGINS } from '@/lib/constants/origins'
 
 export interface DashboardKpi {
@@ -61,6 +62,8 @@ export interface DashboardData {
   topProducts: TopProduct[]
   stockAlerts: StockAlert[]
   dateRange: { from: string; to: string }
+  /** Analytics Varejo/Atacado — composição discreta do faturamento do período (seção "DASHBOARD PRINCIPAL" do pedido). Reaproveita as mesmas linhas de `periodSalesRes`, nenhuma query nova. */
+  modalityBreakdown: ModalityComparison
 }
 
 // Consulta tabelas base diretamente — sem depender de materialized views
@@ -107,14 +110,17 @@ export async function getDashboardData(
       .not('status', 'in', '("cancelled","returned")')
     ,
 
-    // Vendas do período selecionado com lucro (via sale_items)
+    // Vendas do período selecionado com lucro (via sale_items).
+    // sale_type/quantity adicionados nesta fase (Analytics Varejo/Atacado)
+    // — reaproveitados por modalityBreakdown abaixo, nenhuma query nova.
     supabase
       .from('sales')
       .select(`
         id,
         sale_date,
         total,
-        sale_items (gross_profit)
+        sale_type,
+        sale_items (gross_profit, quantity)
       `)
       .eq('company_id', companyId)
       .gte('sale_date', from)
@@ -200,7 +206,8 @@ export async function getDashboardData(
     id: number
     sale_date: string
     total: number
-    sale_items: { gross_profit: number | null }[] | { gross_profit: number | null } | null
+    sale_type: string | null
+    sale_items: { gross_profit: number | null; quantity: number | null }[] | { gross_profit: number | null; quantity: number | null } | null
   }
   const periodRows    = (periodSalesRes.data ?? []) as SaleRow[]
   const periodRevenue = periodRows.reduce((s, r) => s + Number(r.total ?? 0), 0)
@@ -214,6 +221,18 @@ export async function getDashboardData(
   const grossMarginPct = periodRevenue > 0
     ? (grossProfit / periodRevenue) * 100
     : null
+
+  // Analytics Varejo/Atacado — reaproveita periodRows (mesma venda válida,
+  // mesmo período), nenhuma query adicional.
+  const modalityBreakdown = computeModalityComparison(periodRows.map((r) => {
+    const items = Array.isArray(r.sale_items) ? r.sale_items : r.sale_items ? [r.sale_items] : []
+    return {
+      saleType: r.sale_type === 'wholesale' ? 'wholesale' as const : 'retail' as const,
+      total: Number(r.total ?? 0),
+      grossProfit: items.reduce((si, i) => si + Number(i.gross_profit ?? 0), 0),
+      itemsQuantity: items.reduce((si, i) => si + Number(i.quantity ?? 0), 0),
+    }
+  }))
 
   // ── Série diária total — agrupa no JS ────────────────────────────────────
   type DailyRow = { sale_date: string; total: number }
@@ -403,5 +422,6 @@ export async function getDashboardData(
       stock_value_at_price: Number(row.stock_value_at_price ?? 0),
     })),
     dateRange: { from, to },
+    modalityBreakdown,
   }
 }

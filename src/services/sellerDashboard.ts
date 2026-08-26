@@ -1,6 +1,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
 import { ORIGIN_LABELS } from '@/lib/constants/origins'
+import { computeModalityComparison, type ModalityMetrics } from '@/lib/analytics/modalityMetrics'
 
 const PAYMENT_LABELS: Record<string, string> = {
   pix:         'PIX',
@@ -240,6 +241,9 @@ export interface SellerReportRow {
   topCategory:      string | null
   topPayment:       string | null
   topOrigin:        string | null
+  /** Analytics Varejo/Atacado — mesma fórmula de `revenue`/`grossProfit` acima, agora quebrada por modalidade. `revenue`/`grossProfit`/`avgTicket`/`grossMarginPct` continuam existindo intocados (retrocompatibilidade com quem já consome `SellerReportRow`) — `retail.revenue + wholesale.revenue` bate exatamente com `revenue`. */
+  retail:           ModalityMetrics
+  wholesale:        ModalityMetrics
 }
 
 export async function getSellerReport(
@@ -259,7 +263,10 @@ export async function getSellerReport(
     ,
     admin
       .from('sales')
-      .select('id, responsible_seller_id, total, discount_amount, payment_method, sale_origin, customer_id, status')
+      // sale_type adicionado nesta fase (Analytics Varejo/Atacado) — usado
+      // só pra quebrar revenue/grossProfit por modalidade abaixo, nenhum
+      // outro campo/regra muda.
+      .select('id, responsible_seller_id, total, discount_amount, payment_method, sale_origin, sale_type, customer_id, status')
       .eq('company_id', companyId)
       .gte('sale_date', dateFrom)
       .lte('sale_date', dateTo)
@@ -274,6 +281,7 @@ export async function getSellerReport(
     discount_amount: number
     payment_method: string | null
     sale_origin: string | null
+    sale_type: string | null
     customer_id: number | null
     status: string
   }[]
@@ -317,6 +325,18 @@ export async function getSellerReport(
   const saleSellerMap: Record<number, number | null> = {}
   for (const s of allSales) saleSellerMap[s.id] = s.responsible_seller_id
 
+  // Analytics Varejo/Atacado — gross_profit/quantity POR VENDA (não por
+  // vendedor ainda), pra alimentar computeModalityComparison por vendedor
+  // mais abaixo. itemRows já vem carregado (só vendas ativas, ver query
+  // acima) — nenhuma query nova.
+  const salePerSaleAgg: Record<number, { grossProfit: number; itemsQuantity: number }> = {}
+  for (const item of itemRows) {
+    const acc = salePerSaleAgg[item.sale_id] ?? { grossProfit: 0, itemsQuantity: 0 }
+    acc.grossProfit += Number(item.gross_profit ?? 0)
+    acc.itemsQuantity += Number(item.quantity ?? 0)
+    salePerSaleAgg[item.sale_id] = acc
+  }
+
   // ── Agrega por vendedor ───────────────────────────────────────────────────
   type SellerAgg = {
     revenue: number; orders: number; grossProfit: number; totalDiscounts: number
@@ -324,6 +344,8 @@ export async function getSellerReport(
     customers: Set<number>; payments: Record<string, number>; origins: Record<string, number>
     products: Record<number, { name: string; revenue: number; units: number }>
     categories: Record<string, number>
+    /** Analytics Varejo/Atacado — uma entrada por venda ativa, consumida por computeModalityComparison ao montar SellerReportRow. */
+    modalitySales: { saleType: 'retail' | 'wholesale'; total: number; grossProfit: number; itemsQuantity: number }[]
   }
 
   const makeAgg = (): SellerAgg => ({
@@ -331,6 +353,7 @@ export async function getSellerReport(
     discountedOrders: 0, discountSum: 0, cancellations: 0, returns: 0, exchanges: 0,
     customers: new Set(), payments: {}, origins: {},
     products: {}, categories: {},
+    modalitySales: [],
   })
 
   // key = sellerId (number) or 'none' for null
@@ -359,6 +382,14 @@ export async function getSellerReport(
     if (s.customer_id) a.customers.add(s.customer_id)
     if (s.payment_method) a.payments[s.payment_method] = (a.payments[s.payment_method] ?? 0) + 1
     if (s.sale_origin)   a.origins[s.sale_origin]     = (a.origins[s.sale_origin] ?? 0) + 1
+
+    const itemAgg = salePerSaleAgg[s.id] ?? { grossProfit: 0, itemsQuantity: 0 }
+    a.modalitySales.push({
+      saleType: s.sale_type === 'wholesale' ? 'wholesale' : 'retail',
+      total: Number(s.total ?? 0),
+      grossProfit: itemAgg.grossProfit,
+      itemsQuantity: itemAgg.itemsQuantity,
+    })
   }
 
   // Items (gross_profit + top produto/categoria)
@@ -400,6 +431,7 @@ export async function getSellerReport(
     const topProdId = Object.entries(a.products).sort((x, y) => y[1].revenue - x[1].revenue)[0]?.[0]
     const topPayRaw = topOf(a.payments)
     const topOrigRaw = topOf(a.origins)
+    const modality = computeModalityComparison(a.modalitySales)
     return {
       sellerId:       seller.id,
       sellerName:     seller.name,
@@ -419,6 +451,8 @@ export async function getSellerReport(
       topCategory:    topOf(a.categories),
       topPayment:     topPayRaw ? (PAYMENT_LABELS[topPayRaw] ?? topPayRaw) : null,
       topOrigin:      topOrigRaw ? (ORIGIN_LABELS[topOrigRaw] ?? topOrigRaw) : null,
+      retail:         modality.retail,
+      wholesale:      modality.wholesale,
     }
   })
 
@@ -428,6 +462,7 @@ export async function getSellerReport(
     const topProdId = Object.entries(noneAgg.products).sort((x, y) => y[1].revenue - x[1].revenue)[0]?.[0]
     const topPayRaw = topOf(noneAgg.payments)
     const topOrigRaw = topOf(noneAgg.origins)
+    const noneModality = computeModalityComparison(noneAgg.modalitySales)
     sellerRows.push({
       sellerId:       null,
       sellerName:     'Sem vendedor',
@@ -447,6 +482,8 @@ export async function getSellerReport(
       topCategory:    topOf(noneAgg.categories),
       topPayment:     topPayRaw ? (PAYMENT_LABELS[topPayRaw] ?? topPayRaw) : null,
       topOrigin:      topOrigRaw ? (ORIGIN_LABELS[topOrigRaw] ?? topOrigRaw) : null,
+      retail:         noneModality.retail,
+      wholesale:      noneModality.wholesale,
     })
   }
 

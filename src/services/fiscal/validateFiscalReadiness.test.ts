@@ -217,7 +217,7 @@ describe('validateNfeReadiness — itens', () => {
   it('nunca lança — mesmo com contexto totalmente vazio, devolve lista de erros', () => {
     const ctx = baseFiscalContext({
       emitente: { cnpj: null, razaoSocial: null, inscricaoEstadual: null, crt: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
-      destinatario: { nome: null, isAnonymous: false, cpf: null, cnpj: null, inscricaoEstadual: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
+      destinatario: { nome: null, isAnonymous: false, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
       items: [],
       focusIntegration: { available: false, reason: 'integration_not_found' },
     })
@@ -229,7 +229,7 @@ describe('validateNfeReadiness — itens', () => {
 describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBGE (Fase Fiscal 4)', () => {
   it('consumidor totalmente não identificado (sem nome, sem CPF, sem endereço) → nenhum erro de destinatário', () => {
     const ctx = baseFiscalContext({
-      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
+      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
     })
     const codes = validateNfceReadiness(ctx).map((e) => e.code)
     expect(codes).not.toContain('destinatario_nome_missing')
@@ -256,7 +256,7 @@ describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBG
 
   it('mesmo contexto: validateNfeReadiness bloqueia por endereço/IBGE ausente, validateNfceReadiness não', () => {
     const ctx = baseFiscalContext({
-      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
+      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
     })
     expect(validateNfeReadiness(ctx).length).toBeGreaterThan(0)
     expect(validateNfceReadiness(ctx)).toEqual([])
@@ -265,7 +265,7 @@ describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBG
   it('regras comuns (NCM/origem/unidade/pagamento/emitente) continuam bloqueando igual à NF-e', () => {
     const ctx = baseFiscalContext({
       items: [{ ...baseFiscalContext().items[0], ncm: null }],
-      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
+      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
     })
     expect(validateNfceReadiness(ctx).map((e) => e.code)).toContain('item_ncm_missing')
   })
@@ -273,7 +273,7 @@ describe('validateNfceReadiness — destinatário nunca exige nome/endereço/IBG
   it('nunca lança, mesmo com contexto totalmente vazio', () => {
     const ctx = baseFiscalContext({
       emitente: { cnpj: null, razaoSocial: null, inscricaoEstadual: null, crt: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
-      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
+      destinatario: { nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null, telefone: null, email: null, logradouro: null, numero: null, complemento: null, bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null },
       items: [],
       focusIntegration: { available: false, reason: 'integration_not_found' },
     })
@@ -294,7 +294,7 @@ describe('compatibilidade com a UI (card fiscal) — múltiplas pendências, men
   it('venda com MÚLTIPLAS pendências simultâneas (destinatário incompleto de vários campos) → cada erro tem mensagem legível, nunca igual ao código', () => {
     const ctx = baseFiscalContext({
       destinatario: {
-        nome: null, isAnonymous: false, cpf: null, cnpj: null, inscricaoEstadual: null,
+        nome: null, isAnonymous: false, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null,
         telefone: null, email: null,
         logradouro: null, numero: null, complemento: null, bairro: null,
         municipio: null, municipioIbge: null, uf: null, cep: null,

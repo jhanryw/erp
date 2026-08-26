@@ -11,6 +11,13 @@ import { sendPushNotification } from '@/lib/push/send'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { validateCPF } from '@/lib/utils/cpf'
+import { validateCNPJ } from '@/lib/utils/cnpj'
+import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
+import { upsertSaleRecipient } from '@/services/fiscal/upsertSaleRecipient'
+import { buildFiscalRecipientInput } from '@/services/fiscal/buildFiscalRecipientInput'
+import { submitNfeHomologacao } from '@/services/fiscal/submitNfeHomologacao'
+import { submitNfceHomologacao } from '@/services/fiscal/submitNfceHomologacao'
 
 // ─── Webhook v2 (pós-venda N8N v2) ──────────────────────────────────────────
 // Fire-and-forget, paralelo ao v1. Não altera webhook_log nem sendSaleWebhook.
@@ -185,6 +192,33 @@ const deliveryRecipientSchema = z.object({
   save_as_customer_address: z.boolean().default(false),
 })
 
+// ─── Destinatário fiscal (Fase Fiscal 6) ────────────────────────────────────
+// Diferente de `deliveryRecipientSchema`: TUDO opcional. Um destinatário
+// fiscal pode ser só um CPF (NFC-e de balcão, sem endereço nenhum) ou um
+// bloco PJ completo (NF-e). Quem decide o que é OBRIGATÓRIO pra emitir de
+// verdade é `validateNfeReadiness`/`validateNfceReadiness` (na tentativa de
+// emissão, depois da venda já criada) — nunca este schema, e nunca esta
+// rota bloqueia a CRIAÇÃO da venda por causa de dado fiscal incompleto
+// (seção 16 do pedido: "a venda já pode ter sido concluída... emissão fica
+// pendente").
+const fiscalRecipientSchema = z.object({
+  nome:               z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cpf:                z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cnpj:               z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  inscricao_estadual: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  indicador_ie:       z.preprocess((v) => (v === '' || v == null ? null : v), z.union([z.literal(1), z.literal(2), z.literal(9)]).nullable().optional()),
+  telefone:           z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cep:                z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  logradouro:         z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  numero:             z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  complemento:        z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  bairro:             z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  municipio:          z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  uf:                 z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  municipio_ibge:     z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  ibge_source:        z.preprocess((v) => (v === '' || v == null ? null : v), z.enum(['viacep', 'resolve_municipio_ibge', 'manual_confirmado']).nullable().optional()),
+})
+
 const paymentEntrySchema = z.object({
   method:          z.enum(['pix', 'cash', 'credit_card', 'debit_card']),
   amount_tendered: z.number().positive(),
@@ -206,6 +240,19 @@ const schema = z.object({
   payments:                z.array(paymentEntrySchema).optional(),
   delivery_mode:           z.enum(['pickup', 'delivery']).default('delivery'),
   sale_origin:             z.preprocess((v) => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other'], { required_error: 'Origem obrigatória' })),
+  // Fundação varejo/atacado (2026-08-31) — modalidade COMERCIAL da venda,
+  // distinta de sale_origin (canal de marketing). Escolhida explicitamente
+  // no PDV (Passo 0, antes de buscar produtos) — Zod aqui é a segunda
+  // camada de defesa (a RPC também rejeita qualquer valor fora de
+  // retail/wholesale): backend nunca confia só no que o navegador validou.
+  sale_type:               z.enum(['retail', 'wholesale']).default('retail'),
+  // PDV atacado/varejo (2026-09-02) — sales_channel NUNCA vem do cliente
+  // nesta rota. Esta API só tem um chamador (o PDV, confirmado por
+  // auditoria — grep de "fetch('/api/vendas'" em todo src/), então o canal
+  // é sempre 'pos', fixado no servidor logo abaixo (mesmo padrão do
+  // webhook Nuvemshop, que fixa 'nuvemshop' sem nunca ler o payload
+  // externo). Removido do schema de propósito: um campo que não existe não
+  // pode ser manipulado pelo frontend, nem por engano.
   // 'use' → aplica saldo existente, não gera novo cashback
   // 'accumulate' → não usa saldo, gera cashback normalmente
   cashback_action:         z.enum(['use', 'accumulate']).default('accumulate'),
@@ -219,6 +266,13 @@ const schema = z.object({
   discount_authorization_token_id:  z.string().uuid().optional(),
   // Fase Fiscal 5C — obrigatório quando delivery_mode === 'delivery' (ver refine abaixo).
   delivery_recipient: deliveryRecipientSchema.nullable().optional(),
+  // Fase Fiscal 6 — escolha explícita do operador no fechamento do PDV.
+  // 'none' (comprovante não fiscal apenas) é o default — nunca emite nada
+  // sem ação explícita (seção 4 do pedido). Nunca confundir com
+  // `sales_channel`: aqui é o DOCUMENTO fiscal pretendido, não o canal da
+  // venda.
+  fiscal_document_type: z.enum(['none', 'nfce', 'nfe']).default('none'),
+  fiscal_recipient:     fiscalRecipientSchema.nullable().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
   { message: 'Informe payment_method ou payments[].' }
@@ -315,6 +369,24 @@ export async function POST(request: Request) {
       }
     }
 
+    // Fase Fiscal 6 — CPF/CNPJ do destinatário fiscal, validados por
+    // dígito verificador ANTES de persistir (nunca confia no formato só
+    // porque o cliente mandou algo parecido). Dado inválido é DESCARTADO
+    // (não bloqueia a venda — seção 16 do pedido) e vira um warning na
+    // resposta, mesmo padrão já usado por `priceCheck.warnings` abaixo.
+    const fiscalRecipientWarnings: string[] = []
+    if (parsed.data.fiscal_recipient) {
+      const fr = parsed.data.fiscal_recipient
+      if (fr.cpf && !validateCPF(fr.cpf)) {
+        fiscalRecipientWarnings.push('CPF do destinatário fiscal com dígito verificador inválido — não foi salvo.')
+        fr.cpf = null
+      }
+      if (fr.cnpj && !validateCNPJ(fr.cnpj)) {
+        fiscalRecipientWarnings.push('CNPJ do destinatário fiscal com dígito verificador inválido — não foi salvo.')
+        fr.cnpj = null
+      }
+    }
+
     // Derivar payment_method do método dominante (maior net_amount) quando payments[] fornecido
     let effectivePaymentMethod = parsed.data.payment_method ?? 'pix'
     if (parsed.data.payments && parsed.data.payments.length > 0) {
@@ -338,6 +410,9 @@ export async function POST(request: Request) {
       cashSessionId:         parsed.data.cash_session_id ?? null,
       responsible_seller_id: parsed.data.responsible_seller_id,
       deliveryRecipient:     parsed.data.delivery_mode === 'delivery' ? (parsed.data.delivery_recipient ?? null) : null,
+      // PDV atacado/varejo (2026-09-02) — canal fixo do PDV, nunca lido do
+      // payload (o campo nem existe no schema Zod acima).
+      sales_channel:          'pos',
     })
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
@@ -408,9 +483,82 @@ export async function POST(request: Request) {
       })
     // Erro no shipment é não-fatal: a venda já foi criada
 
+    // ─── Fase Fiscal 6 — emissão a partir do fechamento do PDV ────────────
+    // SEMPRE depois da venda/pagamento/estoque já persistidos (seção 17 do
+    // pedido, passos 1-5 em ordem) — nada aqui pode fazer a venda falhar.
+    // `fiscal_document_type: 'none'` (default) pula este bloco inteiro:
+    // nenhuma chamada fiscal acontece sem escolha explícita do operador
+    // (seção 4 do pedido).
+    let fiscalResult: {
+      requested: 'nfce' | 'nfe'
+      status: string
+      reason: string | null
+      fiscal_document_id: number | null
+      validation_errors: { code: string; message: string }[]
+    } | null = null
+
+    if (parsed.data.fiscal_document_type !== 'none') {
+      const requested = parsed.data.fiscal_document_type
+      try {
+        const recipientInput = buildFiscalRecipientInput(parsed.data.fiscal_recipient, parsed.data.delivery_recipient)
+        if (recipientInput) {
+          const recipientResult = await upsertSaleRecipient(sale.id, user.company_id, recipientInput)
+          if (!recipientResult.ok) {
+            logError({ route: 'POST /api/vendas (fiscal recipient)', err: new Error(recipientResult.error), context: { sale_id: sale.id } })
+          }
+        }
+
+        if (requested === 'nfce') {
+          // Mesma checagem de elegibilidade que `POST /api/fiscal/nfce/
+          // emitir-homologacao` faz — NUNCA emite NFC-e pra uma venda que
+          // resolve pra NF-e/bloqueado, mesmo que o operador tenha
+          // clicado em NFC-e no PDV (seção 21 do pedido: a decisão fiscal
+          // nunca troca silenciosamente de tipo — aqui simplesmente não
+          // emite nada e explica o motivo). Calculado a partir dos MESMOS
+          // valores já usados pra criar a venda (`saleData.delivery_mode`/
+          // `saleData.sale_origin`), sem round-trip extra ao banco.
+          const resolverInput = { deliveryMode: saleData.delivery_mode, saleOrigin: saleData.sale_origin }
+          const resolvedType = resolveFiscalDocumentType(resolverInput)
+          if (resolvedType !== 'nfce') {
+            fiscalResult = {
+              requested, status: 'not_eligible',
+              reason: resolvedType === 'blocked'
+                ? describeFiscalDocumentTypeBlockReason(resolverInput)
+                : 'Esta venda não é elegível para NFC-e (modalidade de entrega/origem indica NF-e) — emita NF-e na tela da venda.',
+              fiscal_document_id: null, validation_errors: [],
+            }
+          } else {
+            const emission = await submitNfceHomologacao(sale.id, user.company_id)
+            fiscalResult = emission.ok
+              ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
+              : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] }
+          }
+        } else {
+          // NF-e não tem gate de elegibilidade prévio — mesmo comportamento
+          // da rota manual (`/api/fiscal/nfe/emitir-homologacao`), que
+          // sempre tenta e deixa `validateNfeReadiness` reportar o que
+          // faltar (ex.: destinatário incompleto — completável depois na
+          // tela da venda, seção 19 do pedido).
+          const emission = await submitNfeHomologacao(sale.id, user.company_id)
+          fiscalResult = emission.ok
+            ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
+            : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] }
+        }
+      } catch (fiscalErr) {
+        // Nunca deixa uma falha fiscal inesperada derrubar a resposta da
+        // venda — ela já foi criada com sucesso. Fica pendente, o
+        // operador tenta de novo na tela da venda.
+        logError({ route: 'POST /api/vendas (fiscal emission)', err: fiscalErr, context: { sale_id: sale.id, requested } })
+        fiscalResult = { requested, status: 'error', reason: 'Erro inesperado ao tentar emitir — tente novamente na tela da venda.', fiscal_document_id: null, validation_errors: [] }
+      }
+    }
+
     return NextResponse.json({
       sale,
-      ...(priceCheck.warnings.length > 0 ? { warnings: priceCheck.warnings } : {}),
+      ...(priceCheck.warnings.length > 0 || fiscalRecipientWarnings.length > 0
+        ? { warnings: [...priceCheck.warnings, ...fiscalRecipientWarnings] }
+        : {}),
+      ...(fiscalResult ? { fiscal: fiscalResult } : {}),
     })
   } catch (err) {
     logError({

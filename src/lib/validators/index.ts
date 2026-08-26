@@ -28,6 +28,16 @@ export function origemFieldSchema() {
   )
 }
 
+// Preço de atacado — espelha a mesma regra de base_price/price_override
+// (> 0 quando informado), nunca obrigatório. Ver
+// supabase/migrations/202608311200_wholesale_retail_schema_foundation.sql.
+export function wholesalePriceFieldSchema() {
+  return z.preprocess(
+    (v) => (v === '' || v == null ? null : Number(v)),
+    z.number().positive('Preço de atacado deve ser maior que zero').nullable().optional(),
+  )
+}
+
 // ─── Produto ─────────────────────────────────────────────────────────────────
 export const productSchema = z.object({
   name: z.string().min(2, 'Nome muito curto'),
@@ -46,6 +56,7 @@ export const productSchema = z.object({
   cest: cestFieldSchema('Formato CEST: 00.000.00'),
   origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN'),
+  wholesale_price: wholesalePriceFieldSchema(),
 })
 
 // ─── Fornecedor ───────────────────────────────────────────────────────────────
@@ -61,10 +72,18 @@ export const supplierSchema = z.object({
 
 // ─── Cliente ──────────────────────────────────────────────────────────────────
 export const customerSchema = z.object({
-  cpf: z
-    .string()
-    .transform((v) => v.replace(/\D/g, ''))
-    .refine(validateCPF, { message: 'CPF inválido' }),
+  // Fundação varejo/atacado (2026-08-31): CPF deixou de ser obrigatório
+  // para o cadastro existir — customers.cpf já era nullable no banco desde
+  // supabase/migrations/20260521_webhook_idempotency.sql, mas a validação
+  // de aplicação ainda exigia o campo. Quando informado, continua validado
+  // por dígito verificador (validateCPF) — nunca aceita CPF malformado.
+  cpf: z.preprocess(
+    (v) => (v === '' || v == null ? null : v),
+    z.string()
+      .transform((v) => v.replace(/\D/g, ''))
+      .refine(validateCPF, { message: 'CPF inválido' })
+      .nullable(),
+  ),
   name: z.string().min(3, 'Nome completo obrigatório'),
   phone: z.string().min(10, 'Telefone inválido').max(15),
   birth_date: z.string().nullable().optional(),
@@ -121,6 +140,30 @@ export const deliveryRecipientSchema = z.object({
   save_as_customer_address: z.boolean().default(false),
 })
 
+// ─── Destinatário fiscal (Fase Fiscal 6 — PDV comprovante/NFC-e/NF-e) ─────────
+// Tudo opcional de propósito — pode ser só um CPF (NFC-e de balcão) ou um
+// bloco PJ completo (NF-e). O que é obrigatório pra emitir de verdade é
+// decidido na tentativa de emissão (validateNfeReadiness/
+// validateNfceReadiness), nunca aqui — este schema nunca bloqueia o envio
+// do formulário da venda.
+export const fiscalRecipientSchema = z.object({
+  nome:               z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cpf:                z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cnpj:               z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  inscricao_estadual: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  indicador_ie:       z.preprocess((v) => (v === '' || v == null ? null : v), z.union([z.literal(1), z.literal(2), z.literal(9)]).nullable().optional()),
+  telefone:           z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  cep:                z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  logradouro:         z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  numero:             z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  complemento:        z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  bairro:             z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  municipio:          z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  uf:                 z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  municipio_ibge:     z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
+  ibge_source:        z.preprocess((v) => (v === '' || v == null ? null : v), z.enum(['viacep', 'resolve_municipio_ibge', 'manual_confirmado']).nullable().optional()),
+})
+
 // ─── Pagamento individual (novo fluxo multi-pagamento) ────────────────────────
 export const paymentEntrySchema = z.object({
   method:          z.enum(['pix', 'cash', 'credit_card', 'debit_card']),
@@ -152,6 +195,11 @@ export const saleSchema = z.object({
   payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
   payments:         z.array(paymentEntrySchema).min(1).optional(),
   delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
+  // PDV atacado/varejo (2026-09-02) — modalidade COMERCIAL da venda,
+  // escolhida explicitamente no Passo 0 (Itens), antes de buscar produtos.
+  // sales_channel NÃO é um campo deste formulário — o PDV sempre grava
+  // 'pos' no servidor, nunca escolhido pelo usuário (ver POST /api/vendas).
+  sale_type:        z.enum(['retail', 'wholesale']).default('retail'),
   sale_origin:      z.preprocess(v => (v === '' || v == null ? undefined : v), z.enum(['instagram', 'referral', 'paid_traffic', 'website', 'store', 'other'], { required_error: 'Origem obrigatória', invalid_type_error: 'Selecione uma origem válida' })),
   // 'use'      → aplica saldo existente como desconto, não gera novo cashback
   // 'accumulate' → não usa saldo, gera cashback normalmente ao fechar a venda
@@ -165,6 +213,11 @@ export const saleSchema = z.object({
   // Fase Fiscal 5C — obrigatório operacionalmente quando delivery_mode ===
   // 'delivery' (ver refine abaixo); ausente/ignorado em retirada.
   delivery_recipient: deliveryRecipientSchema.nullable().optional(),
+  // Fase Fiscal 6 — Documento fiscal escolhido no fechamento do PDV.
+  // 'none' (comprovante não fiscal) é o default — nunca emite nada sem
+  // ação explícita do operador.
+  fiscal_document_type: z.enum(['none', 'nfce', 'nfe']).default('none'),
+  fiscal_recipient:     fiscalRecipientSchema.nullable().optional(),
 }).refine(
   (d) => d.delivery_mode !== 'delivery' || d.delivery_recipient != null,
   { message: 'Endereço de entrega obrigatório para venda com entrega.', path: ['delivery_recipient'] }

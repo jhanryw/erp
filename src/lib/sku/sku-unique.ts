@@ -68,6 +68,8 @@ export interface VariationInsertPayload {
   sku_variation: string       // preenchido internamente — não usar o campo do caller
   cost_override:  number | null
   price_override: number | null
+  /** Fundação varejo/atacado — espelha price_override, NULL = usa products.wholesale_price do produto-pai. */
+  wholesale_price_override?: number | null
   active:         boolean
 }
 

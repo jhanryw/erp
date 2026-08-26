@@ -16,7 +16,7 @@ import { formatDate } from '@/lib/utils/date'
 import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
-import { DocumentoFiscalCard } from './_components/documento-fiscal-card'
+import { DocumentoFiscalCard, type InitialFiscalDocument } from './_components/documento-fiscal-card'
 import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
 import { validateCPF, maskCPF } from '@/lib/utils/cpf'
 import type { SaleStatus } from '@/types/database.types'
@@ -120,6 +120,17 @@ async function getSale(id: string) {
       .eq('original_sale_id', sale.id)
       .eq('status', 'completed')
       .order('created_at', { ascending: false }),
+    // Fase Fiscal 6, seção 18 do pedido — status real já carregado no
+    // load da página (nunca exige um clique em "verificar status" só pra
+    // ver o que já existe). Leitura pura de `fiscal_documents`, NUNCA
+    // dispara uma consulta à Focus aqui (isso continua sendo uma ação
+    // explícita do operador, "Verificar status" no card) — pega as linhas
+    // mais recentes por tipo, sem filtro de status (rascunho/pendente/
+    // autorizada/rejeitada, tudo relevante pra UI decidir o que mostrar).
+    (admin as any).from('fiscal_documents')
+      .select('id, document_type, status, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, created_at')
+      .eq('sale_id', sale.id)
+      .order('created_at', { ascending: false }),
   ]) as any[]
 
   const [
@@ -130,6 +141,7 @@ async function getSale(id: string) {
     { data: shipment, error: shipmentError },
     { data: salePayments, error: salePaymentsError },
     { data: exchanges, error: exchangesError },
+    { data: fiscalDocumentRows, error: fiscalDocumentsError },
   ] = stage2
 
   logQueryError(customerError,          `${ROUTE} (customer)`,           { sale_id: id, stage: 'customer' })
@@ -139,6 +151,17 @@ async function getSale(id: string) {
   logQueryError(shipmentError,          `${ROUTE} (shipment)`,           { sale_id: id, stage: 'shipment' })
   logQueryError(salePaymentsError,      `${ROUTE} (payments)`,           { sale_id: id, stage: 'payments' })
   logQueryError(exchangesError,         `${ROUTE} (exchanges)`,          { sale_id: id, stage: 'exchanges' })
+  logQueryError(fiscalDocumentsError,   `${ROUTE} (fiscal_documents)`,   { sale_id: id, stage: 'fiscal_documents' })
+
+  // Só a linha mais recente por tipo — `fiscal_documents` pode ter várias
+  // (draft/submission_error de tentativas anteriores, ver seção 22 do
+  // pedido: nunca duas AUTORIZADAS, mas rascunhos/erros de retry são
+  // esperados e não devem "esconder" a tentativa mais recente atrás de
+  // uma mais antiga).
+  const latestFiscalDocByType: Record<string, any> = {}
+  for (const row of (fiscalDocumentRows ?? []) as any[]) {
+    if (!latestFiscalDocByType[row.document_type]) latestFiscalDocByType[row.document_type] = row
+  }
 
   // ── Etapa 3: dependem dos resultados da etapa 2 ─────────────────────────────
   const variationIds = [...new Set((saleItems ?? []).map((i: any) => i.product_variation_id))]
@@ -232,6 +255,7 @@ async function getSale(id: string) {
     salePayments:      salePayments ?? [],
     exchanges:         exchangesEnriched,
     hasExchanges,
+    fiscalDocuments:   latestFiscalDocByType,
   }
 }
 
@@ -297,6 +321,17 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-text-primary font-mono">{sale.sale_number}</h2>
               <SaleStatusBadge status={sale.status as SaleStatus} />
+              {/* PDV atacado/varejo (2026-09-02) — sale.sale_type já vem do
+                  select('*') em getSale(), sempre a modalidade PERSISTIDA
+                  (nunca assumida como retail por default na tela). */}
+              <span className={cn(
+                'inline-flex items-center text-xs px-2 py-0.5 rounded-full font-bold tracking-wide',
+                sale.sale_type === 'wholesale'
+                  ? 'bg-purple-500/15 text-purple-400 border border-purple-500/20'
+                  : 'bg-blue-500/15 text-blue-400 border border-blue-500/20'
+              )}>
+                {sale.sale_type === 'wholesale' ? 'ATACADO' : 'VAREJO'}
+              </span>
               {sale.shipment && (
                 <span className={cn(
                   'inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium',
@@ -606,9 +641,11 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
       {profile?.role === 'admin' && (
         <DocumentoFiscalCard
           saleId={sale.id}
+          saleStatus={sale.status}
           resolvedType={resolvedFiscalDocumentType}
           blockedReason={fiscalBlockedReason}
           maskedCpf={maskedCustomerCpf}
+          initialDocuments={sale.fiscalDocuments as Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>}
         />
       )}
     </div>

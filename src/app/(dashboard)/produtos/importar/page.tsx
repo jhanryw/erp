@@ -14,7 +14,7 @@ import {
   AlertCircle, RefreshCw, CheckCircle2, XCircle,
 } from 'lucide-react'
 
-import { parseImportRows, type ImportRow, type ParsedProduct, type ErrorWarning, type DbData } from '@/lib/utils/import-parser'
+import { parseImportRows, type ImportRow, type ParsedProduct, type ParsedProductUpdate, type ErrorWarning, type DbData } from '@/lib/utils/import-parser'
 import { matchProductType, type ModeloGovernance } from '@/lib/sku/resolve-taxonomy'
 
 export default function ImportarProdutosPage() {
@@ -27,6 +27,9 @@ export default function ImportarProdutosPage() {
   const [rawRows, setRawRows]     = useState<any[]>([])
 
   const [parsedProducts, setParsedProducts] = useState<ParsedProduct[]>([])
+  // Conclusão da fundação varejo/atacado (2026-09-01) — linhas com SKU
+  // preenchido (atualização de produto/variação existente).
+  const [parsedUpdates, setParsedUpdates] = useState<ParsedProductUpdate[]>([])
   const [issues, setIssues]                 = useState<ErrorWarning[]>([])
   const [hasErrors, setHasErrors]           = useState(false)
   const [importing, setImporting]           = useState(false)
@@ -36,7 +39,10 @@ export default function ImportarProdutosPage() {
   // produtos. Um novo arquivo/nova validação gera uma chave nova.
   const [idempotencyKey, setIdempotencyKey] = useState<string | null>(null)
   const [importResult, setImportResult]     = useState<{
-    imported: number
+    created: number
+    updated: number
+    updateErrors: Array<{ client_index: number; sku: string | null; message: string }>
+    updateBlockedError?: string
     serverError?: string
   } | null>(null)
 
@@ -86,6 +92,7 @@ export default function ImportarProdutosPage() {
     if (!selected) return
     setFile(selected)
     setParsedProducts([])
+    setParsedUpdates([])
     setIssues([])
     setHasErrors(false)
     setRawRows([])
@@ -163,11 +170,12 @@ export default function ImportarProdutosPage() {
 
       if (cancelled) return
 
-      const { parsedProducts: pp, issues: iss, hasErrors: he } = parseImportRows(
+      const { parsedProducts: pp, parsedUpdates: pu, issues: iss, hasErrors: he } = parseImportRows(
         rawRows,
         { ...dbData!, modeloGovernanceByTipoSlug, modeloExplicitlyNotUsedTipoSlugs },
       )
       setParsedProducts(pp)
+      setParsedUpdates(pu)
       setIssues(iss)
       setHasErrors(he)
       setIdempotencyKey(crypto.randomUUID())
@@ -179,9 +187,9 @@ export default function ImportarProdutosPage() {
   }, [rawRows, dbData])
 
   async function handleImport() {
-    if (hasErrors || parsedProducts.length === 0) return
+    if (hasErrors || (parsedProducts.length === 0 && parsedUpdates.length === 0)) return
 
-    console.info('[IMPORT] botao clicado', { quantidade: parsedProducts.length, idempotencyKey })
+    console.info('[IMPORT] botao clicado', { criar: parsedProducts.length, atualizar: parsedUpdates.length, idempotencyKey })
 
     setImporting(true)
     setImportResult(null)
@@ -191,67 +199,64 @@ export default function ImportarProdutosPage() {
       const res  = await fetch('/api/produtos/import', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ products: parsedProducts, idempotency_key: idempotencyKey ?? undefined }),
+        body:    JSON.stringify({
+          products: parsedProducts,
+          updates:  parsedUpdates,
+          idempotency_key: idempotencyKey ?? undefined,
+        }),
       })
       const json = await res.json()
 
       console.info('[IMPORT] resposta recebida', {
-        status:             res.status,
-        ok:                 res.ok,
-        imported:           json.imported,
-        produtosRetornados: Array.isArray(json.products) ? json.products.length : null,
+        status: res.status, ok: res.ok, created: json.created, updated: json.updated,
       })
 
-      // Nunca tratar como sucesso só por causa de res.ok — a RPC pode
-      // devolver 2xx num replay idempotente ou com imported=0/inconsistente.
-      // Só é sucesso real se imported for um número positivo E vier
-      // acompanhado da lista de produtos criados, com a MESMA contagem.
-      const importedCount    = json.imported
-      const returnedProducts = json.products
-      const isConfirmedSuccess =
-        res.ok &&
-        typeof importedCount === 'number' &&
-        importedCount > 0 &&
-        Array.isArray(returnedProducts) &&
-        returnedProducts.length === importedCount
+      const created      = typeof json.created === 'number' ? json.created : 0
+      const updated       = typeof json.updated === 'number' ? json.updated : 0
+      const updateErrors: Array<{ client_index: number; sku: string | null; message: string }> = Array.isArray(json.update_errors) ? json.update_errors : []
 
-      if (isConfirmedSuccess) {
-        setImportResult({ imported: importedCount })
-        toast.success(`${importedCount} produto${importedCount !== 1 ? 's' : ''} importado${importedCount !== 1 ? 's' : ''} com sucesso!`)
+      // Nunca tratar como sucesso só por causa de res.ok — as RPCs podem
+      // devolver 2xx num replay idempotente ou com contagem inconsistente.
+      // Só é sucesso real (parcial ou total) se created/updated vierem
+      // acompanhados da lista correspondente, com a MESMA contagem.
+      const createdConfirmed = created > 0 && Array.isArray(json.created_products) && json.created_products.length === created
+      const updatedConfirmed = updated > 0 && Array.isArray(json.updated_products) && json.updated_products.length === updated
+
+      if (createdConfirmed || updatedConfirmed) {
+        setImportResult({ created, updated, updateErrors, updateBlockedError: json.update_blocked_error ?? undefined })
+        const parts: string[] = []
+        if (created > 0) parts.push(`${created} criado${created !== 1 ? 's' : ''}`)
+        if (updated > 0) parts.push(`${updated} atualizado${updated !== 1 ? 's' : ''}`)
+        if (updateErrors.length > 0) parts.push(`${updateErrors.length} erro${updateErrors.length !== 1 ? 's' : ''}`)
+        toast.success(`Importação concluída: ${parts.join(', ')}`)
         router.push('/produtos')
         router.refresh()
       } else if (res.ok) {
-        // Resposta 2xx porém sem confirmação válida de persistência —
-        // nunca mostrar como sucesso.
-        console.warn('[IMPORT] resposta ok porem sem confirmacao valida', {
-          imported: importedCount,
-          produtosRetornados: returnedProducts,
-        })
-        const errorMsg = json.error
-          ?? `O servidor respondeu sem confirmar a importação (imported=${JSON.stringify(importedCount)}).`
-        setImportResult({ imported: 0, serverError: errorMsg })
+        console.warn('[IMPORT] resposta ok porem sem confirmacao valida', { created, updated })
+        const errorMsg = json.create_error?.message ?? json.update_blocked_error
+          ?? `O servidor respondeu sem confirmar nenhuma criação/atualização.`
+        setImportResult({ created: 0, updated: 0, updateErrors, serverError: errorMsg })
         toast.error('Importação não confirmada pelo servidor', { description: errorMsg })
       } else {
-        // 400: validação backend falhou (produto criado depois da validação frontend, por ex.)
-        // 422 ou 500: erro inesperado
-        const errorMsg  = json.error ?? 'Erro desconhecido'
-        const extraList: string[] = json.validationErrors ?? []
+        // 400/422/500: nada foi criado nem atualizado
+        const errorMsg  = json.create_error?.message ?? json.update_blocked_error ?? json.error ?? 'Erro desconhecido'
+        const extraList: string[] = json.create_error?.validationErrors ?? []
         // Mostra code/details/hint do Postgres na tela (não só no console
         // do servidor) — a mensagem de erro já vem com o nome do produto e
         // a posição no lote que falhou (ver rpc_import_products_batch).
         const pgDebugLines = [
-          json.code    ? `code: ${json.code}`       : null,
-          json.details ? `details: ${json.details}` : null,
-          json.hint    ? `hint: ${json.hint}`        : null,
+          json.create_error?.code    ? `code: ${json.create_error.code}`       : null,
+          json.create_error?.details ? `details: ${json.create_error.details}` : null,
+          json.create_error?.hint    ? `hint: ${json.create_error.hint}`       : null,
         ].filter(Boolean)
         const fullMsg   = [errorMsg, ...extraList, ...pgDebugLines].join('\n')
 
-        setImportResult({ imported: 0, serverError: fullMsg })
+        setImportResult({ created: 0, updated: 0, updateErrors, serverError: fullMsg })
         toast.error('Importação bloqueada pelo servidor', { description: errorMsg })
       }
     } catch (e) {
       console.error('[IMPORT] excecao no fetch', e)
-      setImportResult({ imported: 0, serverError: 'Falha de rede ao enviar os dados.' })
+      setImportResult({ created: 0, updated: 0, updateErrors: [], serverError: 'Falha de rede ao enviar os dados.' })
       toast.error('Falha inesperada ao importar')
     } finally {
       setImporting(false)
@@ -260,7 +265,7 @@ export default function ImportarProdutosPage() {
 
   const errors   = issues.filter(i => i.type === 'error')
   const warnings = issues.filter(i => i.type === 'warning')
-  const canImport = !loading && !importing && !hasErrors && parsedProducts.length > 0
+  const canImport = !loading && !importing && !hasErrors && (parsedProducts.length > 0 || parsedUpdates.length > 0)
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -281,8 +286,15 @@ export default function ImportarProdutosPage() {
           <p className="text-sm text-text-muted text-center mb-6 max-w-md">
             Faça download do{' '}
             <a href="/template-importacao.csv" className="text-brand hover:underline">template em CSV</a>{' '}
-            para garantir que as colunas estejam corretas. Colunas: nome_produto, tipo, modelo, ano,
-            categoria, cor, tamanho, preco, custo, estoque_inicial.
+            para garantir que as colunas estejam corretas.
+            <br />
+            <strong>Criar produto:</strong> nome_produto, tipo, modelo, ano, categoria, fornecedor, origem,
+            cor, tamanho, preco, custo, estoque_inicial, ativo, preco_atacado, ncm, origem_fiscal, cst
+            (os 4 últimos são opcionais).
+            <br />
+            <strong>Atualizar produto existente:</strong> preencha a coluna <code>sku</code> com o SKU da
+            variação (não recria o produto) e informe só as colunas que quer alterar — preco, preco_atacado,
+            ncm, origem_fiscal, cst. Célula vazia nunca apaga o valor já cadastrado.
           </p>
           <input
             type="file"
@@ -381,12 +393,17 @@ export default function ImportarProdutosPage() {
                   <XCircle className="w-4 h-4" />
                   Corrija os erros acima antes de importar
                 </span>
-              ) : parsedProducts.length === 0 ? (
+              ) : parsedProducts.length === 0 && parsedUpdates.length === 0 ? (
                 <span className="text-text-muted">Nenhum produto encontrado no arquivo</span>
               ) : (
                 <span className="text-text-secondary">
-                  <strong className="text-text-primary">{parsedProducts.length}</strong>{' '}
-                  produto{parsedProducts.length !== 1 ? 's' : ''} prontos para importar
+                  {parsedProducts.length > 0 && (
+                    <><strong className="text-text-primary">{parsedProducts.length}</strong>{' '}produto{parsedProducts.length !== 1 ? 's' : ''} para criar</>
+                  )}
+                  {parsedProducts.length > 0 && parsedUpdates.length > 0 && ' · '}
+                  {parsedUpdates.length > 0 && (
+                    <><strong className="text-text-primary">{parsedUpdates.length}</strong>{' '}para atualizar</>
+                  )}
                   {warnings.length > 0 && (
                     <span className="text-warning ml-2">· {warnings.length} aviso{warnings.length !== 1 ? 's' : ''}</span>
                   )}
@@ -423,12 +440,38 @@ export default function ImportarProdutosPage() {
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-3 p-4 rounded-lg bg-success/10 border border-success/20">
-              <CheckCircle2 className="w-6 h-6 text-success shrink-0" />
-              <div>
-                <p className="font-semibold text-success text-lg">{importResult.imported} produto{importResult.imported !== 1 ? 's' : ''} importado{importResult.imported !== 1 ? 's' : ''}</p>
-                <p className="text-sm text-text-muted">Redirecionando para a lista de produtos…</p>
+            <div className="space-y-3">
+              <div className="flex items-center gap-3 p-4 rounded-lg bg-success/10 border border-success/20">
+                <CheckCircle2 className="w-6 h-6 text-success shrink-0" />
+                <div>
+                  <p className="font-semibold text-success text-lg">
+                    Importação concluída: {importResult.created} criado{importResult.created !== 1 ? 's' : ''}, {importResult.updated} atualizado{importResult.updated !== 1 ? 's' : ''}
+                    {importResult.updateErrors.length > 0 && `, ${importResult.updateErrors.length} erro${importResult.updateErrors.length !== 1 ? 's' : ''}`}
+                  </p>
+                  <p className="text-sm text-text-muted">Redirecionando para a lista de produtos…</p>
+                </div>
               </div>
+
+              {importResult.updateBlockedError && (
+                <div className="p-3 rounded-md text-sm bg-error/10 border border-error/20 text-error">
+                  Atualizações não puderam ser processadas: {importResult.updateBlockedError}
+                </div>
+              )}
+
+              {importResult.updateErrors.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-text-primary">Linhas com erro na atualização:</p>
+                  {importResult.updateErrors.map((err, i) => (
+                    <div key={i} className="p-3 rounded-md text-sm bg-error/10 border border-error/20 flex items-start gap-3">
+                      <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-error" />
+                      <div className="min-w-0">
+                        <p className="text-error">SKU: {err.sku ?? '(vazio)'}</p>
+                        <p className="text-text-secondary">{err.message}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </Card>

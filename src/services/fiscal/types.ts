@@ -37,8 +37,17 @@ export interface FiscalDestinatarioContext {
   cpf: string | null
   /** PJ — sem fonte no schema hoje (`customers` não tem CNPJ), sempre null nesta fase. Campo existe pra não travar a arquitetura quando PJ for suportado. */
   cnpj: string | null
-  /** IE do destinatário PJ — mesma lacuna de schema que `cnpj`, sempre null nesta fase. */
+  /** IE do destinatário PJ — Fase Fiscal 6: vem de `sale_recipients.inscricao_estadual` quando capturada; `null` quando não informada (PF, ou PJ sem IE). */
   inscricaoEstadual: string | null
+  /**
+   * indIEDest explícito — Fase Fiscal 6. Capturado no momento em que o
+   * operador informa os dados fiscais do destinatário (nunca inferido pelo
+   * schema/loader). `null` = sem indicador explícito — `buildNfePayload`
+   * cai na heurística legada (CNPJ+IE→1 contribuinte, CNPJ sem IE→2
+   * isento, sem CNPJ→9 não contribuinte), preservada por compatibilidade
+   * com qualquer linha `sale_recipients` anterior a esta fase.
+   */
+  indicadorIe: 1 | 2 | 9 | null
   telefone: string | null
   email: string | null
   logradouro: string | null
@@ -72,7 +81,13 @@ export interface FiscalOperationContext {
   presencaComprador: 0 | 1 | 2 | 3 | 4 | 5 | 9
   /** 0=por conta do emitente (CIF), 1=por conta do destinatário (FOB), 2=por conta de terceiros, 9=sem frete */
   modalidadeFrete: 0 | 1 | 2 | 9
-  /** indFinal — 0=não é consumidor final (revenda/insumo), 1=consumidor final. Confirmado no XML real: sempre 1 no nosso cenário (varejo direto ao consumidor). */
+  /**
+   * indFinal — 0=não é consumidor final (revenda/insumo), 1=consumidor
+   * final. Resolvido a partir do CNPJ do destinatário (ver
+   * src/lib/fiscal/consumidorFinal.ts) — DELIBERADAMENTE independente de
+   * sale_type (retail/wholesale): classificação comercial e indicador
+   * fiscal são conceitos separados (fundação varejo/atacado, 2026-08-31).
+   */
   consumidorFinal: 0 | 1
   /** indIntermed — 0=operação sem intermediador/marketplace, 1=com intermediador. Confirmado no XML real como 0 (loja própria, não marketplace). */
   indicadorIntermediador: 0 | 1

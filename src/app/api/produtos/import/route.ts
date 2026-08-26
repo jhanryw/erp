@@ -10,6 +10,7 @@ import { generateParentSKU, generateSKUFromCodes, SKU_ANO } from '@/lib/sku/sku-
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { listActiveProductTypes, loadModeloGovernanceForAllTypes, buildDynamicSkuBase } from '@/lib/sku/sku-modelo-dynamic'
 import { resolveTipoModelo, type ResolvedTipoModelo } from '@/lib/sku/resolve-taxonomy'
+import { ncmFieldSchema, origemFieldSchema, wholesalePriceFieldSchema } from '@/lib/validators'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
@@ -18,6 +19,8 @@ const variantSchema = z.object({
   size_name:      z.string().min(1).nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
   cost_override:  z.coerce.number().min(0).nullable().optional(),
+  // Fundação varejo/atacado (2026-08-31) — espelha price_override.
+  wholesale_price_override: z.coerce.number().positive().nullable().optional(),
   initial_stock:  z.coerce.number().int().min(0).default(0),
 })
 
@@ -36,11 +39,37 @@ const productSchema = z.object({
   base_cost:   z.coerce.number().min(0),
   base_price:  z.coerce.number().positive(),
   active:      z.boolean().default(true),
+  // Fundação varejo/atacado (2026-08-31) — reaproveita os mesmos
+  // validators já usados na criação/edição manual de produto
+  // (src/lib/validators/index.ts), nunca duplica a regra.
+  wholesale_price: wholesalePriceFieldSchema(),
+  ncm:             ncmFieldSchema('NCM deve ter exatamente 8 dígitos'),
+  origem_fiscal:   origemFieldSchema(),
+  cst:             z.preprocess((v) => (v === '' || v == null ? null : String(v).trim()), z.string().max(10).nullable().optional()),
   variants:    z.array(variantSchema).optional(),
 })
 
+// Conclusão da fundação varejo/atacado (2026-09-01) — linha de UPDATE por
+// SKU. Todos os campos além de client_index/sku são opcionais — a AUSÊNCIA
+// da chave (não `null`) é o que faz o servidor (_update_single_product_by_
+// sku) não tocar aquela coluna (semântica de PATCH, célula vazia nunca
+// apaga valor existente). Por isso NENHUM campo aqui tem `.nullable()` —
+// só `.optional()`: se o cliente mandar `null` explícito, o Zod rejeita
+// (mais seguro do que silenciosamente virar "não fornecido" por
+// coincidência de implementação).
+const updateSchema = z.object({
+  client_index: z.number().int(),
+  sku: z.string().min(1),
+  price_override: z.coerce.number().positive().optional(),
+  wholesale_price_override: z.coerce.number().positive().optional(),
+  ncm: ncmFieldSchema('NCM deve ter exatamente 8 dígitos').transform(v => v ?? undefined),
+  origem: origemFieldSchema().transform(v => v ?? undefined),
+  cst: z.string().max(10).optional(),
+})
+
 const importRequestSchema = z.object({
-  products:        z.array(productSchema),
+  products:        z.array(productSchema).default([]),
+  updates:         z.array(updateSchema).default([]),
   idempotency_key: z.string().min(1).max(200).optional(),
 })
 
@@ -75,23 +104,121 @@ export async function POST(request: Request) {
     console.warn('[IMPORT] bloqueado', 'validacao zod falhou', parsedBody.error.flatten())
     return NextResponse.json({ error: 'Dados inválidos.', details: parsedBody.error.flatten() }, { status: 422 })
   }
-  const { products: items, idempotency_key: idempotencyKey } = parsedBody.data
+  const { products: items, updates, idempotency_key: idempotencyKey } = parsedBody.data
 
-  if (items.length === 0) {
-    console.warn('[IMPORT] bloqueado', 'nenhum produto no payload (items.length === 0)')
-    return NextResponse.json({ error: 'Nenhum produto para importar.' }, { status: 400 })
+  if (items.length === 0 && updates.length === 0) {
+    console.warn('[IMPORT] bloqueado', 'payload vazio (products e updates ambos vazios)')
+    return NextResponse.json({ error: 'Nenhum produto para importar ou atualizar.' }, { status: 400 })
   }
 
   const admin = createAdminClient()
+
+  // Conclusão da fundação varejo/atacado (2026-09-01) — CSV pode misturar
+  // linhas de criação (sem sku) e atualização (com sku) no mesmo arquivo.
+  // As duas fases rodam de forma independente e o resultado é combinado no
+  // final: uma falha de criação (preflight ou RPC) NÃO impede que as
+  // atualizações válidas do mesmo lote sejam processadas, e vice-versa —
+  // são operações com fontes de verdade e identificadores diferentes
+  // (nome+tipo+modelo+ano vs. sku_variation), não faz sentido acoplar o
+  // sucesso de uma à da outra. idempotency_key ganha um sufixo distinto
+  // por fase (":create"/":update") porque as duas fases usam a MESMA
+  // tabela import_batches (company_id, idempotency_key) — reusar a chave
+  // crua faria a segunda chamada colidir com o cache da primeira.
+  let created = 0
+  let createdProducts: unknown[] = []
+  let createError: { message: string; validationErrors?: string[]; code?: string | null; details?: string | null; hint?: string | null } | null = null
+
+  if (items.length > 0) {
+    const result = await processCreateBatch({
+      admin, items, companyId: user.company_id, systemUserId: user.id,
+      idempotencyKey: idempotencyKey ? `${idempotencyKey}:create` : null,
+    })
+    if (result.ok) {
+      created = result.created
+      createdProducts = result.products
+    } else {
+      createError = result.error
+    }
+  }
+
+  let updated = 0
+  let updatedProducts: unknown[] = []
+  let updateErrors: Array<{ client_index: number; sku: string | null; message: string }> = []
+  let updateBlockedError: string | null = null
+
+  if (updates.length > 0) {
+    const { data: updateRpcResult, error: updateRpcError } = await (admin as any).rpc('rpc_update_products_by_sku_batch', {
+      p_company_id:      user.company_id,
+      p_system_user_id:  user.id,
+      p_updates:         updates,
+      p_idempotency_key: idempotencyKey ? `${idempotencyKey}:update` : null,
+    }) as unknown as {
+      data: { updated: number; errors: Array<{ client_index: number; sku: string | null; message: string }>; products: unknown[] } | null
+      error: { code: string; message: string } | null
+    }
+
+    if (updateRpcError) {
+      console.error('[IMPORT] erro RPC update', updateRpcError)
+      updateBlockedError = updateRpcError.message
+    } else {
+      updated = updateRpcResult?.updated ?? 0
+      updatedProducts = updateRpcResult?.products ?? []
+      updateErrors = updateRpcResult?.errors ?? []
+    }
+  }
+
+  const totalErrors = (createError ? 1 : 0) + updateErrors.length + (updateBlockedError ? 1 : 0)
+
+  console.info('[IMPORT] resultado final', { created, updated, errors: totalErrors, createBlocked: !!createError, updateBlocked: !!updateBlockedError })
+
+  if (created > 0 || updated > 0) {
+    auditLog({
+      userId:   user.id,
+      userRole: user.role,
+      action:   'create',
+      resource: 'product',
+      detail:   `Importação CSV: ${created} criados, ${updated} atualizados, ${totalErrors} erro(s)`,
+    })
+  }
+
+  // 201 se algo foi persistido (criado ou atualizado), mesmo com erros
+  // parciais — a UI decide como apresentar "sucesso parcial" a partir dos
+  // campos abaixo, nunca a partir só do status HTTP.
+  const status = created > 0 || updated > 0 ? 201 : 400
+
+  return NextResponse.json({
+    created,
+    created_products: createdProducts,
+    create_error: createError,
+    updated,
+    updated_products: updatedProducts,
+    update_errors: updateErrors,
+    update_blocked_error: updateBlockedError,
+  }, { status })
+}
+
+// ─── Fase de criação (all-or-nothing, comportamento inalterado desde 20260812) ──
+async function processCreateBatch({
+  admin, items, companyId, systemUserId, idempotencyKey,
+}: {
+  admin: ReturnType<typeof createAdminClient>
+  items: z.infer<typeof productSchema>[]
+  companyId: number
+  systemUserId: string
+  idempotencyKey: string | null
+}): Promise<
+  | { ok: true; created: number; products: unknown[] }
+  | { ok: false; error: { message: string; validationErrors?: string[]; code?: string | null; details?: string | null; hint?: string | null } }
+> {
 
   console.info('[IMPORT] preflight iniciou', { idempotencyKey: idempotencyKey ?? null, quantidade: items.length })
 
   // ─── Fase 1: resolução e pré-validação — nenhuma escrita no banco ────────────
   const preflight: string[] = []
 
-  const productTypes = await listActiveProductTypes(user.company_id, admin)
+  const productTypes = await listActiveProductTypes(companyId, admin)
   const { governanceByTipoSlug, explicitlyNotUsedTipoSlugs } =
-    await loadModeloGovernanceForAllTypes(productTypes, user.company_id, admin)
+    await loadModeloGovernanceForAllTypes(productTypes, companyId, admin)
 
   const { data: modeloTypeRow } = await admin
     .from('variation_types')
@@ -134,7 +261,7 @@ export async function POST(request: Request) {
   const { data: existingProducts, error: fetchError } = (await admin
     .from('products')
     .select('name, tipo, modelo, ano')
-    .eq('company_id', user.company_id)) as unknown as {
+    .eq('company_id', companyId)) as unknown as {
     data: { name: string; tipo: string; modelo: string; ano: string }[] | null
     error: any
   }
@@ -142,7 +269,7 @@ export async function POST(request: Request) {
   if (fetchError) {
     console.warn('[IMPORT] bloqueado', 'erro ao buscar produtos existentes no ERP')
     console.error('[IMPORT] erro fetch existingProducts', fetchError)
-    return NextResponse.json({ error: 'Erro ao verificar produtos existentes no ERP.' }, { status: 500 })
+    return { ok: false, error: { message: 'Erro ao verificar produtos existentes no ERP.' } }
   }
 
   const existingKeys = new Set(
@@ -162,11 +289,10 @@ export async function POST(request: Request) {
 
   if (preflight.length > 0) {
     console.warn('[IMPORT] bloqueado', 'preflight com erros', { quantidade: preflight.length, primeiros: preflight.slice(0, 3) })
-    return NextResponse.json({
-      error: 'O CSV contém erros que impedem a importação. Nenhum produto foi salvo.',
-      validationErrors: preflight,
-      imported: 0,
-    }, { status: 400 })
+    return {
+      ok: false,
+      error: { message: 'O CSV contém erros que impedem a criação de novos produtos. Nenhum produto novo foi salvo.', validationErrors: preflight },
+    }
   }
 
   // ─── Fase 2: monta o payload JSONB e persiste com UMA chamada transacional ───
@@ -278,6 +404,7 @@ export async function POST(request: Request) {
         size_variation_type_id: sizeVariationTypeId,
         cost_override:         v.cost_override ?? null,
         price_override:        v.price_override ?? null,
+        wholesale_price_override: v.wholesale_price_override ?? null,
         initial_stock:         v.initial_stock,
       })
     }
@@ -295,6 +422,15 @@ export async function POST(request: Request) {
       base_cost:                 rawProductData.base_cost,
       base_price:                rawProductData.base_price,
       active:                    rawProductData.active,
+      // Fundação varejo/atacado (2026-08-31) — nomes de chave alinhados
+      // com o que _persist_single_product lê (products.wholesale_price/
+      // ncm/origem/cst). `origem_fiscal` (nome do campo CSV/schema, pra
+      // não colidir com `origin` acima, que é fabricação própria/terceiro)
+      // vira `origem` no payload — mesmo nome da coluna real no banco.
+      wholesale_price:           rawProductData.wholesale_price ?? null,
+      ncm:                       rawProductData.ncm ?? null,
+      origem:                    rawProductData.origem_fiscal ?? null,
+      cst:                       rawProductData.cst ?? null,
       sku_base:                  parentSku,
       sku_scheme:                skuScheme,
       modelo_variation_type_id:  skuScheme === 'dynamic' && resolved.modeloValueId ? modeloVariationTypeId : null,
@@ -332,8 +468,8 @@ export async function POST(request: Request) {
   console.info('[IMPORT] chamando RPC', { idempotencyKey: idempotencyKey ?? null })
 
   const { data: rpcResult, error: rpcError } = await (admin as any).rpc('rpc_import_products_batch', {
-    p_company_id:      user.company_id,
-    p_system_user_id:  user.id,
+    p_company_id:      companyId,
+    p_system_user_id:  systemUserId,
     p_products:        payloadProducts,
     p_idempotency_key: idempotencyKey ?? null,
   }) as unknown as {
@@ -345,40 +481,24 @@ export async function POST(request: Request) {
     console.error('[IMPORT] erro RPC', rpcError)
     // A transação foi revertida pelo próprio Postgres — nenhum produto
     // deste lote foi salvo, sem depender de DELETE compensatório.
-    return NextResponse.json({
-      // rpcError.message já vem com contexto de qual produto do lote
-      // falhou (ver rpc_import_products_batch, migration 202607302700) —
-      // "Falha ao importar produto "X" (client_index=N): <erro original>".
-      error: `${rpcError.message} Importação cancelada. Nenhum produto foi salvo porque a transação foi revertida pelo banco.`,
-      // code/details/hint do Postgres original (nunca escondidos) — não
-      // carregam segredo, só detalhe técnico do erro (ex.: precisão/escala
-      // da coluna que estourou).
-      code:    rpcError.code ?? null,
-      details: rpcError.details ?? null,
-      hint:    rpcError.hint ?? null,
-      imported: 0,
-    }, { status: rpcError.code === 'P0001' ? 400 : 500 })
+    return {
+      ok: false,
+      error: {
+        // rpcError.message já vem com contexto de qual produto do lote
+        // falhou (ver rpc_import_products_batch, migration 202607302700) —
+        // "Falha ao importar produto "X" (client_index=N): <erro original>".
+        message: `${rpcError.message} Nenhum produto novo foi salvo porque a transação foi revertida pelo banco.`,
+        code:    rpcError.code ?? null,
+        details: rpcError.details ?? null,
+        hint:    rpcError.hint ?? null,
+      },
+    }
   }
 
-  console.info('[IMPORT] RPC retornou', {
+  console.info('[IMPORT] RPC criação retornou', {
     imported:           rpcResult?.imported,
     produtosRetornados: Array.isArray(rpcResult?.products) ? rpcResult!.products.length : null,
   })
 
-  const imported = rpcResult?.imported ?? 0
-  const products = rpcResult?.products ?? []
-
-  auditLog({
-    userId:   user.id,
-    userRole: user.role,
-    action:   'create',
-    resource: 'product',
-    detail:   `Importação CSV: ${imported} produtos`,
-  })
-
-  return NextResponse.json({
-    message:  `${imported} produto${imported !== 1 ? 's' : ''} importado${imported !== 1 ? 's' : ''} com sucesso.`,
-    imported,
-    products,
-  }, { status: 201 })
+  return { ok: true, created: rpcResult?.imported ?? 0, products: rpcResult?.products ?? [] }
 }

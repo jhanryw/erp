@@ -537,6 +537,13 @@ export async function POST(request: Request) {
         p_system_user_id:      systemUserId,
         p_payments:            salePayments,
         p_stock_mode:          'online_priority',
+        // Fundação varejo/atacado (2026-08-31): Nuvemshop SEMPRE gera
+        // varejo — hardcoded aqui, nunca derivado do payload do pedido
+        // (que é dado externo não confiável). p_sales_channel identifica
+        // a origem de forma inequívoca, diferente de sale_origin='website'
+        // (ambíguo — venda manual também pode usar esse valor).
+        p_sale_type:           'retail',
+        p_sales_channel:       'nuvemshop',
       }) as unknown as { data: { id: number; sale_number: string } | null; error: { message: string } | null }
 
     if (saleError || !sale) {

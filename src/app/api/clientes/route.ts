@@ -10,7 +10,12 @@ const n = (v: unknown) => (v === '' || v == null ? null : v)
 
 const schema = z.object({
   name:       z.string().min(2),
-  cpf:        z.string().length(11),
+  // Fundação varejo/atacado (2026-08-31): CPF deixou de ser requisito para
+  // o cadastro de cliente existir (customers.cpf já era nullable no banco
+  // desde 20260521_webhook_idempotency.sql). Quando informado, continua
+  // exigindo exatamente 11 dígitos — mesma validação de sempre, só deixou
+  // de ser obrigatório.
+  cpf:        z.preprocess(n, z.string().length(11).nullable().optional()),
   phone:      z.string().min(1),
   birth_date: z.preprocess(n, z.string().nullable().optional()),
   city:       z.preprocess(n, z.string().nullable().optional()),

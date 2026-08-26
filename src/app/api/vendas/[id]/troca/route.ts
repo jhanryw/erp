@@ -76,14 +76,20 @@ export async function POST(
   }
   const admin = createAdminClient()
 
-  // ── 0. Herdar responsible_seller_id da venda original ────────
+  // ── 0. Herdar responsible_seller_id/sale_type/sales_channel da venda original ────
+  // sale_type precisa ser herdado explicitamente aqui: a venda-filha criada
+  // abaixo (quando há new_items) é uma venda NOVA via createSale(), que não
+  // tem acesso automático à modalidade da venda original — diferente de
+  // cancelamento/devolução, que só fazem UPDATE na mesma linha. Sem isso,
+  // uma troca de venda de atacado "viraria" varejo silenciosamente (mesma
+  // armadilha que sale_origin já tem hoje, aqui evitada de propósito).
   const { data: originalSale } = await admin
     .from('sales')
-    .select('responsible_seller_id, company_id')
+    .select('responsible_seller_id, company_id, sale_type, sales_channel')
     .eq('id', saleId)
     .eq('company_id', user.company_id)
     .maybeSingle() as unknown as {
-      data: { responsible_seller_id: number | null; company_id: number } | null
+      data: { responsible_seller_id: number | null; company_id: number; sale_type: string | null; sales_channel: string | null } | null
     }
 
   if (!originalSale) {
@@ -152,6 +158,8 @@ export async function POST(
           surcharge_amount:     0,
         })),
         responsible_seller_id: originalSale.responsible_seller_id,
+        sale_type:      (originalSale.sale_type as 'retail' | 'wholesale' | null) ?? 'retail',
+        sales_channel:  originalSale.sales_channel,
       })
 
       if (saleResult.ok) {

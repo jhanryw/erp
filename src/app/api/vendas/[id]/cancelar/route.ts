@@ -47,6 +47,35 @@ export async function POST(
 
   try {
     const admin = createAdminClient()
+
+    // Fase Fiscal 6, seção 23 do pedido — coordenação venda×fiscal. Este
+    // ERP AINDA NÃO implementa cancelamento fiscal automatizado (nenhuma
+    // rota/serviço chama `DELETE /v2/nfe|nfce/{ref}` da Focus — auditado
+    // nesta fase, gap documentado no relatório). Sem essa peça, permitir
+    // cancelar uma venda no ERP enquanto ela tem uma NF-e/NFC-e AUTORIZADA
+    // deixaria o sistema fiscal (SEFAZ) e o ERP divergentes — a nota
+    // continuaria válida do lado de fora, sem nenhum registro aqui de que
+    // a operação foi desfeita. Bloqueio explícito é a correção de menor
+    // risco: nunca "apagar" o documento silenciosamente, nunca fingir que
+    // cancelar a venda também cancela a nota. Documento em qualquer OUTRO
+    // status (draft/pending/validation_failed/authorization_failed/
+    // submission_error/cancelled/cancellation_failed) nunca teve valor
+    // fiscal externo — não bloqueia.
+    const { data: authorizedDoc } = await (admin as any)
+      .from('fiscal_documents')
+      .select('id, document_type, number, series')
+      .eq('sale_id', saleId)
+      .eq('company_id', user.company_id)
+      .eq('status', 'authorized')
+      .maybeSingle()
+
+    if (authorizedDoc) {
+      const label = authorizedDoc.document_type === 'nfce' ? 'NFC-e' : 'NF-e'
+      return NextResponse.json({
+        error: `Esta venda tem uma ${label} autorizada${authorizedDoc.number ? ` (nº ${authorizedDoc.number}/${authorizedDoc.series})` : ''} — cancelamento fiscal ainda não é automatizado neste ERP. Cancele/inutilize o documento fiscal diretamente com o emissor antes de cancelar a venda.`,
+      }, { status: 409 })
+    }
+
     const { data: items } = await admin
       .from('sale_items')
       .select('product_variation_id')

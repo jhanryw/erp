@@ -3,6 +3,7 @@ import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { returnSale } from '@/services/vendas.service'
 import { validateAuthorizationToken } from '@/lib/auth/validateAuthorizationToken'
+import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 
 export async function POST(
@@ -44,6 +45,28 @@ export async function POST(
   }
 
   try {
+    // Fase Fiscal 6, seção 23 do pedido — mesma coordenação venda×fiscal
+    // aplicada em /cancelar (ver comentário completo lá): uma devolução
+    // total tem o MESMO risco de deixar o ERP divergente da SEFAZ se a
+    // venda já tem um documento fiscal AUTORIZADO. Cancelamento fiscal
+    // automatizado ainda não existe neste ERP (gap documentado) — bloqueio
+    // explícito é a correção de menor risco.
+    const admin = createAdminClient()
+    const { data: authorizedDoc } = await (admin as any)
+      .from('fiscal_documents')
+      .select('id, document_type, number, series')
+      .eq('sale_id', saleId)
+      .eq('company_id', user.company_id)
+      .eq('status', 'authorized')
+      .maybeSingle()
+
+    if (authorizedDoc) {
+      const label = authorizedDoc.document_type === 'nfce' ? 'NFC-e' : 'NF-e'
+      return NextResponse.json({
+        error: `Esta venda tem uma ${label} autorizada${authorizedDoc.number ? ` (nº ${authorizedDoc.number}/${authorizedDoc.series})` : ''} — cancelamento fiscal ainda não é automatizado neste ERP. Cancele/inutilize o documento fiscal diretamente com o emissor antes de registrar a devolução.`,
+      }, { status: 409 })
+    }
+
     const result = await returnSale(saleId, user.id, user.company_id)
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 

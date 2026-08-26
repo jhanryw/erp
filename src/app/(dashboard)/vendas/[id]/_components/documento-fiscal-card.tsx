@@ -1,27 +1,39 @@
 'use client'
 
 /**
- * Card fiscal CONTEXTUAL — Fase Fiscal 4F, item 7 do pedido.
+ * Card fiscal — Fase Fiscal 6 (PDV comprovante/NFC-e/NF-e).
  *
- * Substitui o card fixo de NF-e (`emitir-nfe-homologacao-card.tsx`,
- * removido). O tipo de documento é RESOLVIDO pelo servidor
- * (`resolveFiscalDocumentType`, em `vendas/[id]/page.tsx`) a partir de
- * `sales.sale_origin`/`shipments.delivery_mode` — este componente só
- * RENDERIZA o resultado, nunca decide nem oferece escolha manual
- * NF-e/NFC-e (item 10 do pedido). Rota de API por trás (admin-only) é a
- * defesa real, não este componente.
+ * Substitui a versão anterior (Fase Fiscal 4F), que só mostrava UM botão
+ * de emissão, escolhido automaticamente por `resolveFiscalDocumentType` —
+ * o operador nunca podia pedir NF-e pra uma venda que resolvia pra NFC-e
+ * (ex. atacado balcão que o cliente quer nota completa). Agora mostra as
+ * DUAS seções (NFC-e e NF-e) sempre, cada uma com sua própria elegibili-
+ * dade e estado:
  *
- * `resolvedType`:
- *   'nfce'    → balcão/retirada elegível — botões de NFC-e.
- *   'nfe'     → entrega/site — botões de NF-e (mesmo comportamento de
- *               antes, só reembalado neste card contextual).
- *   'blocked' → modalidade de entrega ausente/inconsistente — mostra o
- *               motivo, nenhum botão de emissão.
+ *   - NFC-e só é permitida quando `resolvedType === 'nfce'` (mesma regra
+ *     fiscal de sempre — endereço/origem não presencial não cabe em
+ *     NFC-e). Fora disso, o botão fica desabilitado com o motivo visível.
+ *   - NF-e nunca tem esse bloqueio prévio (mesmo comportamento da rota
+ *     `/api/fiscal/nfe/emitir-homologacao`, que sempre tenta e deixa
+ *     `validateNfeReadiness` reportar o que falta).
+ *
+ * `initialDocuments` vem do SERVER (vendas/[id]/page.tsx) — mostra status
+ * real já no primeiro render, sem exigir um clique em "verificar status"
+ * (item 18 do pedido). O botão "Verificar status" continua existindo pra
+ * reconsultar a Focus sob demanda — nunca automático/polling.
+ *
+ * Quando uma tentativa de NF-e falha por destinatário incompleto
+ * (qualquer código `destinatario_*`), aparece "Completar dados fiscais" —
+ * abre o mesmo formulário do PDV, pré-carregado com o que já existe
+ * (`GET /api/fiscal/recipient`), salva (`POST /api/fiscal/recipient`) e
+ * tenta emitir de novo automaticamente (seção 19 do pedido).
  */
 
 import { useState } from 'react'
-import { Loader2, Receipt, AlertTriangle, CheckCircle2, XCircle, RefreshCw, UserRound } from 'lucide-react'
+import { Loader2, Receipt, AlertTriangle, CheckCircle2, XCircle, RefreshCw, UserRound, FileText, FileDown } from 'lucide-react'
 import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
 
 interface EmissionResult {
   status: string
@@ -33,6 +45,24 @@ interface EmissionResult {
   submissionErrorCode: string | null
   submissionErrorMessage: string | null
   validationErrors: { code: string; message: string }[]
+  xmlPath?: string | null
+  danfePath?: string | null
+}
+
+export interface InitialFiscalDocument {
+  id: number
+  document_type: 'nfe' | 'nfce'
+  status: string
+  number: string | null
+  series: string | null
+  access_key: string | null
+  authorization_protocol: string | null
+  status_sefaz: string | null
+  status_message: string | null
+  submission_error_code: string | null
+  submission_error_message: string | null
+  xml_path: string | null
+  danfe_path: string | null
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -46,27 +76,61 @@ const STATUS_LABELS: Record<string, string> = {
   cancellation_failed: 'Falha ao cancelar',
 }
 
+const TERMINAL_SALE_STATUSES = new Set(['cancelled', 'returned'])
+
 function StatusIcon({ status }: { status: string }) {
   if (status === 'authorized') return <CheckCircle2 className="w-4 h-4 text-emerald-600" />
   if (status === 'pending' || status === 'draft') return <Loader2 className="w-4 h-4 text-amber-500" />
   return <XCircle className="w-4 h-4 text-red-500" />
 }
 
+function toResult(doc: InitialFiscalDocument | undefined): EmissionResult | null {
+  if (!doc) return null
+  return {
+    status: doc.status,
+    accessKey: doc.access_key,
+    number: doc.number,
+    series: doc.series,
+    statusSefaz: doc.status_sefaz,
+    statusMessage: doc.status_message,
+    submissionErrorCode: doc.submission_error_code,
+    submissionErrorMessage: doc.submission_error_message,
+    validationErrors: [],
+    xmlPath: doc.xml_path,
+    danfePath: doc.danfe_path,
+  }
+}
+
 interface DocumentoFiscalCardProps {
   saleId: number
+  saleStatus: string
   resolvedType: 'nfe' | 'nfce' | 'blocked'
   blockedReason: string | null
   /** CPF já mascarado (`maskCPF`), só quando presente E válido — nunca o CPF cru. `null` = consumidor não identificado. */
   maskedCpf: string | null
+  initialDocuments: Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>
 }
 
-export function DocumentoFiscalCard({ saleId, resolvedType, blockedReason, maskedCpf }: DocumentoFiscalCardProps) {
+function DocumentTypeSection({
+  saleId, type, label, eligible, ineligibleReason, saleBlocked, initial,
+}: {
+  saleId: number
+  type: 'nfe' | 'nfce'
+  label: string
+  eligible: boolean
+  ineligibleReason: string | null
+  saleBlocked: boolean
+  initial: InitialFiscalDocument | undefined
+}) {
   const [busy, setBusy] = useState<'emitir' | 'consultar' | null>(null)
-  const [result, setResult] = useState<EmissionResult | null>(null)
+  const [result, setResult] = useState<EmissionResult | null>(toResult(initial))
   const [error, setError] = useState<string | null>(null)
+  const [showRecipientForm, setShowRecipientForm] = useState(false)
+  const [recipientValue, setRecipientValue] = useState<FiscalRecipientValue>(EMPTY_FISCAL_RECIPIENT)
+  const [loadingRecipient, setLoadingRecipient] = useState(false)
+  const [savingRecipient, setSavingRecipient] = useState(false)
 
-  const basePath = resolvedType === 'nfce' ? '/api/fiscal/nfce' : '/api/fiscal/nfe'
-  const documentLabel = resolvedType === 'nfce' ? 'NFC-e' : 'NF-e'
+  const basePath = `/api/fiscal/${type}`
 
   async function call(action: 'emitir' | 'consultar') {
     const path = action === 'emitir' ? `${basePath}/emitir-homologacao` : `${basePath}/consultar`
@@ -84,11 +148,6 @@ export function DocumentoFiscalCard({ saleId, resolvedType, blockedReason, maske
         return
       }
       if (data.reason) {
-        // 200/422 estruturado — a rota resolveu um tipo diferente do
-        // esperado (ex.: a venda mudou entre o carregamento da página e o
-        // clique). Nunca deveria acontecer no fluxo normal (o card já
-        // mostra o tipo resolvido), mas tratado explicitamente mesmo
-        // assim — nunca um erro genérico silencioso.
         setError(data.reason)
         return
       }
@@ -100,49 +159,99 @@ export function DocumentoFiscalCard({ saleId, resolvedType, blockedReason, maske
     }
   }
 
+  async function openRecipientForm() {
+    setShowRecipientForm(true)
+    setLoadingRecipient(true)
+    try {
+      const res = await fetch(`/api/fiscal/recipient?sale_id=${saleId}`)
+      const data = await res.json()
+      if (res.ok && data.recipient) {
+        setRecipientValue({
+          nome: data.recipient.nome, cpf: data.recipient.cpf, cnpj: data.recipient.cnpj,
+          inscricao_estadual: data.recipient.inscricaoEstadual, indicador_ie: data.recipient.indicadorIe,
+          telefone: data.recipient.telefone, cep: data.recipient.cep, logradouro: data.recipient.logradouro,
+          numero: data.recipient.numero, complemento: data.recipient.complemento, bairro: data.recipient.bairro,
+          municipio: data.recipient.municipio, uf: data.recipient.uf, municipio_ibge: data.recipient.municipioIbge,
+          ibge_source: data.recipient.ibgeSource,
+        })
+      }
+    } finally {
+      setLoadingRecipient(false)
+    }
+  }
+
+  async function saveRecipientAndRetry() {
+    setSavingRecipient(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/fiscal/recipient', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sale_id: saleId,
+          recipient: {
+            nome: recipientValue.nome, cpf: recipientValue.cpf, cnpj: recipientValue.cnpj,
+            inscricaoEstadual: recipientValue.inscricao_estadual, indicadorIe: recipientValue.indicador_ie,
+            telefone: recipientValue.telefone, cep: recipientValue.cep, logradouro: recipientValue.logradouro,
+            numero: recipientValue.numero, complemento: recipientValue.complemento, bairro: recipientValue.bairro,
+            municipio: recipientValue.municipio, uf: recipientValue.uf, municipioIbge: recipientValue.municipio_ibge,
+            ibgeSource: recipientValue.ibge_source,
+          },
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(typeof data.error === 'string' ? data.error : 'Falha ao salvar dados fiscais.')
+        return
+      }
+      setShowRecipientForm(false)
+      await call('emitir')
+    } finally {
+      setSavingRecipient(false)
+    }
+  }
+
+  const hasDestinatarioIssue = result?.validationErrors?.some((e) => e.code.startsWith('destinatario_')) ?? false
+  const canEmit = eligible && !saleBlocked && result?.status !== 'authorized'
+
   return (
-    <Card padding="md" className="border-amber-500/30">
-      <div className="flex items-center gap-2 mb-1">
-        <Receipt className="w-4 h-4 text-brand" />
-        <h3 className="text-sm font-semibold text-text-primary">Fiscal</h3>
+    <div className="rounded-lg border border-border p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-semibold text-text-primary">{label}</p>
+        {result && (
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium">
+            <StatusIcon status={result.status} />
+            {STATUS_LABELS[result.status] ?? result.status}
+          </span>
+        )}
       </div>
 
-      {resolvedType === 'blocked' ? (
-        <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
-          <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-          <p className="text-xs text-red-600 dark:text-red-400">{blockedReason ?? 'Não foi possível determinar o documento fiscal desta venda.'}</p>
+      {type === 'nfce' && (
+        <div className="flex items-center gap-2 text-xs text-text-secondary">
+          <UserRound className="w-3.5 h-3.5 text-text-muted" />
+          <span>Consumidor: <span className="font-medium">Identificação opcional</span></span>
         </div>
-      ) : (
-        <>
-          <p className="text-xs text-text-secondary mb-2">
-            Documento fiscal recomendado: <span className="font-semibold text-text-primary">{documentLabel}</span>
-          </p>
+      )}
 
-          {resolvedType === 'nfce' && (
-            <div className="flex items-center gap-2 text-xs text-text-secondary mb-3">
-              <UserRound className="w-3.5 h-3.5 text-text-muted" />
-              {maskedCpf
-                ? <span>Consumidor: CPF será incluído (<code className="font-mono">{maskedCpf}</code>)</span>
-                : <span>Consumidor: <span className="font-medium">Não identificado</span></span>}
-            </div>
-          )}
+      {!eligible && !result && (
+        <p className="text-xs text-text-muted">{ineligibleReason}</p>
+      )}
 
-          <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2 mb-3">
-            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-            <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-              AMBIENTE DE HOMOLOGAÇÃO — SEM VALIDADE FISCAL
-            </p>
-          </div>
+      {saleBlocked && (
+        <p className="text-xs text-red-500">Venda cancelada/devolvida — emissão bloqueada.</p>
+      )}
 
-          <div className="flex gap-2 mb-3">
-            <button
-              onClick={() => call('emitir')}
-              disabled={busy !== null}
-              className="inline-flex items-center gap-2 text-xs font-medium text-white bg-brand rounded-md px-3 py-1.5 hover:bg-brand-dark transition-colors disabled:opacity-50"
-            >
-              {busy === 'emitir' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Receipt className="w-3 h-3" />}
-              Emitir {documentLabel} de homologação
-            </button>
+      {(!result || result.status !== 'authorized') && !saleBlocked && (
+        <div className="flex gap-2">
+          <button
+            onClick={() => call('emitir')}
+            disabled={busy !== null || !canEmit}
+            className="inline-flex items-center gap-2 text-xs font-medium text-white bg-brand rounded-md px-3 py-1.5 hover:bg-brand-dark transition-colors disabled:opacity-50"
+          >
+            {busy === 'emitir' ? <Loader2 className="w-3 h-3 animate-spin" /> : <Receipt className="w-3 h-3" />}
+            Emitir {label}
+          </button>
+          {result && (
             <button
               onClick={() => call('consultar')}
               disabled={busy !== null}
@@ -151,43 +260,129 @@ export function DocumentoFiscalCard({ saleId, resolvedType, blockedReason, maske
               {busy === 'consultar' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
               Verificar status
             </button>
-          </div>
-
-          {error && <p className="text-xs text-red-500 mb-2">{error}</p>}
-
-          {result && (
-            <div className="space-y-2 border-t border-border pt-3">
-              <div className="flex items-center gap-2">
-                <StatusIcon status={result.status} />
-                <span className="text-sm font-medium text-text-primary">{STATUS_LABELS[result.status] ?? result.status}</span>
-              </div>
-
-              {result.validationErrors.length > 0 && (
-                <div className="text-xs text-amber-600 dark:text-amber-400 space-y-0.5">
-                  <p className="font-medium">Pendências:</p>
-                  <ul className="list-disc list-inside">
-                    {result.validationErrors.map((e) => <li key={e.code}>{e.message}</li>)}
-                  </ul>
-                </div>
-              )}
-
-              {result.status === 'authorized' && result.accessKey && (
-                <div className="text-xs text-text-secondary">
-                  <p><span className="text-text-muted">Chave de acesso:</span> <code className="font-mono">{result.accessKey}</code></p>
-                  {result.number && <p><span className="text-text-muted">Número/Série:</span> {result.number}/{result.series}</p>}
-                </div>
-              )}
-
-              {(result.status === 'authorization_failed' || result.status === 'submission_error') && (
-                <p className="text-xs text-red-500">
-                  {result.statusMessage ?? result.submissionErrorMessage ?? 'Falha não detalhada.'}
-                  {result.statusSefaz && <span className="text-text-muted"> (SEFAZ {result.statusSefaz})</span>}
-                </p>
-              )}
-            </div>
           )}
-        </>
+        </div>
       )}
+
+      {result?.status === 'authorized' && (
+        <button
+          onClick={() => call('consultar')}
+          disabled={busy !== null}
+          className="inline-flex items-center gap-2 text-xs text-text-secondary border border-border rounded-md px-3 py-1.5 hover:bg-bg-hover transition-colors disabled:opacity-50"
+        >
+          {busy === 'consultar' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+          Verificar status
+        </button>
+      )}
+
+      {error && <p className="text-xs text-red-500">{error}</p>}
+
+      {result && result.validationErrors.length > 0 && (
+        <div className="text-xs text-amber-600 dark:text-amber-400 space-y-0.5">
+          <p className="font-medium">Pendências:</p>
+          <ul className="list-disc list-inside">
+            {result.validationErrors.map((e) => <li key={e.code}>{e.message}</li>)}
+          </ul>
+          {type === 'nfe' && hasDestinatarioIssue && !showRecipientForm && (
+            <button
+              onClick={openRecipientForm}
+              className="mt-1 inline-flex items-center gap-1.5 text-xs font-medium text-brand hover:underline"
+            >
+              Completar dados fiscais
+            </button>
+          )}
+        </div>
+      )}
+
+      {showRecipientForm && (
+        <div className="space-y-2 pt-1">
+          {loadingRecipient ? (
+            <p className="text-xs text-text-muted flex items-center gap-1.5"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Carregando dados atuais…</p>
+          ) : (
+            <>
+              <FiscalRecipientFields mode="nfe" value={recipientValue} onChange={setRecipientValue} />
+              <div className="flex gap-2">
+                <Button size="sm" onClick={saveRecipientAndRetry} loading={savingRecipient}>Salvar e tentar emitir</Button>
+                <Button size="sm" variant="secondary" onClick={() => setShowRecipientForm(false)}>Cancelar</Button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {result?.status === 'authorized' && (
+        <div className="space-y-1 border-t border-border pt-2 text-xs text-text-secondary">
+          {result.accessKey && <p><span className="text-text-muted">Chave de acesso:</span> <code className="font-mono">{result.accessKey}</code></p>}
+          {result.number && <p><span className="text-text-muted">Número/Série:</span> {result.number}/{result.series}</p>}
+          <div className="flex gap-3 pt-1">
+            {result.danfePath && (
+              <a href={result.danfePath} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+                <FileText className="w-3.5 h-3.5" /> DANFE
+              </a>
+            )}
+            {result.xmlPath && (
+              <a href={result.xmlPath} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+                <FileDown className="w-3.5 h-3.5" /> XML
+              </a>
+            )}
+          </div>
+        </div>
+      )}
+
+      {(result?.status === 'authorization_failed' || result?.status === 'submission_error') && (
+        <p className="text-xs text-red-500">
+          {result.statusMessage ?? result.submissionErrorMessage ?? 'Falha não detalhada.'}
+          {result.statusSefaz && <span className="text-text-muted"> (SEFAZ {result.statusSefaz})</span>}
+        </p>
+      )}
+    </div>
+  )
+}
+
+export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedReason, maskedCpf, initialDocuments }: DocumentoFiscalCardProps) {
+  const saleBlocked = TERMINAL_SALE_STATUSES.has(saleStatus)
+
+  return (
+    <Card padding="md" className="border-amber-500/30 space-y-3">
+      <div className="flex items-center gap-2">
+        <Receipt className="w-4 h-4 text-brand" />
+        <h3 className="text-sm font-semibold text-text-primary">Fiscal</h3>
+      </div>
+
+      <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
+        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+        <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+          AMBIENTE DE HOMOLOGAÇÃO — SEM VALIDADE FISCAL
+        </p>
+      </div>
+
+      {resolvedType === 'blocked' && !initialDocuments.nfce && !initialDocuments.nfe && (
+        <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-md px-3 py-2">
+          <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-red-600 dark:text-red-400">
+            {blockedReason ?? 'Não foi possível determinar automaticamente o documento fiscal recomendado.'} NF-e continua disponível abaixo, se aplicável.
+          </p>
+        </div>
+      )}
+
+      {maskedCpf && (
+        <p className="text-xs text-text-secondary">CPF do cliente no cadastro: <code className="font-mono">{maskedCpf}</code></p>
+      )}
+
+      <DocumentTypeSection
+        saleId={saleId} type="nfce" label="NFC-e"
+        eligible={resolvedType === 'nfce'}
+        ineligibleReason={resolvedType !== 'nfce' ? 'Não elegível para esta venda (modalidade de entrega/origem indica NF-e ou está indeterminada).' : null}
+        saleBlocked={saleBlocked}
+        initial={initialDocuments.nfce}
+      />
+      <DocumentTypeSection
+        saleId={saleId} type="nfe" label="NF-e"
+        eligible
+        ineligibleReason={null}
+        saleBlocked={saleBlocked}
+        initial={initialDocuments.nfe}
+      />
     </Card>
   )
 }

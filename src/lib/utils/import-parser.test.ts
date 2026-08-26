@@ -112,3 +112,178 @@ describe('parseImportRows — múltiplos produtos com o mesmo sku_base (ledger p
     expect(parsedProducts.find(p => p.name === 'Calcinha Renda Preta')?.modelo).toBe('renda')
   })
 })
+
+describe('parseImportRows — fundação varejo/atacado (preco_atacado/ncm/origem_fiscal/cst)', () => {
+  it('CSV sem os campos novos continua funcionando exatamente como antes (retrocompatibilidade)', () => {
+    const rows: ImportRow[] = [row({ nome_produto: 'Calcinha Sem Atacado' })]
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues).toHaveLength(0)
+    expect(parsedProducts[0].wholesale_price).toBeUndefined()
+    expect(parsedProducts[0].ncm).toBeUndefined()
+    expect(parsedProducts[0].origem_fiscal).toBeUndefined()
+    expect(parsedProducts[0].cst).toBeUndefined()
+  })
+
+  it('lê preco_atacado/ncm/origem_fiscal/cst quando presentes no CSV', () => {
+    const rows: ImportRow[] = [row({
+      nome_produto: 'Calcinha Com Atacado',
+      preco_atacado: 35, ncm: '61091000', origem_fiscal: 0, cst: '060',
+    })]
+    const { issues, hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues).toHaveLength(0)
+    expect(parsedProducts[0].wholesale_price).toBe(35)
+    expect(parsedProducts[0].ncm).toBe('61091000')
+    expect(parsedProducts[0].origem_fiscal).toBe(0)
+    expect(parsedProducts[0].cst).toBe('060')
+  })
+
+  it('rejeita preco_atacado <= 0', () => {
+    const rows: ImportRow[] = [row({ nome_produto: 'Calcinha Atacado Inválido', preco_atacado: -5 })]
+    const { issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(true)
+    expect(issues.some(i => i.message.includes('Preço de atacado inválido'))).toBe(true)
+  })
+
+  it('rejeita origem_fiscal fora do intervalo 0-8', () => {
+    const rows: ImportRow[] = [row({ nome_produto: 'Calcinha Origem Inválida', origem_fiscal: 9 })]
+    const { issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(true)
+    expect(issues.some(i => i.message.includes('Origem fiscal inválida'))).toBe(true)
+  })
+
+  it('rejeita NCM que não tem exatamente 8 dígitos', () => {
+    const rows: ImportRow[] = [row({ nome_produto: 'Calcinha NCM Inválido', ncm: '123' })]
+    const { issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(true)
+    expect(issues.some(i => i.message.includes('NCM inválido'))).toBe(true)
+  })
+
+  it('linha com sku preenchido vira ATUALIZAÇÃO, não criação — mesmo com colunas de criação também preenchidas', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', preco: 47.9, nome_produto: 'Ignorado', tipo: 'inexistente' }]
+    const { parsedProducts, parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues).toHaveLength(0)
+    expect(parsedProducts).toHaveLength(0) // nunca cria produto — tipo 'inexistente' seria erro se fosse tratado como criação
+    expect(parsedUpdates).toHaveLength(1)
+    expect(parsedUpdates[0]).toEqual({ client_index: 0, sku: 'ABC123', price_override: 47.9 })
+  })
+
+  it('atualização: só inclui as chaves de campos EFETIVAMENTE preenchidos (célula vazia nunca vira chave presente)', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', preco_atacado: 42.9 }]
+    const { parsedUpdates } = parseImportRows(rows, baseDbData)
+
+    expect(parsedUpdates).toHaveLength(1)
+    const update = parsedUpdates[0]
+    expect(update.wholesale_price_override).toBe(42.9)
+    expect('price_override' in update).toBe(false)
+    expect('ncm' in update).toBe(false)
+    expect('origem' in update).toBe(false)
+    expect('cst' in update).toBe(false)
+  })
+
+  it('atualização: NCM com pontuação é rejeitado na prévia (esperado só dígitos) e não entra no patch — mas não bloqueia o envio (warning, não error)', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', ncm: '6108.22.00' }]
+    const { parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues.some(i => i.type === 'warning' && i.message.includes('NCM inválido'))).toBe(true)
+    expect('ncm' in parsedUpdates[0]).toBe(false)
+  })
+
+  it('atualização: NCM só de dígitos é aceito', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', ncm: '61082200' }]
+    const { parsedUpdates, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(parsedUpdates[0].ncm).toBe('61082200')
+  })
+
+  it('atualização: origem fiscal fora de 0-8 gera warning e não entra no patch', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', origem_fiscal: 9 }]
+    const { parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues.some(i => i.type === 'warning' && i.message.includes('origem fiscal inválida'))).toBe(true)
+    expect('origem' in parsedUpdates[0]).toBe(false)
+  })
+
+  it('atualização: preço negativo/zero gera warning e não entra no patch (nunca manda NaN/valor ruim ao servidor)', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', preco: -10 }]
+    const { parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues.some(i => i.type === 'warning' && i.message.includes('preço de varejo inválido'))).toBe(true)
+    expect('price_override' in parsedUpdates[0]).toBe(false)
+  })
+
+  it('atualização: CST é passado como texto livre, sem validação de formato', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', cst: '060' }]
+    const { parsedUpdates } = parseImportRows(rows, baseDbData)
+
+    expect(parsedUpdates[0].cst).toBe('060')
+  })
+
+  it('atualização: SKU duplicado dentro do próprio CSV gera warning (não bloqueia) — servidor decide o resultado final', () => {
+    const rows: ImportRow[] = [
+      { sku: 'ABC123', preco: 10 },
+      { sku: 'ABC123', preco: 20 },
+    ]
+    const { parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(issues.some(i => i.type === 'warning' && i.message.includes('duplicado'))).toBe(true)
+    expect(parsedUpdates).toHaveLength(2) // ambas enviadas — servidor reporta a ambígua/duplicada como erro
+  })
+
+  it('múltiplas linhas de atualização para produtos diferentes geram client_index sequenciais e independentes', () => {
+    const rows: ImportRow[] = [
+      { sku: 'AAA', preco: 10 },
+      { sku: 'BBB', preco: 20 },
+      { sku: 'CCC', preco: 30 },
+    ]
+    const { parsedUpdates } = parseImportRows(rows, baseDbData)
+
+    expect(parsedUpdates.map(u => u.client_index)).toEqual([0, 1, 2])
+    expect(parsedUpdates.map(u => u.sku)).toEqual(['AAA', 'BBB', 'CCC'])
+  })
+
+  it('atualização: aceita o mesmo formato monetário que o importador já suporta hoje (separador decimal ".", ex.: 47.90) — não introduz um segundo parser concorrente', () => {
+    const rows: ImportRow[] = [{ sku: 'ABC123', preco: '47.90', preco_atacado: '42.90' }]
+    const { parsedUpdates, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(parsedUpdates[0].price_override).toBe(47.9)
+    expect(parsedUpdates[0].wholesale_price_override).toBe(42.9)
+  })
+
+  it('CSV sem coluna sku continua 100% no fluxo de criação (retrocompatibilidade total)', () => {
+    const rows: ImportRow[] = [row({ nome_produto: 'Produto Antigo' })]
+    const { parsedProducts, parsedUpdates, hasErrors } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    expect(parsedUpdates).toHaveLength(0)
+    expect(parsedProducts).toHaveLength(1)
+  })
+
+  it('gera wholesale_price_override por variante só quando o preço de atacado da linha diverge do produto-pai', () => {
+    const rows: ImportRow[] = [
+      row({ nome_produto: 'Calcinha Multi Atacado', cor: 'Dourado', tamanho: 'P', preco_atacado: 35 }),
+      row({ nome_produto: 'Calcinha Multi Atacado', cor: 'Prateado', tamanho: 'M', preco_atacado: 30 }),
+    ]
+    const { hasErrors, parsedProducts } = parseImportRows(rows, baseDbData)
+
+    expect(hasErrors).toBe(false)
+    const product = parsedProducts[0]
+    expect(product.wholesale_price).toBe(35) // primeira linha define o produto-pai
+    expect(product.variants.find(v => v.color_value_id === 10)?.wholesale_price_override).toBeUndefined() // igual ao pai
+    expect(product.variants.find(v => v.color_value_id === 11)?.wholesale_price_override).toBe(30) // diverge → override
+  })
+})

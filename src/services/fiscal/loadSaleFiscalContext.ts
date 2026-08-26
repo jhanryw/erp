@@ -43,6 +43,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveFocusIntegration } from './resolveFocusIntegration'
 import { resolveMunicipioIbge } from './resolveMunicipioIbge'
+import { resolveConsumidorFinal } from '@/lib/fiscal/consumidorFinal'
 import type { Crt } from '@/lib/fiscal/taxRules'
 import type { FiscalDocumentContext, FiscalOperationContext } from './types'
 import type { FocusEnvironment } from '@/lib/integrations/focus/types'
@@ -108,7 +109,13 @@ export async function loadSaleFiscalContext({
     // Fase Fiscal 5C — snapshot imutável do destinatário, quando existe.
     (admin as any)
       .from('sale_recipients')
-      .select('cpf, cnpj, telefone, cep, logradouro, numero, complemento, bairro, municipio, municipio_ibge, uf')
+      // Fase Fiscal 6 — inscricao_estadual/indicador_ie adicionados
+      // (202609021000_fiscal_recipient_pj_fields.sql). `nome` agora também
+      // lido daqui (antes só de `customers`) — uma venda de balcão sem
+      // cliente/`sale.customer_id` associável ainda pode ter um nome
+      // capturado só pra fins fiscais (ex. "Loja X" numa NF-e de atacado
+      // sem cadastro prévio, ver upsertSaleRecipient.ts).
+      .select('nome, cpf, cnpj, telefone, cep, logradouro, numero, complemento, bairro, municipio, municipio_ibge, uf, inscricao_estadual, indicador_ie')
       .eq('sale_id', saleId)
       .maybeSingle(),
     resolveFocusIntegration(companyId),
@@ -190,16 +197,29 @@ export async function loadSaleFiscalContext({
       cep: settings?.cep ?? null,
     },
     destinatario: {
-      nome: customer?.is_anonymous ? null : customer?.name ?? null,
+      // Fase Fiscal 6 — snapshot tem prioridade ABSOLUTA sobre
+      // `customers.name`, inclusive quando `customer.is_anonymous` é true.
+      // Isto NÃO é uma regressão de privacidade: `is_anonymous` continua
+      // zerando o CADASTRO do cliente (nunca vaza nome/CPF do "Cliente
+      // Avulso" genérico) — mas requisito 30 do pedido é exatamente o
+      // caso "cliente avulso pede NF-e/NFC-e nesta venda específica": o
+      // operador digita nome/CPF/CNPJ NO MOMENTO, isso vira
+      // `sale_recipients` (ato explícito e intencional do operador PRA
+      // ESTA venda), e precisa valer mesmo com `customer_id` apontando
+      // pro cliente avulso. Corrigido nesta fase — a versão anterior
+      // zerava o snapshot também, o que quebraria silenciosamente
+      // qualquer NF-e de cliente avulso.
+      nome: recipientSnapshot?.nome ?? (customer?.is_anonymous ? null : customer?.name ?? null),
       isAnonymous: customer?.is_anonymous ?? false,
-      // CPF: snapshot (se existir) tem prioridade — é o CPF informado no
-      // MOMENTO da venda, que pode divergir do cadastro atual do cliente.
-      // Sem snapshot, cai no cadastro atual (comportamento legado).
-      cpf: customer?.is_anonymous ? null : (recipientSnapshot?.cpf ?? customer?.cpf ?? null),
+      // CPF: mesma prioridade — snapshot sempre vence, mesmo pra cliente
+      // avulso. Sem snapshot, cai no comportamento legado (zera se
+      // anônimo, senão usa o cadastro atual).
+      cpf: recipientSnapshot?.cpf ?? (customer?.is_anonymous ? null : customer?.cpf ?? null),
       // CNPJ só existe via snapshot — `customers` não tem essa coluna
       // (não há suporte a PJ no cadastro de cliente ainda).
       cnpj: recipientSnapshot?.cnpj ?? null,
-      inscricaoEstadual: null,
+      inscricaoEstadual: recipientSnapshot?.inscricao_estadual ?? null,
+      indicadorIe: (recipientSnapshot?.indicador_ie as 1 | 2 | 9 | undefined) ?? null,
       telefone: recipientSnapshot?.telefone ?? customer?.phone ?? null,
       email: customer?.email ?? null,
       logradouro: recipientSnapshot?.logradouro ?? address?.street ?? null,
@@ -220,10 +240,14 @@ export async function loadSaleFiscalContext({
       naturezaOperacao: operationOverrides?.naturezaOperacao ?? 'Venda de Mercadoria',
       presencaComprador: operationOverrides?.presencaComprador ?? 2,
       modalidadeFrete: operationOverrides?.modalidadeFrete ?? (shipment ? (shipment.mod_frete as 0 | 1 | 2 | 9) : 9),
-      // Confirmado no XML real (referência empírica desta fase): sempre
-      // consumidor final (1) e sem intermediador/marketplace (0) no nosso
-      // cenário — varejo direto ao consumidor final, loja própria.
-      consumidorFinal: operationOverrides?.consumidorFinal ?? 1,
+      // Fundação varejo/atacado (2026-08-31) — deixou de ser hardcoded 1.
+      // Resolvido a partir de dado FISCAL real (CNPJ do destinatário, via
+      // sale_recipients), nunca de sale_type (ver resolveConsumidorFinal
+      // pra por que essas duas coisas são deliberadamente independentes).
+      // Sem CNPJ (caso mais comum hoje — varejo direto ao consumidor final,
+      // confirmado no XML real desta fase anterior), continua 1, idêntico
+      // ao comportamento anterior.
+      consumidorFinal: operationOverrides?.consumidorFinal ?? resolveConsumidorFinal(recipientSnapshot?.cnpj),
       indicadorIntermediador: operationOverrides?.indicadorIntermediador ?? 0,
     },
     focusIntegration: focusIntegrationResult.data.available

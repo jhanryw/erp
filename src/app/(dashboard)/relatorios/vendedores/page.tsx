@@ -110,6 +110,8 @@ export default async function VendedoresReportPage({ searchParams }: { searchPar
               <tr className="border-b border-border">
                 <th className="text-left px-4 py-3 text-xs font-semibold text-text-muted uppercase tracking-wider">Vendedor</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-text-muted uppercase tracking-wider">Faturamento</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-blue-500/80 uppercase tracking-wider">Varejo</th>
+                <th className="text-right px-4 py-3 text-xs font-semibold text-purple-500/80 uppercase tracking-wider">Atacado</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-text-muted uppercase tracking-wider">Pedidos</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-text-muted uppercase tracking-wider">% Total</th>
                 <th className="text-right px-4 py-3 text-xs font-semibold text-text-muted uppercase tracking-wider">Ticket Médio</th>
@@ -144,6 +146,8 @@ export default async function VendedoresReportPage({ searchParams }: { searchPar
                     </div>
                   </td>
                   <td className="px-4 py-3 text-right font-semibold tabular-nums text-text-primary">{fmt(row.revenue)}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs text-text-secondary">{row.retail.revenue > 0 ? fmt(row.retail.revenue) : '—'}</td>
+                  <td className="px-4 py-3 text-right tabular-nums text-xs text-text-secondary">{row.wholesale.revenue > 0 ? fmt(row.wholesale.revenue) : '—'}</td>
                   <td className="px-4 py-3 text-right tabular-nums">{row.orders}</td>
                   <td className="px-4 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">

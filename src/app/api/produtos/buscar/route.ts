@@ -3,17 +3,12 @@ export const dynamic = 'force-dynamic'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireRole } from '@/lib/supabase/session'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { buildProductSearchItem, type ProductSearchRow, type ProductSearchItem } from './buildProductSearchItem'
+import type { SaleType } from '@/lib/pricing/resolveSalePrice'
 
-export type ProductSearchItem = {
-  variation_id: number
-  sku: string
-  product_name: string
-  price: number
-  cost: number
-  cor: string | null
-  tamanho: string | null
-  stock: number
-}
+export type { ProductSearchItem } from './buildProductSearchItem'
+
+const VALID_SALE_TYPES: SaleType[] = ['retail', 'wholesale']
 
 export async function GET(request: NextRequest) {
   const { user, response: unauth } = await requireRole('usuario')
@@ -27,6 +22,18 @@ export async function GET(request: NextRequest) {
   const q = request.nextUrl.searchParams.get('q')?.trim() ?? ''
   if (q.length < 2) {
     return NextResponse.json({ items: [] })
+  }
+
+  // PDV atacado/varejo (2026-09-02) — modalidade explícita, nunca inferida.
+  // Ausente = 'retail' (retrocompatível com qualquer chamador que ainda não
+  // envie o parâmetro — ex. troca, até este ponto do rollout). Qualquer
+  // valor que não seja retail/wholesale é rejeitado, nunca ignorado
+  // silenciosamente (mesma postura de "backend nunca confia só no
+  // TypeScript do navegador" já aplicada em rpc_create_sale).
+  const saleTypeParam = request.nextUrl.searchParams.get('sale_type')
+  const saleType: SaleType = saleTypeParam ? (saleTypeParam as SaleType) : 'retail'
+  if (!VALID_SALE_TYPES.includes(saleType)) {
+    return NextResponse.json({ error: `sale_type inválido: "${saleTypeParam}". Aceitos: retail, wholesale.` }, { status: 400 })
   }
 
   const admin = createAdminClient()
@@ -66,8 +73,9 @@ export async function GET(request: NextRequest) {
     sku_variation: string
     price_override: number | null
     cost_override: number | null
+    wholesale_price_override: number | null
     stock_balances: Array<{ quantity: number; stock_location_id: number }>
-    products: { id: number; name: string; base_price: number; base_cost: number } | null
+    products: { id: number; name: string; base_price: number; base_cost: number; wholesale_price: number | null } | null
     product_variation_attributes: Array<{
       variation_types: { slug: string } | null
       variation_values: { value: string } | null
@@ -81,8 +89,9 @@ export async function GET(request: NextRequest) {
       sku_variation,
       price_override,
       cost_override,
+      wholesale_price_override,
       stock_balances!inner (quantity, stock_location_id),
-      products!inner (id, name, base_price, base_cost),
+      products!inner (id, name, base_price, base_cost, wholesale_price),
       product_variation_attributes (
         variation_types:variation_type_id (slug),
         variation_values:variation_value_id (value)
@@ -118,16 +127,24 @@ export async function GET(request: NextRequest) {
     // Sum only the main-store balance (already filtered by stock_location_id = mainStoreId)
     const stock = v.stock_balances.reduce((sum, b) => sum + (b.quantity ?? 0), 0)
 
-    return {
+    // PDV atacado/varejo (2026-09-02) — resolução de preço 100% centralizada
+    // em buildProductSearchItem/resolveSalePrice. Este handler nunca decide
+    // preço sozinho, só monta a linha bruta do banco.
+    const row: ProductSearchRow = {
       variation_id: v.id,
-      sku:          v.sku_variation,
+      sku_variation: v.sku_variation,
       product_name: v.products?.name ?? `Variação #${v.id}`,
-      price:        v.price_override ?? v.products?.base_price ?? 0,
-      cost:         v.cost_override ?? v.products?.base_cost ?? 0,
+      base_price: v.products?.base_price ?? 0,
+      price_override: v.price_override,
+      wholesale_price: v.products?.wholesale_price ?? null,
+      wholesale_price_override: v.wholesale_price_override,
+      cost: v.cost_override ?? v.products?.base_cost ?? 0,
       cor,
       tamanho,
       stock,
     }
+
+    return buildProductSearchItem(row, saleType)
   })
 
   return NextResponse.json({ items })

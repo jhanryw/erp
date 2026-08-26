@@ -16,10 +16,10 @@ import { DateRangePicker } from '@/components/modules/dashboards/date-range-pick
 import { SalesByOriginChart } from '@/components/modules/dashboards/sales-by-origin-chart'
 import { OriginBreakdownWidget } from '@/components/modules/dashboards/origin-breakdown-widget'
 import { SellerBreakdownWidget } from '@/components/modules/dashboards/seller-breakdown-widget'
+import { ModalityBreakdownWidget } from '@/components/modules/dashboards/modality-breakdown-widget'
 import { formatCurrency } from '@/lib/utils/currency'
 import { hasMinRole } from '@/types/roles'
-import { brazilDate, brazilSubDays } from '@/lib/utils/date'
-import type { RangePreset } from '@/components/modules/dashboards/date-range-picker'
+import { resolveDateRange } from '@/lib/utils/dateRange'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,46 +28,6 @@ type SearchParams = Promise<{
   from?: string
   to?: string
 }>
-
-function resolveDateRange(range?: string, from?: string, to?: string): {
-  dateFrom: string
-  dateTo: string
-  activeRange: RangePreset | 'custom'
-  rangeLabel: string
-} {
-  const today = brazilDate()
-
-  if (range === 'today') {
-    return { dateFrom: today, dateTo: today, activeRange: 'today', rangeLabel: 'Hoje' }
-  }
-  if (range === 'yesterday') {
-    const y = brazilSubDays(1)
-    return { dateFrom: y, dateTo: y, activeRange: 'yesterday', rangeLabel: 'Ontem' }
-  }
-  if (range === '7d') {
-    return { dateFrom: brazilSubDays(6), dateTo: today, activeRange: '7d', rangeLabel: 'Últimos 7 dias' }
-  }
-  if (range === '90d') {
-    return { dateFrom: brazilSubDays(89), dateTo: today, activeRange: '90d', rangeLabel: 'Últimos 90 dias' }
-  }
-  if (range === 'year') {
-    const year = today.substring(0, 4)
-    return { dateFrom: `${year}-01-01`, dateTo: today, activeRange: 'year', rangeLabel: `Ano ${year}` }
-  }
-  if (range === 'custom' && from && to && from <= to) {
-    const [fy, fm, fd] = from.split('-')
-    const [ty, tm, td] = to.split('-')
-    return {
-      dateFrom: from,
-      dateTo: to,
-      activeRange: 'custom',
-      rangeLabel: `${fd}/${fm}/${fy} – ${td}/${tm}/${ty}`,
-    }
-  }
-
-  // Default: últimos 30 dias
-  return { dateFrom: brazilSubDays(29), dateTo: today, activeRange: '30d', rangeLabel: 'Últimos 30 dias' }
-}
 
 export default async function DashboardPage({ searchParams }: { searchParams: SearchParams }) {
   const { range, from, to } = await searchParams
@@ -177,6 +137,20 @@ export default async function DashboardPage({ searchParams }: { searchParams: Se
             icon={<Package className="h-4 w-4" />}
           />
         )}
+      </div>
+
+      {/* ── Composição Varejo × Atacado — discreta, sob o faturamento do
+          período. Analytics Varejo/Atacado: "não transforme todo o
+          dashboard numa tela de atacado" — uma linha fina, sem card
+          próprio, com link pro relatório completo pra quem quiser mais. */}
+      <div className="rounded-2xl border border-border bg-bg-card px-5 py-3 -mt-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-muted-foreground">Composição do faturamento — {periodLabel}</span>
+          <Link href="/relatorios/varejo-atacado" className="text-xs text-accent hover:underline">
+            Ver detalhes →
+          </Link>
+        </div>
+        <ModalityBreakdownWidget modality={data.modalityBreakdown} />
       </div>
 
       {/* ── Gráfico de tendência de faturamento (MM7/MM30) ───────────

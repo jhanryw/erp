@@ -173,7 +173,7 @@ export interface FocusNfePayload {
   /** 1=operação interna, 2=interestadual, 3=exterior (3 não suportado nesta fase). */
   local_destino: 1 | 2
   modalidade_frete: number
-  /** indFinal — confirmado no XML real: sempre 1 (consumidor final) no nosso cenário de varejo direto. */
+  /** indFinal — resolvido por src/lib/fiscal/consumidorFinal.ts a partir do CNPJ do destinatário, não de sale_type (fundação varejo/atacado, 2026-08-31). */
   consumidor_final: 0 | 1
   /** indIntermed — confirmado no XML real: sempre 0 (sem marketplace/intermediador) — loja própria. */
   indicador_intermediario: 0 | 1

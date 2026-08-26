@@ -1,10 +1,11 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { BarChart3, Users, Package, Truck, DollarSign, Warehouse, FileText, ArrowRight, Shield, UserCheck } from 'lucide-react'
+import { BarChart3, Users, Package, Truck, DollarSign, Warehouse, FileText, ArrowRight, Shield, UserCheck, Scale } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
 
 const REPORTS = [
+  { href: '/relatorios/varejo-atacado', icon: Scale,    title: 'Varejo × Atacado', description: 'Faturamento, CMV, lucro bruto e margem comparados por modalidade — evolução no tempo e por vendedor.', formats: ['Tempo real'] },
   { href: '/relatorios/vendedores',   icon: UserCheck,  title: 'Vendedores',  description: 'Faturamento, margem, descontos, trocas e cancelamentos por vendedor responsável.', formats: ['Tempo real'] },
   { href: '/relatorios/vendas',       icon: BarChart3,  title: 'Vendas',      description: 'Faturamento, ticket médio, cancelamentos, por período e canal.', formats: ['Excel', 'PDF', 'CSV'] },
   { href: '/relatorios/produtos',     icon: Package,    title: 'Produtos',    description: 'Performance, margem, volume vendido, ABC por produto.', formats: ['Excel', 'CSV'] },

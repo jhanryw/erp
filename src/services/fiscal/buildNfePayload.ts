@@ -129,15 +129,27 @@ function buildFormaPagamentoPayload(payment: FiscalPaymentContext): FocusFormaPa
 
 /**
  * 1=contribuinte ICMS (informar IE), 2=contribuinte isento de inscrição,
- * 9=não contribuinte. Hoje `customers` só suporta PF (cnpj/IE sempre
- * null), então isto sempre resolve pra 9 na prática — mas a lógica é
- * genérica de propósito (seção 14 do pedido: não hardcode o builder pra
- * CPF), pronta pro dia em que um destinatário PJ existir: CNPJ+IE
- * presentes → contribuinte; CNPJ sem IE → isento. A distinção exata entre
- * 1 e 2 pra um caso PJ real depende de regra de negócio ainda não
- * definida — quando PJ for implementado de fato, revisar esta função.
+ * 9=não contribuinte.
+ *
+ * Fase Fiscal 6 (seção 14 do pedido): "não derive isso apenas de IE
+ * preenchida ou vazia se a regra fiscal exigir um indicador explícito" —
+ * `indicadorIeOverride` é esse indicador explícito, capturado no momento
+ * em que o operador informa os dados fiscais do destinatário
+ * (`sale_recipients.indicador_ie`, ver upsertSaleRecipient.ts) e SEMPRE
+ * usado quando presente, sem nenhuma inferência.
+ *
+ * Sem override (`null`/`undefined` — qualquer `sale_recipients` anterior a
+ * esta fase, ou capturado sem essa pergunta), cai na heurística legada,
+ * preservada byte-a-byte pra nenhuma regressão: sem CNPJ → 9; CNPJ+IE →
+ * contribuinte; CNPJ sem IE → isento. Essa heurística SEMPRE foi uma
+ * aproximação (comentário original: "a distinção exata entre 1 e 2 pra um
+ * caso PJ real depende de regra de negócio ainda não definida") — o
+ * override é o jeito correto de resolver isso quando o dado real existe;
+ * a heurística nunca foi removida porque continua sendo o único sinal
+ * disponível pra dado legado.
  */
-function resolveIndicadorIeDestinatario(cnpj: string | null, inscricaoEstadual: string | null): 1 | 2 | 9 {
+function resolveIndicadorIeDestinatario(cnpj: string | null, inscricaoEstadual: string | null, indicadorIeOverride?: 1 | 2 | 9 | null): 1 | 2 | 9 {
+  if (indicadorIeOverride != null) return indicadorIeOverride
   if (!cnpj) return 9
   return inscricaoEstadual ? 1 : 2
 }
@@ -190,7 +202,7 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
     uf_destinatario: destinatarioUf,
     cep_destinatario: required(ctx.destinatario.cep, 'destinatario.cep'),
     ...(ctx.destinatario.inscricaoEstadual ? { inscricao_estadual_destinatario: ctx.destinatario.inscricaoEstadual } : {}),
-    indicador_inscricao_estadual_destinatario: resolveIndicadorIeDestinatario(ctx.destinatario.cnpj, ctx.destinatario.inscricaoEstadual),
+    indicador_inscricao_estadual_destinatario: resolveIndicadorIeDestinatario(ctx.destinatario.cnpj, ctx.destinatario.inscricaoEstadual, ctx.destinatario.indicadorIe),
 
     items: ctx.items.map((item, index) => buildItemPayload(item, index, emitenteCrt, emitenteUf, destinatarioUf)),
     formas_pagamento: ctx.payments.map((payment) => buildFormaPagamentoPayload(payment)),

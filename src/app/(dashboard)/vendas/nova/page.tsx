@@ -16,6 +16,8 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
 import { createAutoPrintController } from '@/lib/sales/autoPrintTab'
 import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
+import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
+import { resolveFiscalDocumentType } from '@/lib/fiscal/resolveFiscalDocumentType'
 import { useQuery } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -85,11 +87,23 @@ export default function NovaVendaPage() {
   const [sellerBlockedError, setSellerBlockedError] = useState<string | null>(null)
   const [isLockedRole, setIsLockedRole] = useState(false)
 
+  // ── Modalidade da venda (PDV atacado/varejo, 2026-09-02) ─────────────────────
+  // `saleTypeChosen` é distinto do valor em si: o form nasce com default
+  // 'retail' (retrocompatibilidade/segurança), mas a UI exige uma escolha
+  // EXPLÍCITA do vendedor antes de liberar o Passo 0 — não basta o default
+  // silencioso valer como escolha.
+  const [saleTypeChosen, setSaleTypeChosen] = useState(false)
+
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
 
   // ── Endereço de entrega (Fase Fiscal 5C) ─────────────────────────────────────
   const [deliveryRecipient, setDeliveryRecipient] = useState<DeliveryRecipientValue | null>(null)
+  // Fase Fiscal 6 — destinatário fiscal (NFC-e com CPF, ou NF-e completo).
+  // Mesmo padrão de deliveryRecipient: estado local + useEffect sincroniza
+  // pro form (evita re-render em cascata a cada tecla digitada nos campos
+  // fiscais, que também usam FiscalRecipientFields em modo NF-e).
+  const [fiscalRecipient, setFiscalRecipient] = useState<FiscalRecipientValue | null>(null)
 
   // ── Multi-pagamento ──────────────────────────────────────────────────────────
   const [payments, setPayments]               = useState<PaymentEntry[]>([])
@@ -160,6 +174,14 @@ export default function NovaVendaPage() {
       shipping_charged: 0,
       delivery_mode:    'delivery',
       delivery_recipient: null,
+      // Fase Fiscal 6 — 'none' (comprovante não fiscal) é sempre o default:
+      // nenhuma nota é emitida sem escolha explícita do operador.
+      fiscal_document_type: 'none',
+      fiscal_recipient: null,
+      // PDV atacado/varejo (2026-09-02) — default seguro retrocompatível;
+      // a UI exige escolha explícita antes de avançar do Passo 0 mesmo
+      // assim (ver botão "Continuar" mais abaixo).
+      sale_type: 'retail',
     },
   })
 
@@ -209,7 +231,9 @@ export default function NovaVendaPage() {
     const cpfClean = newCpf.replace(/\D/g, '')
     if (newName.trim().length < 2)  { toast.error('Nome deve ter ao menos 2 caracteres'); return }
     if (!newPhone.trim())            { toast.error('Telefone obrigatório'); return }
-    if (cpfClean.length !== 11)     { toast.error('CPF inválido — informe 11 dígitos'); return }
+    // Fundação varejo/atacado (2026-08-31): CPF deixou de ser requisito
+    // para cadastrar cliente — só validado quando o operador o informa.
+    if (cpfClean.length > 0 && cpfClean.length !== 11) { toast.error('CPF inválido — informe 11 dígitos ou deixe em branco'); return }
     if (!newBirthDate)               { toast.error('Data de nascimento obrigatória'); return }
 
     setCreatingCustomer(true)
@@ -217,7 +241,7 @@ export default function NovaVendaPage() {
       const res = await fetch('/api/clientes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), cpf: cpfClean, birth_date: newBirthDate }),
+        body: JSON.stringify({ name: newName.trim(), phone: newPhone.trim(), cpf: cpfClean || null, birth_date: newBirthDate }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -246,8 +270,36 @@ export default function NovaVendaPage() {
     setDeliveryRecipient(null) // endereço pertence ao cliente anterior — nunca reaproveitar
   }
 
+  // ── Handlers: modalidade da venda ─────────────────────────────────────────────
+  // Decisão de UX (menor risco, conforme pedido): uma vez que o carrinho tem
+  // ao menos 1 item, a modalidade trava — trocar exigiria recalcular preço
+  // de cada item e decidir o que fazer com preço editado manualmente, o que
+  // é ambíguo o suficiente pra preferir bloquear a inventar uma heurística.
+  // O vendedor pode remover os itens (ou voltar) e escolher de novo.
+  function handleSaleTypeChange(next: 'retail' | 'wholesale') {
+    if (fields.length > 0 && next !== saleType) {
+      toast.error('Não é possível trocar a modalidade com itens no carrinho', {
+        description: 'Remova os itens adicionados para trocar entre Varejo e Atacado.',
+      })
+      return
+    }
+    setValue('sale_type', next)
+    setSaleTypeChosen(true)
+  }
+
   // ── Handlers: produto ─────────────────────────────────────────────────────────
   function addProduct(item: ProductSearchItem) {
+    // PDV atacado/varejo (2026-09-02) — defesa em profundidade: o
+    // ProductSearchInput já bloqueia a seleção de item sem preço de
+    // atacado (com toast explicativo), mas nunca confiar só nisso — este
+    // handler é a última linha antes de entrar no carrinho.
+    if (item.price == null) {
+      toast.error('Preço de atacado não cadastrado', {
+        description: `"${item.product_name}" não pode ser adicionado em atacado sem preço cadastrado.`,
+      })
+      return
+    }
+
     // Persist metadata (idempotent — safe to run even on duplicate)
     setProductNames((prev) => ({ ...prev, [item.variation_id]: item.product_name }))
     setProductMeta((prev) => ({
@@ -332,6 +384,8 @@ export default function NovaVendaPage() {
   const deliveryMode    = watch('delivery_mode')
   const cashbackAction  = watch('cashback_action')  ?? 'accumulate'
   const saleOrigin      = watch('sale_origin')
+  const saleType        = watch('sale_type') ?? 'retail'
+  const fiscalDocumentType = watch('fiscal_document_type') ?? 'none'
 
   // Fase Fiscal 5C — single source of truth da aritmética de preço é
   // src/lib/sales/pricing.ts, o mesmo módulo que espelha a fórmula do RPC
@@ -362,6 +416,44 @@ export default function NovaVendaPage() {
   useEffect(() => {
     setValue('delivery_recipient', deliveryMode === 'delivery' ? deliveryRecipient : null)
   }, [deliveryRecipient, deliveryMode, setValue])
+
+  // Fase Fiscal 6 — sincroniza o destinatário fiscal local pro form. Só
+  // relevante quando o operador escolheu NFC-e/NF-e — 'none' nunca envia
+  // nada (evita mandar um objeto fiscal_recipient parcial preenchido por
+  // engano quando o operador troca de volta pra "Somente comprovante").
+  useEffect(() => {
+    setValue('fiscal_recipient', fiscalDocumentType !== 'none' ? fiscalRecipient : null)
+  }, [fiscalRecipient, fiscalDocumentType, setValue])
+
+  // Fase Fiscal 6 — quando o operador escolhe NF-e numa venda de ENTREGA
+  // que já tem endereço preenchido, pré-carrega os campos fiscais com o
+  // MESMO endereço (nunca obriga redigitar o que já foi informado) — só
+  // uma vez, na troca pra 'nfe' com o destinatário fiscal ainda vazio;
+  // depois disso o operador tem controle total (ex.: adicionar CNPJ/IE).
+  // Puramente uma conveniência de UI — o servidor já faz este MESMO merge
+  // de forma segura e independente (buildFiscalRecipientInput em
+  // POST /api/vendas), então isto nunca é a única garantia de correção.
+  useEffect(() => {
+    if (fiscalDocumentType === 'nfe' && deliveryMode === 'delivery' && deliveryRecipient && !fiscalRecipient) {
+      setFiscalRecipient({
+        ...EMPTY_FISCAL_RECIPIENT,
+        nome: deliveryRecipient.nome, cpf: deliveryRecipient.cpf ?? null, cnpj: deliveryRecipient.cnpj ?? null,
+        telefone: deliveryRecipient.telefone ?? null, cep: deliveryRecipient.cep, logradouro: deliveryRecipient.logradouro,
+        numero: deliveryRecipient.numero, complemento: deliveryRecipient.complemento ?? null, bairro: deliveryRecipient.bairro,
+        municipio: deliveryRecipient.municipio, uf: deliveryRecipient.uf, municipio_ibge: deliveryRecipient.municipio_ibge ?? null,
+        ibge_source: (deliveryRecipient.ibge_source as FiscalRecipientValue['ibge_source']) ?? null,
+      })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fiscalDocumentType, deliveryMode])
+
+  // Sugestão (nunca obrigatória) de qual documento fiscal é o mais
+  // adequado pra esta venda, calculada com a MESMA função pura usada no
+  // servidor (nenhuma lógica fiscal duplicada) — usa os valores JÁ
+  // escolhidos neste formulário (modo de entrega/origem), sem nenhuma
+  // chamada de rede. O servidor é quem decide de verdade na hora de
+  // emitir; isto é só uma pista visual pro operador.
+  const fiscalRecommended = resolveFiscalDocumentType({ deliveryMode, saleOrigin: saleOrigin ?? null })
 
   const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
   const saldoRestante = total - totalPaid
@@ -487,6 +579,23 @@ export default function NovaVendaPage() {
         description: `Pedido ${sale.sale_number} criado com sucesso.`,
       })
 
+      // Fase Fiscal 6 — resultado da emissão (se algum documento foi
+      // pedido). Sempre INFORMATIVO, nunca bloqueia a navegação — a venda
+      // já foi criada com sucesso independente do resultado fiscal.
+      const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null } | undefined
+      if (fiscal) {
+        const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
+        if (fiscal.status === 'authorized') {
+          toast.success(`${label} autorizada!`)
+        } else if (fiscal.status === 'pending') {
+          toast.info(`${label} enviada — processando na SEFAZ`, { description: 'Acompanhe o status na tela da venda.' })
+        } else {
+          toast.warning(`${label} não foi emitida agora`, {
+            description: (fiscal.reason ?? 'Dados fiscais pendentes.') + ' Complete/tente novamente na tela da venda.',
+          })
+        }
+      }
+
       // Comprovante não fiscal — só agora, com a venda CONFIRMADA criada
       // (nunca antes: se qualquer branch acima retornou, reset() já fechou
       // a aba sem nunca navegar/imprimir nada). Redireciona a aba
@@ -544,6 +653,17 @@ export default function NovaVendaPage() {
           </div>
         ))}
       </div>
+
+      {/* ── Badge de modalidade — visível em todos os passos, PDV atacado/varejo (2026-09-02) ── */}
+      {saleTypeChosen && (
+        <div className={`inline-flex items-center gap-1.5 text-xs font-bold tracking-wide px-2.5 py-1 rounded-full border ${
+          saleType === 'wholesale'
+            ? 'bg-purple-500/15 text-purple-400 border-purple-500/20'
+            : 'bg-blue-500/15 text-blue-400 border-blue-500/20'
+        }`}>
+          {saleType === 'wholesale' ? 'ATACADO' : 'VAREJO'}
+        </div>
+      )}
 
       <form id="sale-form" onSubmit={handleSubmit(onSubmit, handleFinalizarInvalid)}>
 
@@ -604,6 +724,38 @@ export default function NovaVendaPage() {
                   />
                 )}
 
+                {/* Modalidade da venda — PDV atacado/varejo (2026-09-02) */}
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-text-secondary">Tipo de Venda *</p>
+                  <div className="flex gap-3">
+                    {(
+                      [
+                        { value: 'retail',    label: 'VAREJO' },
+                        { value: 'wholesale', label: 'ATACADO' },
+                      ] as const
+                    ).map(({ value, label }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        disabled={fields.length > 0 && saleType !== value}
+                        onClick={() => handleSaleTypeChange(value)}
+                        className={`flex-1 py-3 rounded-lg border text-sm font-bold tracking-wide transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                          saleType === value && saleTypeChosen
+                            ? 'bg-brand text-white border-brand'
+                            : 'bg-bg-overlay text-text-secondary border-border hover:border-brand/50'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {fields.length > 0 && (
+                    <p className="text-[11px] text-text-muted">
+                      Remova os itens do carrinho para trocar a modalidade.
+                    </p>
+                  )}
+                </div>
+
                 {/* Modo de entrega */}
                 <div className="space-y-1.5">
                   <p className="text-xs font-medium text-text-secondary">Modo de Entrega</p>
@@ -644,7 +796,7 @@ export default function NovaVendaPage() {
                 {/* Busca de produto */}
                 <div>
                   <label className="label-base mb-1 block">Buscar produto por nome ou SKU</label>
-                  <ProductSearchInput onSelect={addProduct} />
+                  <ProductSearchInput onSelect={addProduct} saleType={saleType} disabled={!saleTypeChosen} />
                 </div>
 
                 {/* Lista de itens */}
@@ -782,6 +934,7 @@ export default function NovaVendaPage() {
                   disabled={
                     !!sellerBlockedError ||
                     !responsibleSellerId ||
+                    !saleTypeChosen ||
                     fields.length === 0 ||
                     !saleOrigin ||
                     (deliveryMode === 'pickup' && cashSession === null)
@@ -1309,6 +1462,12 @@ export default function NovaVendaPage() {
 
                 <div className="space-y-0 divide-y divide-border/50 text-sm">
                   <div className="flex justify-between py-3">
+                    <span className="text-text-secondary">Tipo de Venda</span>
+                    <span className={`font-bold tracking-wide ${saleType === 'wholesale' ? 'text-purple-400' : 'text-blue-400'}`}>
+                      {saleType === 'wholesale' ? 'ATACADO' : 'VAREJO'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-3">
                     <span className="text-text-secondary">Cliente</span>
                     <span className="font-medium">{selectedCustomer?.name}</span>
                   </div>
@@ -1382,6 +1541,49 @@ export default function NovaVendaPage() {
                   )}
                 </div>
 
+                {/* ── Fase Fiscal 6 — Documento fiscal ─────────────────────────
+                    Escolha explícita, sempre visível no fechamento — nunca
+                    pré-selecionado além do default seguro ("Somente
+                    comprovante"). O rótulo "Recomendado" é só uma pista
+                    (mesma função pura do servidor); a escolha final é
+                    sempre do operador, nunca travada pela recomendação. */}
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-text-secondary">Documento fiscal</p>
+                  <div className="grid grid-cols-3 gap-2">
+                    {([
+                      { value: 'none' as const, label: 'Comprovante' },
+                      { value: 'nfce' as const, label: 'NFC-e' },
+                      { value: 'nfe' as const, label: 'NF-e' },
+                    ]).map(({ value, label }) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => setValue('fiscal_document_type', value)}
+                        className={`relative py-2.5 rounded-lg border text-xs font-semibold transition-colors ${
+                          fiscalDocumentType === value
+                            ? 'bg-brand text-white border-brand'
+                            : 'bg-bg-card border-border text-text-secondary hover:border-brand/40'
+                        }`}
+                      >
+                        {label}
+                        {value !== 'none' && value === fiscalRecommended && fiscalDocumentType !== value && (
+                          <span className="absolute -top-1.5 -right-1.5 text-[9px] font-bold bg-emerald-500 text-white rounded-full px-1.5 py-0.5">
+                            sugerido
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {fiscalDocumentType === 'nfce' && fiscalRecommended !== 'nfce' && (
+                    <p className="text-xs text-warning">
+                      ⚠ Esta venda pode não ser elegível para NFC-e (modalidade/origem indicam {fiscalRecommended === 'nfe' ? 'NF-e' : 'verificação manual'}) — a emissão será tentada, mas pode ser recusada. Se recusada, emita NF-e depois na tela da venda.
+                    </p>
+                  )}
+                  {fiscalDocumentType !== 'none' && (
+                    <FiscalRecipientFields mode={fiscalDocumentType} value={fiscalRecipient} onChange={setFiscalRecipient} />
+                  )}
+                </div>
+
                 {Object.keys(errors).length > 0 && (
                   <div className="rounded-lg bg-error/10 border border-error/30 p-3 text-xs text-error space-y-1">
                     <p className="font-semibold">Corrija os erros antes de continuar:</p>
@@ -1415,7 +1617,16 @@ export default function NovaVendaPage() {
 
           {/* ── Sidebar resumo (desktop only) ── */}
           <div className="hidden lg:block card p-5 h-fit sticky top-20">
-            <h3 className="text-sm font-semibold text-text-primary mb-4">Resumo</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-text-primary">Resumo</h3>
+              {saleTypeChosen && (
+                <span className={`text-[11px] font-bold tracking-wide px-2 py-0.5 rounded-full ${
+                  saleType === 'wholesale' ? 'bg-purple-500/15 text-purple-400' : 'bg-blue-500/15 text-blue-400'
+                }`}>
+                  {saleType === 'wholesale' ? 'ATACADO' : 'VAREJO'}
+                </span>
+              )}
+            </div>
             <div className="space-y-2 text-sm">
               <div className="flex justify-between text-text-secondary">
                 <span>Subtotal ({fields.length} itens)</span>

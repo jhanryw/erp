@@ -53,6 +53,8 @@ export interface ReceiptData {
     sale_date: string
     created_at: string
     status: string
+    /** PDV atacado/varejo (2026-09-02) — modalidade persistida da venda, sempre 'retail'/'wholesale' (nunca null — coluna NOT NULL). */
+    sale_type: string
   }
   store: { name: string }
   items: ReceiptItem[]
@@ -81,6 +83,7 @@ async function buildReceipt(
     sale_date: string
     created_at: string
     status: string
+    sale_type: string
     customer_id: number | null
     payment_method: string
     subtotal: number
@@ -210,6 +213,7 @@ async function buildReceipt(
       sale_date: saleBase.sale_date,
       created_at: saleBase.created_at,
       status: saleBase.status,
+      sale_type: saleBase.sale_type,
     },
     store: { name: storeName },
     items: receiptItems,
@@ -227,7 +231,7 @@ async function buildReceipt(
 }
 
 const SALE_BASE_COLUMNS =
-  'id, company_id, sale_number, receipt_token, sale_date, created_at, status, customer_id, payment_method, subtotal, discount_amount, surcharge_amount, shipping_charged, cashback_used, total'
+  'id, company_id, sale_number, receipt_token, sale_date, created_at, status, sale_type, customer_id, payment_method, subtotal, discount_amount, surcharge_amount, shipping_charged, cashback_used, total'
 
 /**
  * Rota pública /comprovante/[token]. NUNCA recebe/filtra por company_id do

@@ -32,7 +32,7 @@ function nfceBalcaoContext() {
     saleId: SALE_ID, companyId: COMPANY_ID,
     operation: { ...baseFiscalContext().operation, presencaComprador: 1, modalidadeFrete: 9 },
     destinatario: {
-      nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null,
+      nome: null, isAnonymous: true, cpf: null, cnpj: null, inscricaoEstadual: null, indicadorIe: null,
       telefone: null, email: null, logradouro: null, numero: null, complemento: null,
       bairro: null, municipio: null, municipioIbge: null, uf: null, cep: null,
     },

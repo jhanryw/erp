@@ -159,6 +159,13 @@ export default async function ComprovantePage({ params }: { params: { id: string
           <span>Data</span>
           <span>{formatDateTime(receipt.sale.created_at)}</span>
         </div>
+        {/* PDV atacado/varejo (2026-09-02) — discreto, mesma linha de estilo
+            do resto do comprovante, não fiscal (comercial e fiscal
+            continuam independentes). */}
+        <div className="row">
+          <span>Modalidade</span>
+          <span>{receipt.sale.sale_type === 'wholesale' ? 'Atacado' : 'Varejo'}</span>
+        </div>
         {receipt.customer && (
           <div className="row">
             <span>Cliente</span>

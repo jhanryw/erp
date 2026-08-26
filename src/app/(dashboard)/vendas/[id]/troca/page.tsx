@@ -8,6 +8,7 @@ import { ArrowLeft } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ExchangeForm } from './ExchangeForm'
 import { formatDate } from '@/lib/utils/date'
+import type { SaleType } from '@/lib/pricing/resolveSalePrice'
 
 export const dynamic = 'force-dynamic'
 
@@ -19,7 +20,7 @@ async function getExchangeData(saleId: number) {
   // ── Etapa 1: venda base — sem embeds, é a única que decide notFound() ──────
   const { data: saleData, error: saleError } = await admin
     .from('sales')
-    .select('id, sale_number, sale_date, status, total, customer_id')
+    .select('id, sale_number, sale_date, status, total, customer_id, sale_type')
     .eq('id', saleId)
     .maybeSingle() as unknown as { data: any; error: PgErrorLike | null }
 
@@ -158,6 +159,10 @@ export default async function TrocaPage({ params }: { params: { id: string } }) 
           </h1>
           <p className="text-sm text-text-muted">
             {customer?.name ?? '—'} · {formatDate(sale.sale_date)}
+            {' · '}
+            <span className="font-medium text-text-secondary">
+              {sale.sale_type === 'wholesale' ? 'Atacado' : 'Varejo'}
+            </span>
           </p>
         </div>
       </div>
@@ -181,6 +186,7 @@ export default async function TrocaPage({ params }: { params: { id: string } }) 
           customerName={customer?.name ?? ''}
           items={items}
           requiresAuth={requiresAuth}
+          saleType={(sale.sale_type as SaleType) ?? 'retail'}
         />
       )}
     </div>

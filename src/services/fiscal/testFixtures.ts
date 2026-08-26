@@ -44,6 +44,7 @@ export function baseFiscalContext(overrides: Partial<FiscalDocumentContext> = {}
       cpf: '11144477735', // CPF sintético só de exemplo, formato válido, não real
       cnpj: null,
       inscricaoEstadual: null,
+      indicadorIe: null,
       telefone: '11999990000',
       email: null,
       logradouro: 'Avenida Teste',

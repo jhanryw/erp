@@ -2,19 +2,23 @@
 -- rpc_create_sale_single_overload.test.sql
 --
 -- Prova o "Blocker 3" da revisão da Fase Fiscal 5C (risco de overload no
--- PostgreSQL): depois de
--- supabase/migrations/20260828_rpc_create_sale_pricing_and_products_total.sql
--- (que faz DROP FUNCTION explícito da assinatura de 16 parâmetros E do
--- wrapper de 12 parâmetros, ANTES de criar a de 17), existe exatamente
--- UMA função `public.rpc_create_sale` — nunca dois overloads conflitantes.
+-- PostgreSQL), reconfirmado após
+-- supabase/migrations/202608311201_rpc_create_sale_wholesale_channel.sql (que
+-- adiciona p_sale_type/p_sales_channel, 19 parâmetros — fez o mesmo DROP
+-- FUNCTION explícito da assinatura de 17 antes de criar a de 19, mesmo
+-- padrão já usado por 20260828_rpc_create_sale_pricing_and_products_total.sql
+-- para a transição 16→17): existe exatamente UMA função
+-- `public.rpc_create_sale` — nunca dois overloads conflitantes.
 --
 -- Cobre:
 --   1. Introspecção real de `pg_proc` — exatamente 1 linha para
 --      `rpc_create_sale` no schema `public` (a query exata pedida).
---   2. Chamada "estilo antigo" — sem `p_delivery_recipient` — continua
---      funcionando (retrocompatibilidade preservada).
---   3. Chamada "estilo novo" — com `p_delivery_recipient` — funciona e
---      persiste o snapshot.
+--   2. Chamada "estilo antigo" — sem `p_delivery_recipient`/`p_sale_type`/
+--      `p_sales_channel` — continua funcionando (retrocompatibilidade
+--      preservada; defaults 'retail'/NULL se aplicam).
+--   3. Chamada "estilo novo" — com `p_delivery_recipient` E `p_sale_type`
+--      explícito ('wholesale') — funciona, persiste o snapshot E grava
+--      sale_type corretamente.
 --   4. GRANTs da assinatura nova: `service_role` tem EXECUTE,
 --      `authenticated` e `PUBLIC` não têm (introspecção real via
 --      `has_function_privilege`, não suposição).
@@ -39,8 +43,9 @@ FROM pg_proc p
 JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public'
   AND p.proname = 'rpc_create_sale';
--- Esperado: EXATAMENTE 1 linha, com 17 argumentos, o último sendo
--- "p_delivery_recipient jsonb DEFAULT NULL::jsonb". Se aparecer mais de
+-- Esperado: EXATAMENTE 1 linha, com 19 argumentos, os dois últimos sendo
+-- "p_sale_type text DEFAULT 'retail'::text" e
+-- "p_sales_channel text DEFAULT NULL::text". Se aparecer mais de
 -- 1 linha, a migration NÃO removeu todas as assinaturas antigas — pare e
 -- não confie em nenhum resultado abaixo até corrigir isso.
 
@@ -75,7 +80,7 @@ DECLARE
   v_authenticated_has boolean;
   v_anon_has boolean;
   v_public_has boolean;
-  v_sig text := 'public.rpc_create_sale(int, uuid, payment_method, text, numeric, numeric, numeric, text, jsonb, uuid, numeric, numeric, jsonb, bigint, text, int, jsonb)';
+  v_sig text := 'public.rpc_create_sale(int, uuid, payment_method, text, numeric, numeric, numeric, text, jsonb, uuid, numeric, numeric, jsonb, bigint, text, int, jsonb, text, text)';
 BEGIN
   v_service_role_has  := has_function_privilege('service_role', v_sig, 'EXECUTE');
   v_authenticated_has := has_function_privilege('authenticated', v_sig, 'EXECUTE');
@@ -169,10 +174,13 @@ BEGIN
   IF EXISTS (SELECT 1 FROM public.sale_recipients WHERE sale_id = v_sale_id_old) THEN
     RAISE EXCEPTION 'FALHA Bloco 3: chamada sem p_delivery_recipient não deveria ter criado snapshot.';
   END IF;
+  IF (SELECT sale_type FROM public.sales WHERE id = v_sale_id_old) IS DISTINCT FROM 'retail' THEN
+    RAISE EXCEPTION 'FALHA Bloco 3: chamada sem p_sale_type deveria default para ''retail''.';
+  END IF;
 
-  RAISE NOTICE 'OK — Bloco 3 (chamada estilo antigo, sem p_delivery_recipient, resolve sem ambiguidade)';
+  RAISE NOTICE 'OK — Bloco 3 (chamada estilo antigo, sem p_delivery_recipient/p_sale_type, resolve sem ambiguidade e default sale_type=retail)';
 
-  -- Bloco 4 — chamada "estilo novo": COM p_delivery_recipient
+  -- Bloco 4 — chamada "estilo novo": COM p_delivery_recipient E p_sale_type explícito
   v_sale_result := public.rpc_create_sale(
     p_customer_id        => NULL,
     p_seller_id          => v_user,
@@ -188,15 +196,23 @@ BEGIN
     p_delivery_recipient => jsonb_build_object(
       'nome', 'Teste Single Overload', 'cep', '59000000', 'logradouro', 'Rua Teste',
       'numero', '1', 'bairro', 'Centro', 'municipio', 'Natal', 'uf', 'RN', 'municipio_ibge', '2408102'
-    )
+    ),
+    p_sale_type          => 'wholesale',
+    p_sales_channel       => 'wholesale_site'
   );
   v_sale_id_new := (v_sale_result->>'id')::int;
 
   IF NOT EXISTS (SELECT 1 FROM public.sale_recipients WHERE sale_id = v_sale_id_new) THEN
     RAISE EXCEPTION 'FALHA Bloco 4: chamada com p_delivery_recipient deveria ter criado o snapshot.';
   END IF;
+  IF (SELECT sale_type FROM public.sales WHERE id = v_sale_id_new) IS DISTINCT FROM 'wholesale' THEN
+    RAISE EXCEPTION 'FALHA Bloco 4: p_sale_type=''wholesale'' deveria ter persistido em sales.sale_type.';
+  END IF;
+  IF (SELECT sales_channel FROM public.sales WHERE id = v_sale_id_new) IS DISTINCT FROM 'wholesale_site' THEN
+    RAISE EXCEPTION 'FALHA Bloco 4: p_sales_channel=''wholesale_site'' deveria ter persistido em sales.sales_channel.';
+  END IF;
 
-  RAISE NOTICE 'OK — Bloco 4 (chamada estilo novo, com p_delivery_recipient, resolve pra mesma função e persiste o snapshot)';
+  RAISE NOTICE 'OK — Bloco 4 (chamada estilo novo, com p_delivery_recipient e p_sale_type=wholesale, resolve pra mesma função e persiste snapshot+modalidade)';
 END $$;
 
 ROLLBACK;

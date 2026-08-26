@@ -10,7 +10,7 @@ import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { ncmFieldSchema, cestFieldSchema, origemFieldSchema } from '@/lib/validators'
+import { ncmFieldSchema, cestFieldSchema, origemFieldSchema, wholesalePriceFieldSchema } from '@/lib/validators'
 
 // ─── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -21,6 +21,8 @@ const variantToAddSchema = z.object({
   size_value_id: z.number().int().positive().nullable().optional(),
   price_override: z.coerce.number().positive().nullable().optional(),
   cost_override: z.coerce.number().min(0).nullable().optional(),
+  // Fundação varejo/atacado (2026-08-31) — espelha price_override.
+  wholesale_price_override: z.coerce.number().positive().nullable().optional(),
 })
 
 // Todos os campos do produto são opcionais — suporta update parcial.
@@ -46,6 +48,8 @@ const putSchema = z.object({
   cest: cestFieldSchema(),
   origem: origemFieldSchema(),
   unidade_med: z.string().max(10).optional(),
+  // Fundação varejo/atacado (2026-08-31).
+  wholesale_price: wholesalePriceFieldSchema(),
 })
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -75,7 +79,7 @@ export async function GET(
 
   const { data: product, error: productError } = await (admin as any)
     .from('products')
-    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med')
+    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med, wholesale_price')
     .eq('id', productId)
     .eq('company_id', user.company_id)
     .single()
@@ -91,6 +95,7 @@ export async function GET(
       sku_variation,
       cost_override,
       price_override,
+      wholesale_price_override,
       active,
       product_variation_attributes (
         variation_type_id,
@@ -161,6 +166,7 @@ export async function PUT(
     name: string; sku: string; category_id: number; supplier_id: number | null; brand_id: number | null
     origin: 'own_brand' | 'third_party'; base_cost: number; base_price: number; active: boolean
     ncm: string | null; cest: string | null; origem: number | null; unidade_med: string
+    wholesale_price: number | null
   }
   const snap = before as unknown as ProductSnap
   const productFields = {
@@ -180,6 +186,9 @@ export async function PUT(
     cest:        patch.cest   !== undefined ? patch.cest   : snap.cest,
     origem:      patch.origem !== undefined ? patch.origem : snap.origem,
     unidade_med: patch.unidade_med ?? snap.unidade_med,
+    // Fundação varejo/atacado (2026-08-31) — null é intencional (remover
+    // preço de atacado), undefined = não enviado → mantém banco.
+    wholesale_price: patch.wholesale_price !== undefined ? patch.wholesale_price : snap.wholesale_price,
   }
 
   // ── Detecção de alteração de SKU (para auditoria) ───────────────────────────
@@ -214,6 +223,7 @@ export async function PUT(
       cest:        productFields.cest,
       origem:      productFields.origem,
       unidade_med: productFields.unidade_med,
+      wholesale_price: productFields.wholesale_price,
       ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
     .eq('id', productId) as {
@@ -441,6 +451,7 @@ export async function PUT(
           product_id:    productId,
           cost_override: v.cost_override ?? null,
           price_override: v.price_override ?? null,
+          wholesale_price_override: v.wholesale_price_override ?? null,
           active: true,
         },
         admin,

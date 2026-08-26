@@ -36,6 +36,13 @@ const PUBLIC_PATHS = [
                               // sessão; a própria página não expõe dado sensível (sem custo/margem,
                               // sem CPF/nome de cliente) e ações de troca dentro dela exigem sessão
                               // própria (link só aparece para usuário autenticado/autorizado)
+  '/atacado',                // Site de Atacado (Fase 8) — canal externo B2B, autenticação PRÓPRIA
+                              // de cliente (public.customers.auth_user_id), NUNCA a mesma gate de
+                              // staff deste middleware (que redirecionaria pra /login de staff).
+                              // Páginas que exigem cliente logado (checkout/pedidos) checam a
+                              // sessão sozinhas via getWholesaleCustomerSession() — nunca aqui.
+  '/api/wholesale/',         // APIs públicas do site de atacado — mesma razão acima. Cada rota
+                              // decide sua própria exigência de sessão de cliente (nunca de staff).
 ]
 
 export async function middleware(request: NextRequest) {

@@ -75,6 +75,14 @@ export interface CreateSaleInput {
   /** Vendedor responsável pela venda (sellers.id). Obrigatório em vendas normais; nullable em trocas/devoluções. */
   responsible_seller_id: number | null
   /**
+   * Fundação varejo/atacado (2026-08-31) — modalidade COMERCIAL da venda,
+   * distinta de sale_origin (canal de marketing). Default 'retail' no RPC
+   * quando ausente — nunca inferido aqui, sempre explícito do caller.
+   */
+  sale_type?: 'retail' | 'wholesale'
+  /** Canal/origem OPERACIONAL da venda — pos/manual/whatsapp/nuvemshop/wholesale_site. `null`/ausente = não classificado ainda. */
+  sales_channel?: string | null
+  /**
    * Fase Fiscal 5C (revisão — Blocker 1) — snapshot de destinatário/
    * endereço de entrega, persistido ATOMICAMENTE com a venda (dentro da
    * mesma transação do RPC, via p_delivery_recipient). `null`/ausente para
@@ -82,6 +90,17 @@ export interface CreateSaleInput {
    * de entrada da API (Zod), não neste service.
    */
   deliveryRecipient?: DeliveryRecipientInput | null
+  /**
+   * Site de Atacado (Fase 8) — modo de baixa de estoque da RPC.
+   * 'main_store' (default, INALTERADO — nenhum caller existente passa
+   * este campo) debita só do Estoque Loja único, mesmo comportamento de
+   * sempre do PDV. 'online_priority' debita em cascata por
+   * `stock_locations.priority` entre TODAS as localizações ativas da
+   * empresa — mesmo modo já usado pelo webhook Nuvemshop (que chama a
+   * RPC diretamente, sem passar por este service). Reaproveitado aqui em
+   * vez de duplicado.
+   */
+  stockMode?: 'main_store' | 'online_priority'
 }
 
 export interface SaleResult {
@@ -409,6 +428,9 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
     p_cash_session_id:       input.cashSessionId ?? null,
     p_responsible_seller_id: input.responsible_seller_id,
     p_delivery_recipient,
+    p_sale_type:             input.sale_type ?? 'retail',
+    p_sales_channel:         input.sales_channel ?? null,
+    p_stock_mode:            input.stockMode ?? 'main_store',
   }
 
   const { data: sale, error } = await (admin as any)
