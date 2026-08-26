@@ -18,6 +18,14 @@ type VariationValue = { id: number; value: string; slug: string; sku_code: strin
 type VariationType  = { id: number; name: string; slug: string; variation_values: VariationValue[] }
 type CategoryAttributeLink = { required: boolean; active: boolean; variation_type: { slug: string } }
 
+// Preço de atacado — espelha a mesma regra de base_price/price_override
+// (> 0 quando informado), nunca obrigatório. Mesmo padrão de
+// wholesalePriceFieldSchema() em src/lib/validators/index.ts.
+const wholesalePriceSchema = z.preprocess(
+  (v) => (v === '' || v == null ? null : Number(v)),
+  z.number().positive('Preço de atacado deve ser maior que zero').nullable().optional(),
+)
+
 const variantRowSchema = z.object({
   sku_variation:   z.string().min(1, 'SKU obrigatório'),
   color_value_id:  z.number().nullable().optional(),
@@ -26,6 +34,9 @@ const variantRowSchema = z.object({
   size_label:      z.string().optional(),
   price_override:  z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().positive().nullable().optional()),
   cost_override:   z.preprocess((v) => (v === '' || v == null ? null : Number(v)), z.number().min(0).nullable().optional()),
+  // Fundação varejo/atacado — preço de atacado específico da variação.
+  // Vazio = herda wholesale_price do produto (nunca copia o preço varejo).
+  wholesale_price_override: wholesalePriceSchema,
   initial_stock:   z.coerce.number().int().min(0).default(0),
 })
 
@@ -41,6 +52,10 @@ const formSchema = z.object({
   origin:      z.enum(['own_brand', 'third_party']),
   base_cost:   z.coerce.number().min(0),
   base_price:  z.coerce.number().positive('Preço obrigatório'),
+  // Fundação varejo/atacado — preço de atacado do produto-pai. Opcional:
+  // produto sem preço de atacado continua vendendo normalmente no varejo
+  // (PDV/site bloqueiam só o atacado, nunca caem pro preço de varejo).
+  wholesale_price: wholesalePriceSchema,
   active:      z.boolean().default(true),
   variants:    z.array(variantRowSchema),
   ncm: z.preprocess(
@@ -222,6 +237,7 @@ export default function NovoProdutoPage() {
             size_label:     size.value,
             price_override: null,
             cost_override:  null,
+            wholesale_price_override: null,
             initial_stock:  0,
           })
         })
@@ -236,6 +252,7 @@ export default function NovoProdutoPage() {
           size_label:     undefined,
           price_override: null,
           cost_override:  null,
+          wholesale_price_override: null,
           initial_stock:  0,
         })
       })
@@ -249,6 +266,7 @@ export default function NovoProdutoPage() {
           size_label:     size.value,
           price_override: null,
           cost_override:  null,
+          wholesale_price_override: null,
           initial_stock:  0,
         })
       })
@@ -264,6 +282,7 @@ export default function NovoProdutoPage() {
         size_label:     undefined,
         price_override: null,
         cost_override:  null,
+        wholesale_price_override: null,
         initial_stock:  0,
       })
     }
@@ -400,6 +419,13 @@ export default function NovoProdutoPage() {
   const baseCost  = Number(watch('base_cost')) || 0
   const basePrice = Number(watch('base_price')) || 0
   const margin    = basePrice > 0 ? ((basePrice - baseCost) / basePrice) * 100 : 0
+  // wholesale_price pode ser legitimamente null/'' (produto sem atacado) —
+  // nunca tratar como 0, senão a prévia de herança na tabela mentiria.
+  // watch() devolve o valor cru do input (pode ser string '' mesmo o tipo
+  // do schema sendo number|null — RHF não converte até o zodResolver rodar
+  // no submit), daí o `any` só nesta leitura de exibição.
+  const wholesalePriceRaw = watch('wholesale_price') as any
+  const wholesalePrice    = wholesalePriceRaw != null && wholesalePriceRaw !== '' ? Number(wholesalePriceRaw) : null
 
   return (
     <div className="max-w-5xl space-y-6">
@@ -498,6 +524,18 @@ export default function NovoProdutoPage() {
                 {basePrice > 0 ? `${margin.toFixed(1)}%` : '—'}
               </div>
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="Preço de atacado base (R$)"
+              type="number"
+              step="0.01"
+              min="0.01"
+              placeholder="Deixe vazio se não vende no atacado"
+              error={errors.wholesale_price?.message}
+              {...register('wholesale_price')}
+            />
           </div>
 
           <div className="flex items-center gap-3">
@@ -675,7 +713,10 @@ export default function NovoProdutoPage() {
               <h3 className="text-sm font-semibold text-text-primary">
                 Matriz de SKUs <span className="text-text-muted font-normal">({fields.length} variantes)</span>
               </h3>
-              <p className="text-xs text-text-muted">Preço/custo em branco = usa o valor base do produto</p>
+              <p className="text-xs text-text-muted">
+                Preço/custo em branco = usa o valor base do produto ·
+                Atacado em branco = usa {wholesalePrice != null ? `R$ ${wholesalePrice.toFixed(2)}` : 'o preço de atacado'} do produto
+              </p>
             </div>
 
             <div className="overflow-x-auto">
@@ -686,6 +727,7 @@ export default function NovoProdutoPage() {
                     <th className="px-4 py-3 text-left text-xs font-medium text-text-muted w-48">SKU</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-text-muted w-32">Custo (R$)</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-text-muted w-32">Preço (R$)</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-text-muted w-32">Atacado (R$)</th>
                     <th className="px-4 py-3 text-left text-xs font-medium text-text-muted w-28">Estoque Inicial</th>
                   </tr>
                 </thead>
@@ -736,6 +778,16 @@ export default function NovoProdutoPage() {
                           placeholder={`${basePrice.toFixed(2)}`}
                           className="input-base text-xs py-1.5 w-full"
                           {...register(`variants.${idx}.price_override`)}
+                        />
+                      </td>
+
+                      {/* Atacado override */}
+                      <td className="px-4 py-2">
+                        <input
+                          type="number" step="0.01" min="0"
+                          placeholder={wholesalePrice != null ? wholesalePrice.toFixed(2) : 'sem atacado'}
+                          className="input-base text-xs py-1.5 w-full"
+                          {...register(`variants.${idx}.wholesale_price_override`)}
                         />
                       </td>
 

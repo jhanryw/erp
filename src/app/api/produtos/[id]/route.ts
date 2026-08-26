@@ -9,48 +9,8 @@ import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-d
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
-import { ncmFieldSchema, cestFieldSchema, origemFieldSchema, wholesalePriceFieldSchema } from '@/lib/validators'
-
-// ─── Schemas ──────────────────────────────────────────────────────────────────
-
-const variantToAddSchema = z.object({
-  // sku_variation AUSENTE INTENCIONALMENTE: gerado no servidor via generateSKU()
-  // Nunca aceito do cliente — mesma regra do POST /api/produtos
-  color_value_id: z.number().int().positive().nullable().optional(),
-  size_value_id: z.number().int().positive().nullable().optional(),
-  price_override: z.coerce.number().positive().nullable().optional(),
-  cost_override: z.coerce.number().min(0).nullable().optional(),
-  // Fundação varejo/atacado (2026-08-31) — espelha price_override.
-  wholesale_price_override: z.coerce.number().positive().nullable().optional(),
-})
-
-// Todos os campos do produto são opcionais — suporta update parcial.
-// Campos ausentes no payload são preenchidos com o valor atual do banco (merge).
-// A unicidade obrigatória é product_variations.sku_variation, não products.sku.
-const putSchema = z.object({
-  name: z.string().min(2).optional(),
-  // SKU é texto livre — aceita letras, números, hífen, zeros à esquerda e
-  // qualquer tamanho (mesma regra do cadastro manual em productSchema).
-  // Nunca converter para número em nenhum ponto deste fluxo: SKUs como
-  // "09", "722-G2" ou "ST-722-09" são válidos e não devem virar 9/722.
-  sku: z.string().min(2, 'SKU obrigatório').max(50).optional(),
-  category_id: z.coerce.number().int().positive().optional(),
-  supplier_id: z.coerce.number().int().positive().nullable().optional(),
-  brand_id: z.coerce.number().int().positive().nullable().optional(),
-  origin: z.enum(['own_brand', 'third_party']).optional(),
-  base_cost: z.coerce.number().min(0).optional(),
-  base_price: z.coerce.number().positive().optional(),
-  active: z.boolean().optional(),
-  variations_to_delete: z.array(z.number().int().positive()).optional(),
-  variations_to_add: z.array(variantToAddSchema).optional(),
-  ncm: ncmFieldSchema(),
-  cest: cestFieldSchema(),
-  origem: origemFieldSchema(),
-  unidade_med: z.string().max(10).optional(),
-  // Fundação varejo/atacado (2026-08-31).
-  wholesale_price: wholesalePriceFieldSchema(),
-})
+import { buildVariationOverridePatch } from './buildVariationOverridePatch'
+import { putSchema } from './putSchema'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -153,7 +113,7 @@ export async function PUT(
     return NextResponse.json({ error: summary, details: flat }, { status: 422 })
   }
 
-  const { variations_to_delete, variations_to_add, ...patch } = parsed.data
+  const { variations_to_delete, variations_to_add, variations_to_update, ...patch } = parsed.data
 
   // Snapshot antes para auditoria — também verifica que o produto pertence à empresa
   const before = await getProductSnapshot(productId, user.company_id)
@@ -309,6 +269,41 @@ export async function PUT(
         .eq('id', varId)
 
       if (varDelError) return NextResponse.json({ error: varDelError.message }, { status: 500 })
+    }
+  }
+
+  // ── 2b. Atualizar overrides (preço varejo/atacado) de variações existentes ──
+  // Edição manual — grava exatamente nas mesmas colunas usadas pelo CSV
+  // (import-parser.ts) e lidas pelo PDV/site (resolveSalePrice.ts):
+  // product_variations.price_override / wholesale_price_override.
+
+  if (variations_to_update && variations_to_update.length > 0) {
+    for (const upd of variations_to_update) {
+      const { data: varCheck, error: varCheckError } = await admin
+        .from('product_variations')
+        .select('id')
+        .eq('id', upd.id)
+        .eq('product_id', productId)
+        .maybeSingle() as unknown as { data: { id: number } | null; error: any }
+
+      if (varCheckError) return NextResponse.json({ error: varCheckError.message }, { status: 500 })
+
+      if (!varCheck) {
+        return NextResponse.json(
+          { error: `Variação #${upd.id} não pertence a este produto.` },
+          { status: 400 }
+        )
+      }
+
+      const overridePatch = buildVariationOverridePatch(upd)
+      if (Object.keys(overridePatch).length === 0) continue
+
+      const { error: overrideUpdateError } = await (admin as any)
+        .from('product_variations')
+        .update(overridePatch)
+        .eq('id', upd.id)
+
+      if (overrideUpdateError) return NextResponse.json({ error: overrideUpdateError.message }, { status: 500 })
     }
   }
 
