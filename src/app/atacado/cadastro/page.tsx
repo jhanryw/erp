@@ -4,9 +4,12 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
+import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export default function CadastroPage() {
   const router = useRouter()
+  const basePath = useWholesaleBasePath()
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', cpf: '', cnpj: '' })
   const [loading, setLoading] = useState(false)
 
@@ -36,7 +39,7 @@ export default function CadastroPage() {
         return
       }
       toast.success('Conta criada!')
-      router.push('/atacado')
+      router.push(wholesaleHref(basePath, '/'))
       router.refresh()
     } finally {
       setLoading(false)
@@ -60,7 +63,7 @@ export default function CadastroPage() {
         </button>
       </form>
       <p className="text-sm text-text-muted text-center">
-        Já tem conta? <Link href="/atacado/entrar" className="text-brand font-medium hover:underline">Entrar</Link>
+        Já tem conta? <Link href={wholesaleHref(basePath, '/entrar')} className="text-brand font-medium hover:underline">Entrar</Link>
       </p>
     </div>
   )

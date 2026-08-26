@@ -5,6 +5,8 @@ import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Meus pedidos' }
@@ -14,11 +16,14 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 export default async function PedidosPage() {
+  const basePath = getWholesaleBasePath()
   const session = await getWholesaleCustomerSession()
-  if (!session) redirect('/atacado/entrar?redirect=/atacado/pedidos')
+  if (!session) {
+    redirect(`${wholesaleHref(basePath, '/entrar')}?redirect=${encodeURIComponent(wholesaleHref(basePath, '/pedidos'))}`)
+  }
 
   const tenant = await resolveWholesaleSiteTenant()
-  if (!tenant) redirect('/atacado')
+  if (!tenant) redirect(wholesaleHref(basePath, '/'))
 
   const admin = createAdminClient()
   const { data: orders } = await (admin as any)
@@ -41,7 +46,7 @@ export default async function PedidosPage() {
           {orders.map((o) => (
             <Link
               key={o.id}
-              href={`/atacado/pedido/${o.id}`}
+              href={wholesaleHref(basePath, `/pedido/${o.id}`)}
               className="flex items-center justify-between p-4 rounded-xl border border-border bg-bg-card hover:border-brand/40 transition-colors"
             >
               <div>

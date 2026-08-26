@@ -2,13 +2,14 @@ import Link from 'next/link'
 import { ImageOff } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
-export function ProductCard({ product }: { product: WholesaleCatalogProduct }) {
+export function ProductCard({ product, basePath }: { product: WholesaleCatalogProduct; basePath: string }) {
   const cover = product.images[0]
 
   return (
     <Link
-      href={`/atacado/produto/${product.productId}`}
+      href={wholesaleHref(basePath, `/produto/${product.productId}`)}
       className="group flex flex-col rounded-xl border border-border bg-bg-card overflow-hidden hover:border-brand/50 hover:shadow-md transition-all"
     >
       <div className="aspect-square bg-bg-overlay flex items-center justify-center overflow-hidden">

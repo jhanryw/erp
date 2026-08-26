@@ -6,11 +6,14 @@ import { toast } from 'sonner'
 import { ImageOff, Minus, Plus, ShoppingCart } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../../_lib/CartContext'
+import { useWholesaleBasePath } from '../../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
 
 export function ProductDetailClient({ product }: { product: WholesaleCatalogProduct }) {
   const { addItem } = useCart()
   const router = useRouter()
+  const basePath = useWholesaleBasePath()
   const [selectedVariationId, setSelectedVariationId] = useState<number | null>(
     product.variations.find((v) => v.available)?.variationId ?? product.variations[0]?.variationId ?? null,
   )
@@ -117,7 +120,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
           </button>
         </div>
 
-        <button onClick={() => router.push('/atacado/carrinho')} className="text-xs text-text-muted hover:text-text-primary underline">
+        <button onClick={() => router.push(wholesaleHref(basePath, '/carrinho'))} className="text-xs text-text-muted hover:text-text-primary underline">
           Ver carrinho
         </button>
       </div>

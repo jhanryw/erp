@@ -4,6 +4,8 @@ import { Suspense, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
+import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export default function EntrarPage() {
   return (
@@ -16,6 +18,7 @@ export default function EntrarPage() {
 function EntrarForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const basePath = useWholesaleBasePath()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
@@ -34,7 +37,7 @@ function EntrarForm() {
         toast.error(typeof json.error === 'string' ? json.error : 'Falha ao entrar.')
         return
       }
-      router.push(searchParams.get('redirect') ?? '/atacado')
+      router.push(searchParams.get('redirect') ?? wholesaleHref(basePath, '/'))
       router.refresh()
     } finally {
       setLoading(false)
@@ -58,7 +61,7 @@ function EntrarForm() {
         </button>
       </form>
       <p className="text-sm text-text-muted text-center">
-        Ainda não tem conta? <Link href="/atacado/cadastro" className="text-brand font-medium hover:underline">Cadastre-se</Link>
+        Ainda não tem conta? <Link href={wholesaleHref(basePath, '/cadastro')} className="text-brand font-medium hover:underline">Cadastre-se</Link>
       </p>
     </div>
   )

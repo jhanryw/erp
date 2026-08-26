@@ -5,17 +5,20 @@ import { useRouter } from 'next/navigation'
 import { Minus, Plus, Trash2, ImageOff, ShoppingBag } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../_lib/CartContext'
+import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export default function CarrinhoPage() {
   const { items, updateQuantity, removeItem, totalDisplayValue } = useCart()
   const router = useRouter()
+  const basePath = useWholesaleBasePath()
 
   if (items.length === 0) {
     return (
       <div className="py-16 text-center space-y-3">
         <ShoppingBag className="w-10 h-10 text-text-muted mx-auto" />
         <p className="text-text-muted">Seu carrinho está vazio.</p>
-        <Link href="/atacado" className="inline-block text-sm text-brand font-medium hover:underline">
+        <Link href={wholesaleHref(basePath, '/')} className="inline-block text-sm text-brand font-medium hover:underline">
           Ver catálogo
         </Link>
       </div>
@@ -69,7 +72,7 @@ export default function CarrinhoPage() {
           O valor final é sempre recalculado no fechamento do pedido, com preço e disponibilidade atuais.
         </p>
         <button
-          onClick={() => router.push('/atacado/checkout')}
+          onClick={() => router.push(wholesaleHref(basePath, '/checkout'))}
           className="w-full py-2.5 rounded-lg bg-brand text-white font-medium hover:bg-brand-dark transition-colors"
         >
           Fechar pedido

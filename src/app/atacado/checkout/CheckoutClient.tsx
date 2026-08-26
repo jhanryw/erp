@@ -6,6 +6,8 @@ import { toast } from 'sonner'
 import { Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../_lib/CartContext'
+import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 interface RecipientForm {
   nome: string
@@ -30,6 +32,7 @@ const EMPTY_RECIPIENT: RecipientForm = {
 export function CheckoutClient({ customerName }: { customerName: string }) {
   const { items, totalDisplayValue, clear } = useCart()
   const router = useRouter()
+  const basePath = useWholesaleBasePath()
   const [deliveryMode, setDeliveryMode] = useState<'pickup' | 'delivery'>('pickup')
   const [recipient, setRecipient] = useState<RecipientForm>({ ...EMPTY_RECIPIENT, nome: customerName })
   const [cepLoading, setCepLoading] = useState(false)
@@ -99,7 +102,7 @@ export function CheckoutClient({ customerName }: { customerName: string }) {
         return
       }
       clear()
-      router.push(`/atacado/pedido/${json.sale_id}`)
+      router.push(wholesaleHref(basePath, `/pedido/${json.sale_id}`))
     } finally {
       setSubmitting(false)
     }

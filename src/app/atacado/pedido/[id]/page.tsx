@@ -6,6 +6,8 @@ import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
+import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export const dynamic = 'force-dynamic'
 export const metadata = { title: 'Pedido' }
@@ -15,8 +17,11 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 export default async function PedidoPage({ params }: { params: { id: string } }) {
+  const basePath = getWholesaleBasePath()
   const session = await getWholesaleCustomerSession()
-  if (!session) redirect(`/atacado/entrar?redirect=/atacado/pedido/${params.id}`)
+  if (!session) {
+    redirect(`${wholesaleHref(basePath, '/entrar')}?redirect=${encodeURIComponent(wholesaleHref(basePath, `/pedido/${params.id}`))}`)
+  }
 
   const tenant = await resolveWholesaleSiteTenant()
   if (!tenant) notFound()
@@ -92,8 +97,8 @@ export default async function PedidoPage({ params }: { params: { id: string } })
       </div>
 
       <div className="flex gap-3 justify-center text-sm">
-        <Link href="/atacado" className="text-brand font-medium hover:underline">Continuar comprando</Link>
-        <Link href="/atacado/pedidos" className="text-text-muted hover:text-text-primary">Ver meus pedidos</Link>
+        <Link href={wholesaleHref(basePath, '/')} className="text-brand font-medium hover:underline">Continuar comprando</Link>
+        <Link href={wholesaleHref(basePath, '/pedidos')} className="text-text-muted hover:text-text-primary">Ver meus pedidos</Link>
       </div>
     </div>
   )

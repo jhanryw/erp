@@ -4,6 +4,8 @@ import { Search } from 'lucide-react'
 import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { getWholesaleCatalogPage } from '@/services/wholesale/catalog'
 import { ProductCard } from './_components/ProductCard'
+import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export const dynamic = 'force-dynamic'
 
@@ -17,6 +19,7 @@ type SearchParams = Promise<{ q?: string; page?: string }>
 export default async function AtacadoHomePage({ searchParams }: { searchParams: SearchParams }) {
   const { q, page } = await searchParams
   const tenant = await resolveWholesaleSiteTenant()
+  const basePath = getWholesaleBasePath()
 
   if (!tenant) {
     return (
@@ -58,7 +61,7 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
       ) : (
         <>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            {result.products.map((p) => <ProductCard key={p.productId} product={p} />)}
+            {result.products.map((p) => <ProductCard key={p.productId} product={p} basePath={basePath} />)}
           </div>
 
           {totalPages > 1 && (
@@ -66,7 +69,7 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
               {Array.from({ length: totalPages }, (_, i) => i + 1).map((p) => (
                 <Link
                   key={p}
-                  href={`/atacado?${q ? `q=${encodeURIComponent(q)}&` : ''}page=${p}`}
+                  href={`${wholesaleHref(basePath, '/')}?${q ? `q=${encodeURIComponent(q)}&` : ''}page=${p}`}
                   className={`w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors ${
                     p === pageNumber ? 'bg-brand text-white' : 'bg-bg-card border border-border text-text-secondary hover:bg-bg-hover'
                   }`}

@@ -3,11 +3,14 @@
 import Link from 'next/link'
 import { ShoppingCart } from 'lucide-react'
 import { useCart } from '../_lib/CartContext'
+import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
+import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export function HeaderCartLink() {
   const { totalItems } = useCart()
+  const basePath = useWholesaleBasePath()
   return (
-    <Link href="/atacado/carrinho" className="relative flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors">
+    <Link href={wholesaleHref(basePath, '/carrinho')} className="relative flex items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-text-primary transition-colors">
       <ShoppingCart className="w-5 h-5" />
       <span className="hidden sm:inline">Carrinho</span>
       {totalItems > 0 && (

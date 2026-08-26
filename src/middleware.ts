@@ -15,6 +15,7 @@
 
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
+import { isWholesaleHost, shouldRewriteToWholesaleApp, toInternalWholesalePath } from '@/lib/wholesale/site-host'
 
 // Rotas que não precisam de sessão
 const PUBLIC_PATHS = [
@@ -41,12 +42,43 @@ const PUBLIC_PATHS = [
                               // staff deste middleware (que redirecionaria pra /login de staff).
                               // Páginas que exigem cliente logado (checkout/pedidos) checam a
                               // sessão sozinhas via getWholesaleCustomerSession() — nunca aqui.
+                              // Continua valendo tanto para o path real (/atacado/**, acessado
+                              // direto no host administrativo) quanto para o path JÁ REESCRITO
+                              // pelo rewrite por host abaixo (a checagem usa o pathname pós-rewrite).
   '/api/wholesale/',         // APIs públicas do site de atacado — mesma razão acima. Cada rota
                               // decide sua própria exigência de sessão de cliente (nunca de staff).
 ]
 
 export async function middleware(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
+  const originalPathname = request.nextUrl.pathname
+  const host = request.headers.get('host')
+
+  // ─── Rewrite por host — domínio próprio do site de atacado ────────────────
+  // atacado.santtorini.com/carrinho → internamente /atacado/carrinho, sem
+  // NUNCA aparecer "/atacado" na URL do navegador (rewrite, não redirect).
+  // Fora do host configurado (ERP administrativo, preview, dev sem
+  // WHOLESALE_SITE_HOST) nada muda — comportamento atual preservado,
+  // incluindo /atacado/** acessível diretamente por lá.
+  // /api/**, /_next/** e paths já prefixados com /atacado nunca são
+  // reescritos (ver shouldRewriteToWholesaleApp) — as APIs /api/wholesale/**
+  // continuam respondendo no path real, sem prefixo nenhum.
+  const rewriteUrl =
+    isWholesaleHost(host) && shouldRewriteToWholesaleApp(originalPathname)
+      ? (() => {
+          const u = request.nextUrl.clone()
+          u.pathname = toInternalWholesalePath(originalPathname)
+          return u
+        })()
+      : null
+
+  // Pathname "efetivo" usado pro resto deste middleware (checagem de rota
+  // pública) — sempre o pós-rewrite quando houver um, senão o original.
+  const effectivePathname = rewriteUrl ? rewriteUrl.pathname : originalPathname
+
+  const buildBaseResponse = () =>
+    rewriteUrl ? NextResponse.rewrite(rewriteUrl, { request }) : NextResponse.next({ request })
+
+  let response = buildBaseResponse()
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -60,9 +92,9 @@ export async function middleware(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
-          supabaseResponse = NextResponse.next({ request })
+          response = buildBaseResponse()
           cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options as never)
+            response.cookies.set(name, value, options as never)
           )
         },
       },
@@ -72,17 +104,16 @@ export async function middleware(request: NextRequest) {
   // getUser() verifica o token JWT — não confia apenas no cookie local
   const { data: { user } } = await supabase.auth.getUser()
 
-  const { pathname } = request.nextUrl
-  const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p))
+  const isPublic = PUBLIC_PATHS.some((p) => effectivePathname.startsWith(p))
 
   if (!user && !isPublic) {
     const loginUrl = request.nextUrl.clone()
     loginUrl.pathname = '/login'
-    loginUrl.searchParams.set('redirect', pathname)
+    loginUrl.searchParams.set('redirect', originalPathname)
     return NextResponse.redirect(loginUrl)
   }
 
-  return supabaseResponse
+  return response
 }
 
 export const config = {
