@@ -10,29 +10,27 @@ export function ProductCard({ product, basePath }: { product: WholesaleCatalogPr
   return (
     <Link
       href={wholesaleHref(basePath, `/produto/${product.productId}`)}
-      className="group flex flex-col rounded-xl border border-border bg-bg-card overflow-hidden hover:border-brand/50 hover:shadow-md transition-all"
+      className="group flex flex-col"
     >
-      <div className="aspect-square bg-bg-overlay flex items-center justify-center overflow-hidden">
+      <div className="aspect-square bg-gray-50 rounded-lg flex items-center justify-center overflow-hidden">
         {cover ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={cover.url} alt={cover.alt ?? product.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+          <img src={cover.url} alt={cover.alt ?? product.name} className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
         ) : (
-          <ImageOff className="w-8 h-8 text-text-muted" />
+          <ImageOff className="w-8 h-8 text-gray-300" />
         )}
       </div>
-      <div className="p-3 space-y-1 flex-1 flex flex-col">
-        {product.brand && <span className="text-[11px] text-text-muted uppercase tracking-wide">{product.brand}</span>}
-        <h3 className="text-sm font-medium text-text-primary line-clamp-2 flex-1">{product.name}</h3>
-        <div className="pt-1">
-          {product.purchasable ? (
-            <span className="text-base font-bold text-text-primary">
-              {product.priceFrom != null && `a partir de `}
-              {formatCurrency(product.priceFrom ?? 0)}
-            </span>
-          ) : (
-            <span className="text-xs font-medium text-text-muted">Indisponível para atacado</span>
-          )}
-        </div>
+      <div className="pt-2.5 space-y-0.5">
+        {product.brand && <span className="text-[11px] text-gray-400 uppercase tracking-wide">{product.brand}</span>}
+        <h3 className="text-sm text-gray-800 line-clamp-2 leading-snug">{product.name}</h3>
+        {product.purchasable ? (
+          <p className="text-sm font-semibold text-gray-900 pt-0.5">
+            {product.priceFrom != null && <span className="font-normal text-gray-400 text-xs">a partir de </span>}
+            {formatCurrency(product.priceFrom ?? 0)}
+          </p>
+        ) : (
+          <p className="text-xs text-gray-400 pt-0.5">Indisponível</p>
+        )}
       </div>
     </Link>
   )

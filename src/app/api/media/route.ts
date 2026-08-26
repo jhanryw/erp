@@ -8,7 +8,7 @@ import type { MediaUsageEntityType } from '@/types/database.types'
 import { ok, err, forbidden, validationError } from '@/lib/api/response'
 
 function isValidEntityType(value: string): value is MediaUsageEntityType {
-  return value === 'product' || value === 'product_variation' || value === 'shipment'
+  return value === 'product' || value === 'product_variation' || value === 'shipment' || value === 'company'
 }
 
 // ─── GET /api/media?entity_type=&entity_id= ────────────────────────────────────

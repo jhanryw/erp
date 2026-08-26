@@ -333,6 +333,11 @@ const ALLOWED_ROLES_BY_ENTITY: Record<MediaUsageEntityType, MediaUsageRole[]> = 
   // nunca pela rota HTTP humana, que bloqueia 'crm_message' explicitamente
   // antes de chegar aqui — ver as 3 rotas em app/api/media/[publicId]/*).
   crm_message: ['attachment'],
+  // Logo do catálogo de atacado (Configurações → Atacado → Catálogo
+  // Online) — role 'logo' já é singular por entidade (uq_media_usages_
+  // singular_role), então nunca existe mais de 1 logo por empresa ao
+  // mesmo tempo.
+  company: ['logo'],
 }
 
 /**
@@ -380,6 +385,10 @@ export async function entityBelongsToCompany(
         .maybeSingle() as unknown as { data: { id: number } | null }
       return !!data
     }
+    // entity_id É o company_id — não precisa de query, "pertencer à
+    // empresa" é literalmente ser a mesma empresa da sessão.
+    case 'company':
+      return numericId === companyId
     default:
       return false
   }

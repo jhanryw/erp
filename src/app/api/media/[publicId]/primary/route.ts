@@ -28,6 +28,10 @@ const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
+  // company: nunca alcançado — bodySchema abaixo não lista 'company'. Logo
+  // é role='logo' (singular via uq_media_usages_singular_role), não
+  // 'primary' — não usa esta troca atômica, ver usages/route.ts.
+  company: 'admin',
 }
 
 const bodySchema = z.object({

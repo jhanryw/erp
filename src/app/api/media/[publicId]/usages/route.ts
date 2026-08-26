@@ -33,6 +33,8 @@ const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
+  // Logo do catálogo de atacado — mesma role mínima de Configurações → Fiscal.
+  company: 'admin',
 }
 
 // ─── POST /api/media/[publicId]/usages ─────────────────────────────────────────

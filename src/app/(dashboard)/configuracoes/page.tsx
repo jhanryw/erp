@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe, ListChecks, Receipt } from 'lucide-react'
+import { Settings, Users, Tag, Grid3X3, BookOpen, Gift, ArrowRight, Truck, CreditCard, Globe, ListChecks, Receipt, Store } from 'lucide-react'
 import { PushPermissionButton } from '@/components/push/PushPermissionButton'
 
 export const dynamic = 'force-dynamic'
@@ -17,6 +17,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
   { href: '/configuracoes/nuvemshop', icon: Globe, title: 'Nuvemshop', description: 'Sincronize produtos e estoque com a loja online.' },
   { href: '/configuracoes/fiscal', icon: Receipt, title: 'Fiscal', description: 'Fundação de emissão de NF-e via Focus NFe (homologação).' },
+  { href: '/configuracoes/atacado', icon: Store, title: 'Atacado — Catálogo Online', description: 'Status, logo, WhatsApp, pedido mínimo, exibição, Meta Pixel e banners da vitrine pública.' },
 ]
 
 export default async function ConfiguracoesPage() {

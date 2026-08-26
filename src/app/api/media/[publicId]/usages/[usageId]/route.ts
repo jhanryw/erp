@@ -31,6 +31,7 @@ const ROLE_BY_ENTITY: Record<MediaUsageEntityType, AppRole> = {
   product_variation: 'usuario',
   shipment: 'usuario',
   crm_message: 'admin',
+  company: 'admin',
 }
 
 // ─── DELETE /api/media/[publicId]/usages/[usageId] ─────────────────────────────

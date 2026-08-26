@@ -14,7 +14,7 @@ export async function GET() {
   if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa vinculada.' }, { status: 403 })
 
   const admin = createAdminClient()
-  const { data, error } = await db(admin).select('id, name, product_type_id').eq('company_id', user.company_id).order('name')
+  const { data, error } = await db(admin).select('id, name, slug, product_type_id').eq('company_id', user.company_id).order('name')
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ categories: data ?? [] })
 }
