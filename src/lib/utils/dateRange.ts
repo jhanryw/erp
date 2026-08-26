@@ -31,6 +31,10 @@ export function resolveDateRange(range?: string, from?: string, to?: string): Re
   if (range === '7d') {
     return { dateFrom: brazilSubDays(6), dateTo: today, activeRange: '7d', rangeLabel: 'Últimos 7 dias' }
   }
+  if (range === 'month') {
+    const [year, month] = today.split('-')
+    return { dateFrom: `${year}-${month}-01`, dateTo: today, activeRange: 'month', rangeLabel: 'Este mês' }
+  }
   if (range === '90d') {
     return { dateFrom: brazilSubDays(89), dateTo: today, activeRange: '90d', rangeLabel: 'Últimos 90 dias' }
   }

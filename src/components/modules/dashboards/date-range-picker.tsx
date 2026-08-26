@@ -4,7 +4,7 @@ import { useRouter, usePathname } from 'next/navigation'
 import { useState } from 'react'
 import { CalendarDays, ChevronDown } from 'lucide-react'
 
-export type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | '90d' | 'year'
+export type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'month' | '90d' | 'year'
 
 interface DateRangePickerProps {
   activeRange: RangePreset | 'custom'
@@ -17,6 +17,7 @@ const PRESETS: { value: RangePreset; label: string }[] = [
   { value: 'yesterday', label: 'Ontem' },
   { value: '7d',        label: '7 dias' },
   { value: '30d',       label: '30 dias' },
+  { value: 'month',     label: 'Este mês' },
   { value: '90d',       label: '90 dias' },
   { value: 'year',      label: 'Este ano' },
 ]
