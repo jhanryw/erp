@@ -37,6 +37,7 @@ function failure(error: string, status = 500): ServiceOutcome<never> {
 interface FiscalSettingsRow {
   nfe_enabled: boolean
   nfe_environment: FocusEnvironment
+  nfce_enabled: boolean
   cnpj: string | null
   razao_social: string | null
   inscricao_estadual: string | null
@@ -48,6 +49,9 @@ interface FiscalSettingsRow {
   municipio_ibge: string | null
   uf: string | null
   cep: string | null
+  certificate_status: string | null
+  certificate_valid_until: string | null
+  csc_id: string | null
 }
 
 const EMITENTE_REQUIRED_FIELDS: { key: keyof FiscalSettingsRow; label: string }[] = [
@@ -67,6 +71,7 @@ const EMITENTE_REQUIRED_FIELDS: { key: keyof FiscalSettingsRow; label: string }[
 export interface FiscalHealthStatus {
   fiscalSettingsConfigured: boolean
   nfeEnabled: boolean
+  nfceEnabled: boolean
   environment: FocusEnvironment
   emitente: {
     complete: boolean
@@ -76,6 +81,14 @@ export interface FiscalHealthStatus {
     connected: boolean
     reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | null
   }
+  /** Motor Fiscal Configurável Fase 2 — status de prontidão do certificado/CSC (seção 31 do pedido). */
+  certificate: {
+    configured: boolean
+    status: string
+    expiringSoon: boolean
+    daysUntilExpiry: number | null
+  }
+  csc: { configured: boolean }
   readyForHomologacao: boolean
 }
 
@@ -84,7 +97,7 @@ export async function getFiscalHealth(companyId: number): Promise<ServiceOutcome
 
   const { data: settings, error: settingsError } = await (admin as any)
     .from('company_fiscal_settings')
-    .select('nfe_enabled, nfe_environment, cnpj, razao_social, inscricao_estadual, crt, logradouro, numero_endereco, bairro, municipio, municipio_ibge, uf, cep')
+    .select('nfe_enabled, nfe_environment, nfce_enabled, cnpj, razao_social, inscricao_estadual, crt, logradouro, numero_endereco, bairro, municipio, municipio_ibge, uf, cep, certificate_status, certificate_valid_until, csc_id')
     .eq('company_id', companyId)
     .maybeSingle() as { data: FiscalSettingsRow | null; error: { message: string } | null }
 
@@ -104,12 +117,30 @@ export async function getFiscalHealth(companyId: number): Promise<ServiceOutcome
   const emitenteComplete = missingFields.length === 0
   const environment = settings?.nfe_environment ?? 'homologacao'
 
+  // Motor Fiscal Configurável Fase 2 — informativo (checklist da seção 31).
+  // NUNCA usado ainda pela emissão fiscal real (Focus continua com seu
+  // próprio cadastro de certificado via /api/fiscal/empresa) — este cofre
+  // é infraestrutura preparada pra um provider futuro (seção 26 do
+  // pedido), não substitui o fluxo vigente.
+  const certStatus = settings?.certificate_status ?? 'not_configured'
+  const daysUntilExpiry = settings?.certificate_valid_until
+    ? Math.ceil((new Date(settings.certificate_valid_until).getTime() - Date.now()) / 86_400_000)
+    : null
+
   return success({
     fiscalSettingsConfigured: !!settings,
     nfeEnabled: settings?.nfe_enabled ?? false,
+    nfceEnabled: settings?.nfce_enabled ?? false,
     environment,
     emitente: { complete: emitenteComplete, missingFields },
     focusIntegration,
+    certificate: {
+      configured: certStatus === 'valid' || certStatus === 'expired',
+      status: certStatus,
+      expiringSoon: daysUntilExpiry != null && daysUntilExpiry <= 30 && daysUntilExpiry >= 0,
+      daysUntilExpiry,
+    },
+    csc: { configured: !!settings?.csc_id },
     readyForHomologacao: emitenteComplete && focusIntegration.connected && environment === 'homologacao',
   })
 }

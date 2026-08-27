@@ -20,7 +20,14 @@ import type { ServiceOutcome } from '../produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
-export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop' | 'focus_nfe'
+// 'fiscal_certificate' — Motor Fiscal Configurável Fase 2: NÃO é uma
+// integração externa de verdade (não há "conta" em outro sistema) — é
+// reaproveitamento deliberado desta infra (linha por empresa + segredos
+// criptografados em integration_secrets) como o "cofre" de certificado
+// digital (.pfx) + senha + CSC Token da empresa. Ver
+// certificateService.ts. Amplia o MESMO CHECK constraint já usado por
+// 'focus_nfe' (migration 202609051100).
+export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop' | 'focus_nfe' | 'fiscal_certificate'
 export type IntegrationStatus = 'pending' | 'active' | 'inactive' | 'error'
 
 export interface CompanyIntegration {

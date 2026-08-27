@@ -6,6 +6,8 @@ import { Card } from '@/components/ui/card'
 import { TestFocusConnectionButton } from '@/components/fiscal/TestFocusConnectionButton'
 import { getFiscalHealth } from '@/services/fiscal/health.service'
 import { FiscalPolicyMatrix } from './_components/FiscalPolicyMatrix'
+import { CertificateManager } from './_components/CertificateManager'
+import { CscManager } from './_components/CscManager'
 
 export const dynamic = 'force-dynamic'
 
@@ -85,6 +87,25 @@ export default async function ConfigFiscalPage() {
               ok={result.data.nfeEnabled}
               label="Emissão de NF-e habilitada"
             />
+            <StatusRow
+              ok={result.data.nfceEnabled}
+              label="Emissão de NFC-e habilitada"
+            />
+            <StatusRow
+              ok={result.data.certificate.configured}
+              label="Certificado digital configurado"
+              detail={
+                result.data.certificate.status === 'expired' ? 'Certificado expirado — envie um novo.'
+                : result.data.certificate.expiringSoon ? `Expira em ${result.data.certificate.daysUntilExpiry} dia(s) — providencie a renovação.`
+                : !result.data.certificate.configured ? 'Nenhum certificado enviado ainda (ver seção abaixo).'
+                : undefined
+              }
+            />
+            <StatusRow
+              ok={result.data.csc.configured}
+              label="CSC configurado"
+              detail={result.data.csc.configured ? undefined : 'Necessário para NFC-e (ver seção abaixo).'}
+            />
           </Card>
 
           <Card className="p-5">
@@ -106,10 +127,21 @@ export default async function ConfigFiscalPage() {
             <FiscalPolicyMatrix />
           </div>
 
-          <p className="text-xs text-text-muted">
-            Cadastro de certificado digital (A1) e CSC ainda não tem tela própria nesta fase — pendência explícita,
-            aguardando implementação dedicada (upload seguro, criptografia, metadata).
-          </p>
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary mb-1">Certificado digital</h3>
+              <p className="text-xs text-text-muted mb-3">
+                Arquivo e senha ficam criptografados (AES-256-GCM) — nunca são reexibidos depois de salvos. Esta
+                fundação é independente do fluxo de emissão vigente (que continua com seu próprio cadastro de
+                certificado na Focus) — é infraestrutura preparada para uma arquitetura multi-provider futura.
+              </p>
+              <CertificateManager />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-text-primary mb-1">CSC (NFC-e)</h3>
+              <CscManager />
+            </div>
+          </div>
         </>
       )}
     </div>
