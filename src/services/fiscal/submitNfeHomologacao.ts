@@ -120,6 +120,8 @@ export interface SubmitNfeResult {
   submissionErrorMessage: string | null
   xmlPath: string | null
   danfePath: string | null
+  /** Conteúdo real do QR Code fiscal (só NFC-e — Focus não retorna pra NF-e, fica `null`). */
+  qrcodeUrl: string | null
   validationErrors: FiscalValidationError[]
 }
 
@@ -142,6 +144,7 @@ export interface FiscalDocumentRow {
   submission_error_message: string | null
   xml_path: string | null
   danfe_path: string | null
+  qrcode_url: string | null
 }
 
 /** Lease do claim de transmissão — generosa o bastante pra cobrir carregar contexto + montar payload + o timeout HTTP da Focus (15s, ver httpClient.ts) com folga, curta o bastante pra um crash se autorrecuperar em ~1 minuto. */
@@ -194,11 +197,12 @@ export function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalVali
     submissionErrorMessage: row.submission_error_message,
     xmlPath: row.xml_path,
     danfePath: row.danfe_path,
+    qrcodeUrl: row.qrcode_url,
     validationErrors,
   }
 }
 
-export const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path'
+export const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, qrcode_url'
 
 /**
  * Wrapper de `rpc_claim_fiscal_emission` — claim atômico curto, comita
@@ -242,6 +246,10 @@ export async function claimFiscalEmission(
       submission_error_message: row.submission_error_message,
       xml_path: row.xml_path,
       danfe_path: row.danfe_path,
+      // `rpc_claim_fiscal_emission` roda ANTES da transmissão (draft/pending)
+      // — qrcode_url só existe depois de autorizada, nunca neste ponto do
+      // fluxo. RPC não precisa devolver a coluna; `null` aqui é sempre correto.
+      qrcode_url: row.qrcode_url ?? null,
     },
     claimToken: row.submission_claim_token ?? null,
     leaseUntil: row.submission_lease_until ?? null,

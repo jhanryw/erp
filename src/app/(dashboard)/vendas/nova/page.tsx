@@ -174,9 +174,11 @@ export default function NovaVendaPage() {
       shipping_charged: 0,
       delivery_mode:    'delivery',
       delivery_recipient: null,
-      // Fase Fiscal 6 — 'none' (comprovante não fiscal) é sempre o default:
-      // nenhuma nota é emitida sem escolha explícita do operador.
-      fiscal_document_type: 'none',
+      // Fase Fiscal 7 — 'auto' é o default: a emissão fiscal é automática
+      // ao finalizar (ver effectiveFiscalMode/resolveAutomaticFiscalEmission
+      // no servidor). 'none'/'nfce'/'nfe' continuam disponíveis como
+      // override explícito do operador via os botões abaixo.
+      fiscal_document_type: 'auto',
       fiscal_recipient: null,
       // PDV atacado/varejo (2026-09-02) — default seguro retrocompatível;
       // a UI exige escolha explícita antes de avançar do Passo 0 mesmo
@@ -385,7 +387,31 @@ export default function NovaVendaPage() {
   const cashbackAction  = watch('cashback_action')  ?? 'accumulate'
   const saleOrigin      = watch('sale_origin')
   const saleType        = watch('sale_type') ?? 'retail'
-  const fiscalDocumentType = watch('fiscal_document_type') ?? 'none'
+  const fiscalDocumentType = watch('fiscal_document_type') ?? 'auto'
+
+  // Sugestão (nunca obrigatória) de qual documento fiscal é o mais
+  // adequado pra esta venda, calculada com a MESMA função pura usada no
+  // servidor (nenhuma lógica fiscal duplicada) — usa os valores JÁ
+  // escolhidos neste formulário (modo de entrega/origem), sem nenhuma
+  // chamada de rede. O servidor é quem decide de verdade na hora de
+  // emitir; isto é só uma pista visual pro operador.
+  const fiscalRecommended = resolveFiscalDocumentType({ deliveryMode, saleOrigin: saleOrigin ?? null })
+
+  // Fase Fiscal 7 — o que a emissão automática vai realmente tentar quando
+  // `fiscal_document_type === 'auto'` (default). Espelha
+  // `resolveAutomaticFiscalEmission` no servidor só pra fins de exibição
+  // (pista visual, nunca a decisão real — mesmo espírito de
+  // `fiscalRecommended` acima): atacado nunca emite NFC-e sozinho (exceção
+  // legal, ver comentário em resolveAutomaticFiscalEmission.ts), e um
+  // resultado 'blocked' vira 'none' (nada será emitido automaticamente).
+  const autoWillEmit: 'nfce' | 'nfe' | 'none' =
+    saleType === 'wholesale' ? 'none' : fiscalRecommended === 'blocked' ? 'none' : fiscalRecommended
+
+  // Modo fiscal EFETIVO pra fins de exibição/campos de destinatário — nunca
+  // passa o literal 'auto' adiante (FiscalRecipientFields só aceita
+  // 'nfce'/'nfe').
+  const effectiveFiscalMode: 'none' | 'nfce' | 'nfe' =
+    fiscalDocumentType === 'auto' ? autoWillEmit : fiscalDocumentType
 
   // Fase Fiscal 5C — single source of truth da aritmética de preço é
   // src/lib/sales/pricing.ts, o mesmo módulo que espelha a fórmula do RPC
@@ -422,8 +448,8 @@ export default function NovaVendaPage() {
   // nada (evita mandar um objeto fiscal_recipient parcial preenchido por
   // engano quando o operador troca de volta pra "Somente comprovante").
   useEffect(() => {
-    setValue('fiscal_recipient', fiscalDocumentType !== 'none' ? fiscalRecipient : null)
-  }, [fiscalRecipient, fiscalDocumentType, setValue])
+    setValue('fiscal_recipient', effectiveFiscalMode !== 'none' ? fiscalRecipient : null)
+  }, [fiscalRecipient, effectiveFiscalMode, setValue])
 
   // Fase Fiscal 6 — quando o operador escolhe NF-e numa venda de ENTREGA
   // que já tem endereço preenchido, pré-carrega os campos fiscais com o
@@ -434,7 +460,7 @@ export default function NovaVendaPage() {
   // de forma segura e independente (buildFiscalRecipientInput em
   // POST /api/vendas), então isto nunca é a única garantia de correção.
   useEffect(() => {
-    if (fiscalDocumentType === 'nfe' && deliveryMode === 'delivery' && deliveryRecipient && !fiscalRecipient) {
+    if (effectiveFiscalMode === 'nfe' && deliveryMode === 'delivery' && deliveryRecipient && !fiscalRecipient) {
       setFiscalRecipient({
         ...EMPTY_FISCAL_RECIPIENT,
         nome: deliveryRecipient.nome, cpf: deliveryRecipient.cpf ?? null, cnpj: deliveryRecipient.cnpj ?? null,
@@ -445,15 +471,7 @@ export default function NovaVendaPage() {
       })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fiscalDocumentType, deliveryMode])
-
-  // Sugestão (nunca obrigatória) de qual documento fiscal é o mais
-  // adequado pra esta venda, calculada com a MESMA função pura usada no
-  // servidor (nenhuma lógica fiscal duplicada) — usa os valores JÁ
-  // escolhidos neste formulário (modo de entrega/origem), sem nenhuma
-  // chamada de rede. O servidor é quem decide de verdade na hora de
-  // emitir; isto é só uma pista visual pro operador.
-  const fiscalRecommended = resolveFiscalDocumentType({ deliveryMode, saleOrigin: saleOrigin ?? null })
+  }, [effectiveFiscalMode, deliveryMode])
 
   const totalPaid     = payments.reduce((s, p) => s + p.net_amount, 0)
   const saldoRestante = total - totalPaid
@@ -586,7 +604,22 @@ export default function NovaVendaPage() {
       if (fiscal) {
         const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
         if (fiscal.status === 'authorized') {
-          toast.success(`${label} autorizada!`)
+          // Fase Fiscal 7 — item 47 do pedido: auditei até onde o browser
+          // permite automatizar a impressão do DANFE fiscal com segurança.
+          // Duas abas about:blank pré-abertas no MESMO clique (uma pro
+          // comprovante comercial, outra pro DANFE) teriam suporte
+          // inconsistente entre navegadores e imprimiriam DOIS papéis na
+          // MESMA impressora térmica simultaneamente — risco operacional
+          // real (o operador pode entregar o papel errado ao cliente),
+          // não só técnico. Em vez de um hack frágil, a impressão fiscal
+          // fica a UM clique de distância, no próprio toast de sucesso —
+          // nunca reemite nada (a URL é só leitura, ver getNfceDanfeData.ts).
+          toast.success(`${label} autorizada!`, fiscal.requested === 'nfce' ? {
+            action: {
+              label: 'Imprimir DANFE',
+              onClick: () => window.open(`/vendas/${sale.id}/nfce`, '_blank'),
+            },
+          } : undefined)
         } else if (fiscal.status === 'pending') {
           toast.info(`${label} enviada — processando na SEFAZ`, { description: 'Acompanhe o status na tela da venda.' })
         } else {
@@ -1541,46 +1574,67 @@ export default function NovaVendaPage() {
                   )}
                 </div>
 
-                {/* ── Fase Fiscal 6 — Documento fiscal ─────────────────────────
-                    Escolha explícita, sempre visível no fechamento — nunca
-                    pré-selecionado além do default seguro ("Somente
-                    comprovante"). O rótulo "Recomendado" é só uma pista
-                    (mesma função pura do servidor); a escolha final é
-                    sempre do operador, nunca travada pela recomendação. */}
+                {/* ── Fase Fiscal 7 — Documento fiscal ─────────────────────────
+                    Default agora é emissão AUTOMÁTICA ("auto") — a venda
+                    não depende mais do vendedor lembrar de pedir nota. Os
+                    3 botões são OVERRIDE explícito: "Sem nota" pula a
+                    emissão de propósito, "NFC-e"/"NF-e" forçam um tipo
+                    específico. Quando nenhum botão foi clicado (estado
+                    'auto'), o botão correspondente ao que será emitido
+                    automaticamente aparece destacado, só como indicação —
+                    a decisão real é do servidor (resolveAutomaticFiscalEmission). */}
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-text-secondary">Documento fiscal</p>
                   <div className="grid grid-cols-3 gap-2">
                     {([
-                      { value: 'none' as const, label: 'Comprovante' },
+                      { value: 'none' as const, label: 'Sem nota' },
                       { value: 'nfce' as const, label: 'NFC-e' },
                       { value: 'nfe' as const, label: 'NF-e' },
-                    ]).map(({ value, label }) => (
+                    ]).map(({ value, label }) => {
+                      const isActive = fiscalDocumentType === value
+                        || (fiscalDocumentType === 'auto' && autoWillEmit === value)
+                      return (
                       <button
                         key={value}
                         type="button"
                         onClick={() => setValue('fiscal_document_type', value)}
                         className={`relative py-2.5 rounded-lg border text-xs font-semibold transition-colors ${
-                          fiscalDocumentType === value
+                          isActive
                             ? 'bg-brand text-white border-brand'
                             : 'bg-bg-card border-border text-text-secondary hover:border-brand/40'
                         }`}
                       >
                         {label}
-                        {value !== 'none' && value === fiscalRecommended && fiscalDocumentType !== value && (
+                        {value !== 'none' && value === fiscalRecommended && !isActive && (
                           <span className="absolute -top-1.5 -right-1.5 text-[9px] font-bold bg-emerald-500 text-white rounded-full px-1.5 py-0.5">
                             sugerido
                           </span>
                         )}
                       </button>
-                    ))}
+                      )
+                    })}
                   </div>
-                  {fiscalDocumentType === 'nfce' && fiscalRecommended !== 'nfce' && (
+                  {fiscalDocumentType === 'auto' && (
+                    <p className="text-xs text-text-muted">
+                      {autoWillEmit === 'none'
+                        ? (saleType === 'wholesale'
+                            ? 'Atacado: NFC-e não é emitida automaticamente — emita NF-e manualmente na tela da venda, se aplicável.'
+                            : 'Não foi possível determinar automaticamente o documento fiscal — nenhuma nota será emitida ao finalizar. Escolha manualmente ou complete os dados da venda.')
+                        : `Emissão automática de ${autoWillEmit === 'nfce' ? 'NFC-e' : 'NF-e'} ao finalizar a venda.`}
+                    </p>
+                  )}
+                  {fiscalDocumentType === 'nfce' && saleType === 'wholesale' && (
+                    <p className="text-xs text-warning">
+                      ⚠ Venda de atacado — NFC-e não pode representar operação com geração de crédito fiscal ao comprador e não será emitida. Use NF-e.
+                    </p>
+                  )}
+                  {fiscalDocumentType === 'nfce' && saleType !== 'wholesale' && fiscalRecommended !== 'nfce' && (
                     <p className="text-xs text-warning">
                       ⚠ Esta venda pode não ser elegível para NFC-e (modalidade/origem indicam {fiscalRecommended === 'nfe' ? 'NF-e' : 'verificação manual'}) — a emissão será tentada, mas pode ser recusada. Se recusada, emita NF-e depois na tela da venda.
                     </p>
                   )}
-                  {fiscalDocumentType !== 'none' && (
-                    <FiscalRecipientFields mode={fiscalDocumentType} value={fiscalRecipient} onChange={setFiscalRecipient} />
+                  {effectiveFiscalMode !== 'none' && (
+                    <FiscalRecipientFields mode={effectiveFiscalMode} value={fiscalRecipient} onChange={setFiscalRecipient} />
                   )}
                 </div>
 

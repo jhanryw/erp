@@ -13,7 +13,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { validateCPF } from '@/lib/utils/cpf'
 import { validateCNPJ } from '@/lib/utils/cnpj'
-import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
+import { resolveAutomaticFiscalEmission } from '@/lib/fiscal/resolveAutomaticFiscalEmission'
 import { upsertSaleRecipient } from '@/services/fiscal/upsertSaleRecipient'
 import { buildFiscalRecipientInput } from '@/services/fiscal/buildFiscalRecipientInput'
 import { submitNfeHomologacao } from '@/services/fiscal/submitNfeHomologacao'
@@ -266,12 +266,13 @@ const schema = z.object({
   discount_authorization_token_id:  z.string().uuid().optional(),
   // Fase Fiscal 5C — obrigatório quando delivery_mode === 'delivery' (ver refine abaixo).
   delivery_recipient: deliveryRecipientSchema.nullable().optional(),
-  // Fase Fiscal 6 — escolha explícita do operador no fechamento do PDV.
-  // 'none' (comprovante não fiscal apenas) é o default — nunca emite nada
-  // sem ação explícita (seção 4 do pedido). Nunca confundir com
-  // `sales_channel`: aqui é o DOCUMENTO fiscal pretendido, não o canal da
-  // venda.
-  fiscal_document_type: z.enum(['none', 'nfce', 'nfe']).default('none'),
+  // Fase Fiscal 7 — 'auto' (novo default) deixa a decisão automática pra
+  // `resolveAutomaticFiscalEmission` (venda comum do ERP não pode mais
+  // depender do vendedor lembrar de clicar em "Emitir NFC-e" — seção 4 do
+  // pedido). 'none'/'nfce'/'nfe' continuam existindo como OVERRIDE
+  // explícito do operador. Nunca confundir com `sales_channel`: aqui é o
+  // DOCUMENTO fiscal pretendido, não o canal da venda.
+  fiscal_document_type: z.enum(['auto', 'none', 'nfce', 'nfe']).default('auto'),
   fiscal_recipient:     fiscalRecipientSchema.nullable().optional(),
 }).refine(
   (d) => d.payments != null || d.payment_method != null,
@@ -483,12 +484,16 @@ export async function POST(request: Request) {
       })
     // Erro no shipment é não-fatal: a venda já foi criada
 
-    // ─── Fase Fiscal 6 — emissão a partir do fechamento do PDV ────────────
+    // ─── Fase Fiscal 7 — emissão automática a partir do fechamento do PDV ──
     // SEMPRE depois da venda/pagamento/estoque já persistidos (seção 17 do
     // pedido, passos 1-5 em ordem) — nada aqui pode fazer a venda falhar.
-    // `fiscal_document_type: 'none'` (default) pula este bloco inteiro:
-    // nenhuma chamada fiscal acontece sem escolha explícita do operador
-    // (seção 4 do pedido).
+    // Decisão de negócio (2026-08-27): venda comum do ERP/PDV não pode mais
+    // depender do vendedor lembrar de clicar em "Emitir NFC-e" (seção 4 do
+    // pedido) — `resolveAutomaticFiscalEmission` decide automaticamente
+    // (default `fiscal_document_type: 'auto'`), já embutindo a exceção
+    // legal de atacado (NFC-e nunca é emitida automaticamente pra
+    // sale_type='wholesale' — ver comentário no próprio arquivo).
+    // 'none'/'nfce'/'nfe' continuam disponíveis como override explícito.
     let fiscalResult: {
       requested: 'nfce' | 'nfe'
       status: string
@@ -497,8 +502,15 @@ export async function POST(request: Request) {
       validation_errors: { code: string; message: string }[]
     } | null = null
 
-    if (parsed.data.fiscal_document_type !== 'none') {
-      const requested = parsed.data.fiscal_document_type
+    const fiscalDecision = resolveAutomaticFiscalEmission({
+      deliveryMode: saleData.delivery_mode,
+      saleOrigin: saleData.sale_origin,
+      saleType: saleData.sale_type,
+      operatorChoice: parsed.data.fiscal_document_type,
+    })
+
+    if (fiscalDecision.attempt) {
+      const requested = fiscalDecision.attempt
       try {
         const recipientInput = buildFiscalRecipientInput(parsed.data.fiscal_recipient, parsed.data.delivery_recipient)
         if (recipientInput) {
@@ -508,48 +520,32 @@ export async function POST(request: Request) {
           }
         }
 
-        if (requested === 'nfce') {
-          // Mesma checagem de elegibilidade que `POST /api/fiscal/nfce/
-          // emitir-homologacao` faz — NUNCA emite NFC-e pra uma venda que
-          // resolve pra NF-e/bloqueado, mesmo que o operador tenha
-          // clicado em NFC-e no PDV (seção 21 do pedido: a decisão fiscal
-          // nunca troca silenciosamente de tipo — aqui simplesmente não
-          // emite nada e explica o motivo). Calculado a partir dos MESMOS
-          // valores já usados pra criar a venda (`saleData.delivery_mode`/
-          // `saleData.sale_origin`), sem round-trip extra ao banco.
-          const resolverInput = { deliveryMode: saleData.delivery_mode, saleOrigin: saleData.sale_origin }
-          const resolvedType = resolveFiscalDocumentType(resolverInput)
-          if (resolvedType !== 'nfce') {
-            fiscalResult = {
-              requested, status: 'not_eligible',
-              reason: resolvedType === 'blocked'
-                ? describeFiscalDocumentTypeBlockReason(resolverInput)
-                : 'Esta venda não é elegível para NFC-e (modalidade de entrega/origem indica NF-e) — emita NF-e na tela da venda.',
-              fiscal_document_id: null, validation_errors: [],
-            }
-          } else {
-            const emission = await submitNfceHomologacao(sale.id, user.company_id)
-            fiscalResult = emission.ok
-              ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
-              : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] }
-          }
-        } else {
-          // NF-e não tem gate de elegibilidade prévio — mesmo comportamento
-          // da rota manual (`/api/fiscal/nfe/emitir-homologacao`), que
-          // sempre tenta e deixa `validateNfeReadiness` reportar o que
-          // faltar (ex.: destinatário incompleto — completável depois na
-          // tela da venda, seção 19 do pedido).
-          const emission = await submitNfeHomologacao(sale.id, user.company_id)
-          fiscalResult = emission.ok
-            ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
-            : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] }
-        }
+        // NF-e não tem gate de elegibilidade prévio — mesmo comportamento
+        // da rota manual (`/api/fiscal/nfe/emitir-homologacao`), que sempre
+        // tenta e deixa `validateNfeReadiness` reportar o que faltar (ex.:
+        // destinatário incompleto — completável depois na tela da venda,
+        // seção 19 do pedido). NFC-e só chega aqui já elegível — o gate
+        // roda dentro de `resolveAutomaticFiscalEmission`.
+        const emission = requested === 'nfce'
+          ? await submitNfceHomologacao(sale.id, user.company_id)
+          : await submitNfeHomologacao(sale.id, user.company_id)
+        fiscalResult = emission.ok
+          ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
+          : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] }
       } catch (fiscalErr) {
         // Nunca deixa uma falha fiscal inesperada derrubar a resposta da
         // venda — ela já foi criada com sucesso. Fica pendente, o
         // operador tenta de novo na tela da venda.
         logError({ route: 'POST /api/vendas (fiscal emission)', err: fiscalErr, context: { sale_id: sale.id, requested } })
         fiscalResult = { requested, status: 'error', reason: 'Erro inesperado ao tentar emitir — tente novamente na tela da venda.', fiscal_document_id: null, validation_errors: [] }
+      }
+    } else if (fiscalDecision.skipReason) {
+      // Só reporta quando havia intenção real de emitir algo (auto ou
+      // override) e ela foi barrada — nunca quando o operador pediu
+      // 'none' de propósito (nesse caso fiscalDecision.skipReason é null).
+      fiscalResult = {
+        requested: 'nfce', status: 'not_eligible', reason: fiscalDecision.skipReason,
+        fiscal_document_id: null, validation_errors: [],
       }
     }
 

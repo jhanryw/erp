@@ -297,6 +297,9 @@ describe('submitNfceHomologacao — chave de acesso com prefixo "NFe" da Focus (
       expect(result.data.authorizationProtocol).toBe('141190000123456')
       expect(result.data.xmlPath).toBe('/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml')
       expect(result.data.danfePath).toBe('/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html')
+      // Fase Fiscal 7 — qrcode_url REAL da Focus, persistido (antes desta
+      // fase era descartado: só ficava soterrado em provider_payload).
+      expect(result.data.qrcodeUrl).toBe('http://www.fazenda.pr.gov.br/nfce/qrcode/?p=41190612345678000123650010000000121743484310|2|2|1|5E264C0E28D801197219894CDFCF2FCCC5237F08')
     }
     // authorized_at não é exposto em SubmitNfeResult — confirmado direto na linha persistida no fake.
     const persisted = fake.tables.fiscal_documents.find((r: any) => r.sale_id === SALE_ID && r.document_type === 'nfce')
@@ -375,6 +378,7 @@ describe('consultAndUpdateNfceDocument — falha de persistência nunca vira fal
       numero_protocolo: '141190000123456',
       caminho_xml_nota_fiscal: '/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml',
       caminho_danfe: '/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html',
+      qrcode_url: 'http://www.fazenda.pr.gov.br/nfce/qrcode/?p=reconciliacao',
     })
 
     const before = Date.now()
@@ -391,6 +395,9 @@ describe('consultAndUpdateNfceDocument — falha de persistência nunca vira fal
       expect(result.data.authorizationProtocol).toBe('141190000123456')
       expect(result.data.xmlPath).toBe('/arquivos/12345678000123/XMLs/41190612345678000123650010000000121743484310-nfce.xml')
       expect(result.data.danfePath).toBe('/notas_fiscais_consumidor/NFe41190612345678000123650010000000121743484310.html')
+      // Fase Fiscal 7 — mesmo path de reconciliação ("Verificar status")
+      // também persiste qrcode_url, não só a emissão direta.
+      expect(result.data.qrcodeUrl).toBe('http://www.fazenda.pr.gov.br/nfce/qrcode/?p=reconciliacao')
     }
     const persisted = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
     expect(persisted.authorized_at).toBeTruthy()

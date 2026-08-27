@@ -38,6 +38,7 @@
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logError } from '@/lib/errors/log'
 import { resolveFocusIntegration } from './resolveFocusIntegration'
 import { loadSaleFiscalContext, FiscalContextError } from './loadSaleFiscalContext'
 import { validateNfceReadiness } from './validateFiscalReadiness'
@@ -163,6 +164,10 @@ async function applyFocusNfceResponse(
     patch.authorization_protocol = response.numero_protocolo ?? null
     patch.xml_path = response.caminho_xml_nota_fiscal ?? null
     patch.danfe_path = response.caminho_danfe ?? null
+    // `202609051000_fiscal_documents_qrcode_url.sql` — conteúdo real do QR
+    // Code fiscal (URL de consulta com a chave/hash), nunca construído
+    // localmente. Sem equivalente em NF-e (ver FocusNfceConsultaResponse).
+    patch.qrcode_url = response.qrcode_url ?? null
     patch.authorized_at = new Date().toISOString()
   }
 
@@ -406,6 +411,63 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     })
 
     if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
+
+    // Fase Fiscal 7 — `rpc_complete_fiscal_emission` (RPC compartilhada com
+    // NF-e) não tem parâmetro pra qrcode_url (campo exclusivo de NFC-e, sem
+    // equivalente em NF-e — ver FocusNfceConsultaResponse). Em vez de mudar
+    // a assinatura de uma RPC concorrência-crítica compartilhada (exigiria
+    // DROP+CREATE FUNCTION + nova migration pra algo que não afeta a
+    // validade fiscal do documento, só a conveniência do DANFE), um UPDATE
+    // simples e escopado pelo MESMO claim_token já consumido resolve sem
+    // risco: se o claim não for mais o vigente, a condição não bate e nada
+    // é escrito — nunca sobrescreve uma tentativa mais nova. Nunca falha a
+    // emissão (já autorizada e persistida) por causa disso.
+    if (status === 'authorized') {
+      if (!response.qrcode_url) {
+        // Nunca deveria acontecer numa NFC-e homologação/produção normal —
+        // registra alto em vez de deixar a linha ficar com qrcode_url NULL
+        // silenciosamente (item 1 do pedido: authorized ⇒ qrcode_url NOT NULL).
+        // `getNfceDanfeData` também recusa renderizar o DANFE nesse caso
+        // (defesa em profundidade), mas o alerta tem que nascer aqui.
+        logError({
+          route: 'submitNfceHomologacao (qrcode_url)',
+          err: new Error('Focus retornou status "autorizado" sem qrcode_url na resposta.'),
+          context: { fiscal_document_id: fiscalDocumentId, sale_id: saleId },
+        })
+      } else {
+        // Escopado pelo MESMO claim_token já consumido: se o claim não for
+        // mais o vigente, a condição não bate e nada é escrito — nunca
+        // sobrescreve uma tentativa mais nova. `.select('id')` de propósito
+        // — só assim dá pra saber quantas linhas o UPDATE realmente afetou
+        // (sem select(), o Postgrest não devolve as linhas afetadas) e nunca
+        // presumir sucesso silenciosamente (item 1 do pedido).
+        const { data: qrUpdateRows, error: qrError } = await (admin as any)
+          .from('fiscal_documents')
+          .update({ qrcode_url: response.qrcode_url })
+          .eq('id', fiscalDocumentId)
+          .eq('submission_claim_token', claimToken)
+          .select('id')
+        if (qrError) {
+          logError({ route: 'submitNfceHomologacao (qrcode_url)', err: new Error(qrError.message), context: { fiscal_document_id: fiscalDocumentId } })
+        } else if (!qrUpdateRows || qrUpdateRows.length === 0) {
+          // Não deveria ser possível: `updated` (não-null, checado acima) já
+          // prova que `rpc_complete_fiscal_emission` encontrou a linha com
+          // ESTE MESMO claim_token segundos atrás, e a RPC nunca altera
+          // `submission_claim_token` (confirmado lendo a migration SQL —
+          // não está em nenhum SET da função). Se mesmo assim isto disparar,
+          // é uma violação de invariante real — nunca falha a emissão (já
+          // autorizada), mas precisa aparecer alto nos logs.
+          logError({
+            route: 'submitNfceHomologacao (qrcode_url)',
+            err: new Error('UPDATE de qrcode_url afetou 0 linhas — invariante de claim_token violado.'),
+            context: { fiscal_document_id: fiscalDocumentId, sale_id: saleId },
+          })
+        } else {
+          ;(updated as any).qrcode_url = response.qrcode_url
+        }
+      }
+    }
+
     return success(rowToResult(updated))
   } catch (err) {
     if (err instanceof FocusApiError) {

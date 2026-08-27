@@ -213,10 +213,11 @@ export const saleSchema = z.object({
   // Fase Fiscal 5C — obrigatório operacionalmente quando delivery_mode ===
   // 'delivery' (ver refine abaixo); ausente/ignorado em retirada.
   delivery_recipient: deliveryRecipientSchema.nullable().optional(),
-  // Fase Fiscal 6 — Documento fiscal escolhido no fechamento do PDV.
-  // 'none' (comprovante não fiscal) é o default — nunca emite nada sem
-  // ação explícita do operador.
-  fiscal_document_type: z.enum(['none', 'nfce', 'nfe']).default('none'),
+  // Fase Fiscal 7 — Documento fiscal do fechamento do PDV. 'auto' (novo
+  // default) deixa a emissão automática decidir (ver
+  // resolveAutomaticFiscalEmission); 'none'/'nfce'/'nfe' continuam como
+  // override explícito do operador.
+  fiscal_document_type: z.enum(['auto', 'none', 'nfce', 'nfe']).default('auto'),
   fiscal_recipient:     fiscalRecipientSchema.nullable().optional(),
 }).refine(
   (d) => d.delivery_mode !== 'delivery' || d.delivery_recipient != null,

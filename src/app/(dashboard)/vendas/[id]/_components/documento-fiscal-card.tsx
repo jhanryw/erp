@@ -315,9 +315,14 @@ function DocumentTypeSection({
           {result.accessKey && <p><span className="text-text-muted">Chave de acesso:</span> <code className="font-mono">{result.accessKey}</code></p>}
           {result.number && <p><span className="text-text-muted">Número/Série:</span> {result.number}/{result.series}</p>}
           <div className="flex gap-3 pt-1">
+            {type === 'nfce' && (
+              <a href={`/vendas/${saleId}/nfce`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+                <FileText className="w-3.5 h-3.5" /> Imprimir DANFE NFC-e (térmica)
+              </a>
+            )}
             {result.danfePath && (
               <a href={result.danfePath} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
-                <FileText className="w-3.5 h-3.5" /> DANFE
+                <FileText className="w-3.5 h-3.5" /> DANFE (Focus)
               </a>
             )}
             {result.xmlPath && (
