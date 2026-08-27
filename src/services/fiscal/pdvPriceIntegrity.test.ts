@@ -39,8 +39,14 @@ describe('Integridade de preço PDV → fiscal — "Conjunto X" (cenário do ped
     expect(item.valor_unitario_comercial).toBe(45)
     expect(item.valor_unitario_tributavel).toBe(45)
     expect(item.valor_bruto).toBe(90)
-    // O preço de cadastro (50) não aparece em nenhum lugar do payload/snapshot.
-    expect(JSON.stringify(payload)).not.toMatch(/\b50\b/)
+    // O preço de cadastro (50) não aparece em nenhum campo de valor do item —
+    // checagem por campo, não por regex no JSON inteiro (um regex genérico
+    // colide com timestamps/protocolos que também contêm "50", ex.
+    // `data_emissao` gerado com `new Date().toISOString()` — achado real
+    // desta sessão, corrigido aqui).
+    for (const value of Object.values(item)) {
+      if (typeof value === 'number') expect(value).not.toBe(50)
+    }
   })
 
   it('sem alteração de preço no PDV (cadastro = vendido = R$49,90) → fiscal reflete o mesmo valor, sem flag especial', () => {

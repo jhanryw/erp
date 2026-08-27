@@ -215,7 +215,7 @@ export const saleSchema = z.object({
   delivery_recipient: deliveryRecipientSchema.nullable().optional(),
   // Fase Fiscal 7 — Documento fiscal do fechamento do PDV. 'auto' (novo
   // default) deixa a emissão automática decidir (ver
-  // resolveAutomaticFiscalEmission); 'none'/'nfce'/'nfe' continuam como
+  // resolveFiscalOperation, a partir da política em Configurações → Fiscal); 'none'/'nfce'/'nfe' continuam como
   // override explícito do operador.
   fiscal_document_type: z.enum(['auto', 'none', 'nfce', 'nfe']).default('auto'),
   fiscal_recipient:     fiscalRecipientSchema.nullable().optional(),

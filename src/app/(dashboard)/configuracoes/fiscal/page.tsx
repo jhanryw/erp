@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { TestFocusConnectionButton } from '@/components/fiscal/TestFocusConnectionButton'
 import { getFiscalHealth } from '@/services/fiscal/health.service'
+import { FiscalPolicyMatrix } from './_components/FiscalPolicyMatrix'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,7 +37,7 @@ export default async function ConfigFiscalPage() {
   const result = await getFiscalHealth(profile.company_id)
 
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-3xl space-y-6">
       <div className="flex items-center gap-3">
         <Link href="/configuracoes"><Button variant="ghost" size="icon"><ArrowLeft className="w-4 h-4" /></Button></Link>
         <div className="flex items-center gap-2">
@@ -94,9 +95,20 @@ export default async function ConfigFiscalPage() {
             <TestFocusConnectionButton />
           </Card>
 
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary mb-1">Regras de emissão por operação</h3>
+            <p className="text-xs text-text-muted mb-3">
+              Define, por tipo de venda, se o fiscal está ativo, qual documento usar, e se a emissão/impressão são
+              automáticas. Vale imediatamente na próxima venda — sem deploy, sem migration. O validador fiscal legal
+              continua sendo aplicado por cima: uma política incompatível com a operação concreta nunca é obedecida
+              cegamente (a venda fica com "emissão pendente/bloqueada" em vez de sair errada).
+            </p>
+            <FiscalPolicyMatrix />
+          </div>
+
           <p className="text-xs text-text-muted">
-            Cadastro de CNPJ, razão social, endereço e token da Focus NFe ainda não tem tela própria nesta fase —
-            é uma etapa pendente da próxima fase fiscal.
+            Cadastro de certificado digital (A1) e CSC ainda não tem tela própria nesta fase — pendência explícita,
+            aguardando implementação dedicada (upload seguro, criptografia, metadata).
           </p>
         </>
       )}

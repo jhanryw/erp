@@ -175,7 +175,7 @@ export default function NovaVendaPage() {
       delivery_mode:    'delivery',
       delivery_recipient: null,
       // Fase Fiscal 7 — 'auto' é o default: a emissão fiscal é automática
-      // ao finalizar (ver effectiveFiscalMode/resolveAutomaticFiscalEmission
+      // ao finalizar (ver effectiveFiscalMode/resolveFiscalOperation
       // no servidor). 'none'/'nfce'/'nfe' continuam disponíveis como
       // override explícito do operador via os botões abaixo.
       fiscal_document_type: 'auto',
@@ -399,10 +399,10 @@ export default function NovaVendaPage() {
 
   // Fase Fiscal 7 — o que a emissão automática vai realmente tentar quando
   // `fiscal_document_type === 'auto'` (default). Espelha
-  // `resolveAutomaticFiscalEmission` no servidor só pra fins de exibição
+  // `resolveFiscalOperation` no servidor só pra fins de exibição
   // (pista visual, nunca a decisão real — mesmo espírito de
   // `fiscalRecommended` acima): atacado nunca emite NFC-e sozinho (exceção
-  // legal, ver comentário em resolveAutomaticFiscalEmission.ts), e um
+  // legal, ver comentário em resolveFiscalOperationDecision.ts), e um
   // resultado 'blocked' vira 'none' (nada será emitido automaticamente).
   const autoWillEmit: 'nfce' | 'nfe' | 'none' =
     saleType === 'wholesale' ? 'none' : fiscalRecommended === 'blocked' ? 'none' : fiscalRecommended
@@ -597,29 +597,32 @@ export default function NovaVendaPage() {
         description: `Pedido ${sale.sale_number} criado com sucesso.`,
       })
 
-      // Fase Fiscal 6 — resultado da emissão (se algum documento foi
-      // pedido). Sempre INFORMATIVO, nunca bloqueia a navegação — a venda
+      // Motor Fiscal Configurável — resultado da emissão (se alguma foi
+      // tentada). Sempre INFORMATIVO, nunca bloqueia a navegação — a venda
       // já foi criada com sucesso independente do resultado fiscal.
       const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null } | undefined
+      const fiscalPrint = json.fiscalPrint as { autoPrint: boolean; printNonFiscalReceipt: boolean } | undefined
+      const autoPrintedFiscal = !!fiscalPrint?.autoPrint && fiscal?.status === 'authorized' && fiscal.requested === 'nfce'
       if (fiscal) {
         const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
         if (fiscal.status === 'authorized') {
-          // Fase Fiscal 7 — item 47 do pedido: auditei até onde o browser
-          // permite automatizar a impressão do DANFE fiscal com segurança.
-          // Duas abas about:blank pré-abertas no MESMO clique (uma pro
+          // item 47 do pedido: auditei até onde o browser permite
+          // automatizar a impressão do DANFE fiscal com segurança. Duas
+          // abas about:blank pré-abertas no MESMO clique (uma pro
           // comprovante comercial, outra pro DANFE) teriam suporte
           // inconsistente entre navegadores e imprimiriam DOIS papéis na
-          // MESMA impressora térmica simultaneamente — risco operacional
-          // real (o operador pode entregar o papel errado ao cliente),
-          // não só técnico. Em vez de um hack frágil, a impressão fiscal
-          // fica a UM clique de distância, no próprio toast de sucesso —
-          // nunca reemite nada (a URL é só leitura, ver getNfceDanfeData.ts).
-          toast.success(`${label} autorizada!`, fiscal.requested === 'nfce' ? {
-            action: {
-              label: 'Imprimir DANFE',
-              onClick: () => window.open(`/vendas/${sale.id}/nfce`, '_blank'),
-            },
-          } : undefined)
+          // MESMA impressora térmica simultaneamente. Por isso só UMA aba
+          // é pré-aberta (autoPrintRef, abaixo) — sua URL final é decidida
+          // pela POLÍTICA da empresa (fiscalPrint), nunca pelas duas ao
+          // mesmo tempo. Se a política não mandar imprimir automaticamente,
+          // o botão de ação no toast cobre o caso (1 clique, GET puro,
+          // nunca reemite — ver getNfceDanfeData.ts).
+          toast.success(
+            autoPrintedFiscal ? `${label} autorizada! Imprimindo DANFE...` : `${label} autorizada!`,
+            !autoPrintedFiscal && fiscal.requested === 'nfce' ? {
+              action: { label: 'Imprimir DANFE', onClick: () => window.open(`/vendas/${sale.id}/nfce`, '_blank') },
+            } : undefined,
+          )
         } else if (fiscal.status === 'pending') {
           toast.info(`${label} enviada — processando na SEFAZ`, { description: 'Acompanhe o status na tela da venda.' })
         } else {
@@ -629,18 +632,31 @@ export default function NovaVendaPage() {
         }
       }
 
-      // Comprovante não fiscal — só agora, com a venda CONFIRMADA criada
-      // (nunca antes: se qualquer branch acima retornou, reset() já fechou
-      // a aba sem nunca navegar/imprimir nada). Redireciona a aba
-      // about:blank já aberta pro comprovante da venda — a própria página
-      // dispara window.print() sozinha assim que terminar de renderizar
-      // (PrintTrigger, com QR já presente no HTML inicial). Vale pra retirada
-      // e entrega igualmente — nenhuma dependência de NF-e/NFC-e emitida.
-      const printed = autoPrintRef.current!.redirectToReceipt(`/vendas/${sale.id}/comprovante`)
-      if (!printed) {
-        toast.info('Impressão automática do comprovante não pôde ser aberta (pop-up bloqueado)', {
-          description: 'Use "Imprimir Comprovante" na página da venda.',
-        })
+      // Impressão automática — controlada pela política da empresa
+      // (Configurações → Fiscal), não mais hardcoded. A ÚNICA aba
+      // about:blank pré-aberta no clique (autoPrintRef) é redirecionada
+      // pra UM destino: o comprovante não fiscal (se a política pedir) OU
+      // o DANFE NFC-e (se a política pedir emissão+impressão automática e
+      // a NFC-e saiu autorizada agora) — nunca os dois na mesma aba/clique
+      // (ver comentário acima). Se nenhum dos dois estiver ligado pra esta
+      // operação (ex.: entrega — nem comprovante nem DANFE automáticos por
+      // padrão), a aba pré-aberta é só fechada, sem imprimir nada.
+      const shouldPrintReceipt = fiscalPrint?.printNonFiscalReceipt ?? true // fail-safe: sem info do servidor, mantém comportamento antigo
+      const printUrl = shouldPrintReceipt
+        ? `/vendas/${sale.id}/comprovante`
+        : autoPrintedFiscal
+          ? `/vendas/${sale.id}/nfce`
+          : null
+
+      if (printUrl) {
+        const printed = autoPrintRef.current!.redirectToReceipt(printUrl)
+        if (!printed) {
+          toast.info('Impressão automática não pôde ser aberta (pop-up bloqueado)', {
+            description: 'Use os botões de impressão na página da venda.',
+          })
+        }
+      } else {
+        autoPrintRef.current!.reset()
       }
 
       router.push(`/vendas/${sale.id}`)
@@ -1582,7 +1598,7 @@ export default function NovaVendaPage() {
                     específico. Quando nenhum botão foi clicado (estado
                     'auto'), o botão correspondente ao que será emitido
                     automaticamente aparece destacado, só como indicação —
-                    a decisão real é do servidor (resolveAutomaticFiscalEmission). */}
+                    a decisão real é do servidor (resolveFiscalOperation). */}
                 <div className="space-y-2">
                   <p className="text-xs font-medium text-text-secondary">Documento fiscal</p>
                   <div className="grid grid-cols-3 gap-2">

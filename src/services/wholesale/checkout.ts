@@ -18,6 +18,8 @@ import { createSale, type DeliveryRecipientInput } from '@/services/vendas.servi
 import { resolveSalePrice } from '@/lib/pricing/resolveSalePrice'
 import { claimIdempotencyKey, completeIdempotencyKey, failIdempotencyKey } from './checkoutIdempotency'
 import { logError } from '@/lib/errors/log'
+import { resolveFiscalOperation } from '@/services/fiscal/resolveFiscalOperation'
+import { executeFiscalPolicy } from '@/services/fiscal/executeFiscalPolicy'
 
 export interface WholesaleCartItemInput {
   variationId: number
@@ -213,6 +215,27 @@ export async function checkoutWholesaleCart(input: WholesaleCheckoutInput): Prom
     })
 
     await completeIdempotencyKey(input.idempotencyKey, result.data.id)
+
+    // Motor Fiscal Configurável — obedece à política 'wholesale' da empresa
+    // (Santtorini: fiscal ativo, NF-e, auto_issue=false — fica pendente pra
+    // emissão manual do admin, exatamente o critério de aceite do pedido).
+    // Antes desta fase, checkout de atacado NUNCA emitia nada fiscal apesar
+    // do comentário logo acima sugerir o contrário (gap real, confirmado
+    // por auditoria) — nunca pode fazer o checkout falhar, a venda já foi
+    // criada com sucesso.
+    try {
+      const fiscalDecision = await resolveFiscalOperation({
+        companyId: input.companyId,
+        saleType: 'wholesale',
+        salesChannel: 'wholesale_site',
+        saleOrigin: 'website',
+        deliveryMode: input.deliveryMode,
+        operatorChoice: 'auto',
+      })
+      await executeFiscalPolicy({ saleId: result.data.id, companyId: input.companyId, decision: fiscalDecision })
+    } catch (fiscalErr) {
+      logError({ route: 'checkoutWholesaleCart (fiscal emission)', err: fiscalErr, context: { sale_id: result.data.id } })
+    }
 
     return { ok: true, saleId: result.data.id, saleNumber: result.data.sale_number, total }
   } catch (err) {

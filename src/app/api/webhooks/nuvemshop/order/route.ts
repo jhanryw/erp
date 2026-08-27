@@ -4,6 +4,8 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { cancelSale } from '@/services/vendas.service'
 import { normalizeE164BR } from '@/lib/utils/phone'
+import { resolveFiscalOperation } from '@/services/fiscal/resolveFiscalOperation'
+import { executeFiscalPolicy } from '@/services/fiscal/executeFiscalPolicy'
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
@@ -561,6 +563,26 @@ export async function POST(request: Request) {
         eventType:       'stock_confirm_ns',
         externalOrderId: externalId,
       })
+    }
+
+    // ── 15. Motor Fiscal Configurável — obedece à política 'website' da empresa ──
+    // Antes desta fase, pedido do site NUNCA emitia nada fiscal (gap real,
+    // confirmado por auditoria). Nunca pode fazer o webhook falhar — a
+    // venda/estoque/pedido já foram processados com sucesso acima.
+    // operatorChoice='auto' sempre: webhook não tem operador humano pra
+    // pedir override, só a política configurada decide.
+    try {
+      const fiscalDecision = await resolveFiscalOperation({
+        companyId,
+        saleType: 'retail',
+        salesChannel: 'nuvemshop',
+        saleOrigin: 'website',
+        deliveryMode: null,
+        operatorChoice: 'auto',
+      })
+      await executeFiscalPolicy({ saleId: sale.id, companyId, decision: fiscalDecision })
+    } catch (fiscalErr) {
+      console.error('[webhook/order] Erro na emissão fiscal automática (não-fatal)', fiscalErr, { sale_id: sale.id })
     }
 
     // ── 16. Marcar pedido como processado e liberar lock ─────────────────────────
