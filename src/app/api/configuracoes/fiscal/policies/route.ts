@@ -3,9 +3,14 @@
  *
  * GET lista as políticas da empresa (uma linha por `operation_type`); PUT
  * atualiza UMA política por vez (o card da UI salva sozinho, sem depender
- * das outras 6). Admin-only — mesma régua RBAC já usada em todo o módulo
+ * das outras 3). Admin-only — mesma régua RBAC já usada em todo o módulo
  * fiscal (`requireRole('admin')`, ver `api/fiscal/health/route.ts`,
  * `api/fiscal/empresa/route.ts`).
+ *
+ * `operation_type` consolidado de 7 para 4 valores (revisão desta fase) —
+ * WhatsApp/manual/PDV continuam existindo como `sales_channel`/
+ * `sale_origin` da venda, só deixaram de ter política fiscal própria (ver
+ * `resolveOperationType.ts` pro raciocínio completo e a nova precedência).
  *
  * Nunca cria linha nova por engano: PUT só faz UPDATE (a linha precisa
  * existir — vem do seed inicial da migration, ou de uma criação futura
@@ -22,7 +27,7 @@ import { auditLog } from '@/lib/audit/log'
 
 export const dynamic = 'force-dynamic'
 
-const OPERATION_TYPES = ['pos_retail', 'pos_pickup', 'pos_delivery', 'wholesale', 'website', 'whatsapp', 'manual'] as const
+const OPERATION_TYPES = ['retail_pickup', 'retail_delivery', 'wholesale', 'website'] as const
 
 export async function GET() {
   const { user, response: unauth } = await requireRole('admin')

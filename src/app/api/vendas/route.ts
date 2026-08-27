@@ -485,7 +485,7 @@ export async function POST(request: Request) {
     // ─── Motor Fiscal Configurável (Fase 1) — a partir do fechamento do PDV ──
     // SEMPRE depois da venda/pagamento/estoque já persistidos — nada aqui
     // pode fazer a venda falhar. `resolveFiscalOperation` resolve o
-    // operation_type ('pos_retail'/'pos_pickup'/'pos_delivery'/'wholesale')
+    // operation_type ('retail_pickup'/'retail_delivery'/'wholesale'/'website')
     // e carrega a política REAL configurada pela empresa em
     // Configurações → Fiscal — a decisão de negócio não é mais hardcoded
     // aqui, é dado. `executeFiscalPolicy` é o mesmo executor central
@@ -493,7 +493,6 @@ export async function POST(request: Request) {
     const fiscalDecision = await resolveFiscalOperation({
       companyId: user.company_id,
       saleType: saleData.sale_type,
-      salesChannel: 'pos',
       saleOrigin: saleData.sale_origin,
       deliveryMode: saleData.delivery_mode,
       operatorChoice: parsed.data.fiscal_document_type,

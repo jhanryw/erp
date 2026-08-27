@@ -11,7 +11,7 @@ vi.mock('@/lib/errors/log', () => ({ logError: vi.fn() }))
 
 function decision(overrides: Partial<FiscalOperationDecision> = {}): FiscalOperationDecision {
   return {
-    operationType: 'pos_retail', attempt: null, status: 'fiscal_disabled', reason: null,
+    operationType: 'retail_pickup', attempt: null, status: 'fiscal_disabled', reason: null,
     autoPrint: false, printNonFiscalReceipt: true, manualIssueAllowed: true,
     ...overrides,
   }

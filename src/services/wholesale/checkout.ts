@@ -216,18 +216,20 @@ export async function checkoutWholesaleCart(input: WholesaleCheckoutInput): Prom
 
     await completeIdempotencyKey(input.idempotencyKey, result.data.id)
 
-    // Motor Fiscal Configurável — obedece à política 'wholesale' da empresa
-    // (Santtorini: fiscal ativo, NF-e, auto_issue=false — fica pendente pra
-    // emissão manual do admin, exatamente o critério de aceite do pedido).
-    // Antes desta fase, checkout de atacado NUNCA emitia nada fiscal apesar
-    // do comentário logo acima sugerir o contrário (gap real, confirmado
-    // por auditoria) — nunca pode fazer o checkout falhar, a venda já foi
-    // criada com sucesso.
+    // Motor Fiscal Configurável — sale_origin='website' (linha acima) tem
+    // PRIORIDADE sobre sale_type='wholesale' na resolução de operation_type
+    // (decisão confirmada em chat na revisão de consolidação 7→4 tipos):
+    // venda do site de atacado obedece à política 'website' (NF-e
+    // AUTOMÁTICA), não 'wholesale' (NF-e manual) — mesmo tratamento de
+    // qualquer outro pedido do site. Ver resolveOperationType.ts pro
+    // raciocínio completo dessa troca de comportamento deliberada. Antes
+    // desta fase, checkout de atacado NUNCA emitia nada fiscal (gap real,
+    // confirmado por auditoria) — nunca pode fazer o checkout falhar, a
+    // venda já foi criada com sucesso.
     try {
       const fiscalDecision = await resolveFiscalOperation({
         companyId: input.companyId,
         saleType: 'wholesale',
-        salesChannel: 'wholesale_site',
         saleOrigin: 'website',
         deliveryMode: input.deliveryMode,
         operatorChoice: 'auto',

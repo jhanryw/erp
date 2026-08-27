@@ -34,17 +34,20 @@ interface Policy {
   updated_at: string
 }
 
+// Consolidado de 7 para 4 operações (revisão desta fase) — WhatsApp/manual/
+// PDV continuam existindo como sales_channel/sale_origin da venda, mas não
+// têm mais um card/política própria: são classificados pela NATUREZA da
+// operação (varejo sem entrega, varejo com entrega, ou atacado), não pelo
+// canal. Ver resolveOperationType.ts pra precedência exata (website checa
+// primeiro, inclusive pra venda de atacado feita pelo site).
 const OPERATION_LABELS: Record<string, { title: string; hint: string }> = {
-  pos_retail:   { title: 'Venda balcão', hint: 'PDV, sem entrega nem retirada agendada' },
-  pos_pickup:   { title: 'Retirada',      hint: 'PDV, cliente retira depois' },
-  pos_delivery: { title: 'Entrega',       hint: 'PDV, com endereço de entrega' },
-  wholesale:    { title: 'Atacado',       hint: 'Venda de atacado, qualquer canal' },
-  website:      { title: 'Site',          hint: 'Pedidos importados da Nuvemshop' },
-  whatsapp:     { title: 'WhatsApp',      hint: 'Venda registrada como canal WhatsApp' },
-  manual:       { title: 'Venda manual',  hint: 'Registrada manualmente sem canal específico' },
+  retail_pickup:   { title: 'Varejo retirada', hint: 'Balcão, retirada — qualquer canal (PDV, WhatsApp, manual) sem entrega' },
+  retail_delivery: { title: 'Varejo entrega',  hint: 'Venda de varejo com endereço de entrega — qualquer canal' },
+  wholesale:       { title: 'Atacado',         hint: 'Venda de atacado fora do site (PDV, WhatsApp, manual)' },
+  website:         { title: 'Site',            hint: 'Pedidos da Nuvemshop — inclusive atacado feito pelo site' },
 }
 
-const OPERATION_ORDER = ['pos_retail', 'pos_pickup', 'pos_delivery', 'wholesale', 'website', 'whatsapp', 'manual']
+const OPERATION_ORDER = ['retail_pickup', 'retail_delivery', 'wholesale', 'website']
 
 const DOCUMENT_MODE_LABELS: Record<DocumentMode, string> = {
   auto: 'Automático', nfce: 'NFC-e', nfe: 'NF-e', none: 'Nenhum',

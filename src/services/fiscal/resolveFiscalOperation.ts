@@ -23,7 +23,6 @@ import {
 export interface ResolveFiscalOperationInput {
   companyId: number
   saleType: string | null | undefined
-  salesChannel: string | null | undefined
   saleOrigin: string | null | undefined
   deliveryMode: string | null | undefined
   operatorChoice: FiscalOperatorChoice
@@ -66,7 +65,6 @@ export async function loadCompanyFiscalPolicy(
 export async function resolveFiscalOperation(input: ResolveFiscalOperationInput): Promise<FiscalOperationDecision> {
   const operationType = resolveOperationType({
     saleType: input.saleType,
-    salesChannel: input.salesChannel,
     saleOrigin: input.saleOrigin,
     deliveryMode: input.deliveryMode,
   })

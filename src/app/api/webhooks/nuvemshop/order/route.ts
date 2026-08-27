@@ -575,7 +575,6 @@ export async function POST(request: Request) {
       const fiscalDecision = await resolveFiscalOperation({
         companyId,
         saleType: 'retail',
-        salesChannel: 'nuvemshop',
         saleOrigin: 'website',
         deliveryMode: null,
         operatorChoice: 'auto',
