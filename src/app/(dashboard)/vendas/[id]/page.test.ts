@@ -39,3 +39,33 @@ describe('vendas/[id]/page — printAction considera QUALQUER documento autoriza
     expect(SOURCE).toMatch(/printAction\.environment !== 'producao' && <EnvironmentBadge environment=\{printAction\.environment\}/)
   })
 })
+
+describe('vendas/[id]/page — auditoria de acesso fiscal: DocumentoFiscalCard liberado pra qualquer usuário autenticado da empresa', () => {
+  it('não existe mais gate por role (admin) escondendo DocumentoFiscalCard — decisão de produto: operação fiscal de venda nunca foi pra ser admin-only', () => {
+    const codeOnly = SOURCE.split('\n').map((line) => line.replace(/\/\/.*$/, '')).join('\n')
+    expect(codeOnly).not.toMatch(/profile\??\.role === 'admin'/)
+  })
+
+  it('usa requirePageRole(\'usuario\') — menor nível autenticado do ERP, nunca um gate maior', () => {
+    expect(SOURCE).toMatch(/requirePageRole\('usuario'\)/)
+    expect(SOURCE).not.toMatch(/requirePageRole\('admin'\)/)
+    expect(SOURCE).not.toMatch(/requirePageRole\('gerente'\)/)
+  })
+
+  it('DocumentoFiscalCard é renderizado sem condicional de role — mesmo componente, mesmo estado, pra qualquer acesso autenticado', () => {
+    const cardIdx = SOURCE.indexOf('<DocumentoFiscalCard')
+    expect(cardIdx).toBeGreaterThan(-1)
+    const before = SOURCE.slice(Math.max(0, cardIdx - 120), cardIdx)
+    expect(before).not.toMatch(/&&\s*\($/)
+    expect(before).not.toMatch(/role/)
+  })
+
+  it('isolamento multi-tenant: getSale é chamado com profile.company_id (nunca de params/query string) — achado real, auditoria de acesso fiscal: a query de sales não filtrava por empresa antes', () => {
+    expect(SOURCE).toMatch(/getSale\(params\.id, profile\.company_id\)/)
+    expect(SOURCE).toMatch(/\.from\('sales'\)\s*\n\s*\.select\('\*'\)\s*\n\s*\.eq\('id', saleId\)\s*\n\s*\.eq\('company_id', companyId\)/)
+  })
+
+  it('getSale recebe companyId como parâmetro explícito (nunca lido de dentro da função a partir de params/query)', () => {
+    expect(SOURCE).toMatch(/async function getSale\(id: string, companyId: number\)/)
+  })
+})

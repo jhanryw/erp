@@ -4,8 +4,11 @@ export const dynamic = 'force-dynamic'
  * POST /api/fiscal/nfe/consultar — Fase Fiscal 2B, seção 9 do pedido.
  *
  * Verificação manual de status (não emite, não automatiza) — usado
- * quando uma tentativa anterior ficou `pending` e o admin quer checar
- * agora, sem esperar/reenviar. Admin-only. Único input: `sale_id`.
+ * quando uma tentativa anterior ficou `pending` e alguém quer checar
+ * agora, sem esperar/reenviar. Qualquer usuário autenticado da empresa
+ * (decisão de produto — operação fiscal de venda nunca foi pra ser
+ * admin-only). Único input: `sale_id`; isolamento garantido dentro de
+ * `consultNfeStatus` (sempre escopado por `user.company_id`).
  */
 
 import { z } from 'zod'
@@ -18,7 +21,7 @@ const bodySchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 

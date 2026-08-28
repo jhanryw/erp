@@ -17,11 +17,15 @@ export const dynamic = 'force-dynamic'
  *   - resultado `'blocked'` → 422 estruturado com o motivo
  *     (`describeFiscalDocumentTypeBlockReason`), nunca um erro genérico.
  *
- * `submitNfceHomologacao` já bloqueia produção internamente
- * (`nfce_environment !== 'homologacao'` → 403) e checa `nfce_enabled` —
- * esta rota não duplica essa lógica (mesmo padrão da rota de NF-e).
+ * `submitNfceHomologacao` já valida ambiente internamente (aceita
+ * 'homologacao'/'producao' conforme `company_fiscal_settings.
+ * nfce_environment`) e checa `nfce_enabled` — esta rota não duplica essa
+ * lógica (mesmo padrão da rota de NF-e).
  *
- * Admin-only.
+ * Qualquer usuário autenticado da empresa (decisão de produto: operação
+ * fiscal de venda nunca foi pra ser admin-only) — isolamento garantido
+ * pela query da venda abaixo, sempre escopada por `user.company_id` (da
+ * sessão, nunca do corpo da requisição).
  */
 
 import { z } from 'zod'
@@ -36,7 +40,7 @@ const bodySchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 

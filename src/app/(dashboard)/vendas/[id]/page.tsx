@@ -1,6 +1,5 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
-import { getUserProfile } from '@/lib/auth/getProfile'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { logQueryError } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
@@ -76,15 +75,24 @@ const ROUTE = 'GET /vendas/[id] getSale'
  * relacionamento embutido, e cada relação é resolvida em queries separadas
  * que não podem derrubar as outras.
  */
-async function getSale(id: string) {
+async function getSale(id: string, companyId: number) {
   const admin = createAdminClient()
   const saleId = Number(id)
 
   // ── Etapa 1: venda base — sem embeds, é a única que decide notFound() ──────
+  // `company_id` vem SEMPRE do perfil da sessão (parâmetro `companyId`),
+  // nunca de `params`/query string — isolamento multi-tenant (achado real,
+  // auditoria de acesso fiscal: nada aqui filtrava por empresa antes,
+  // então qualquer usuário autenticado de QUALQUER empresa podia abrir a
+  // venda de outra só sabendo o `id` numérico). Todas as demais tabelas
+  // desta função são buscadas a partir de `sale.id` (já confirmado como
+  // pertencente a `companyId` neste ponto), então herdam o isolamento sem
+  // precisar repetir o filtro em cada uma.
   const { data: saleData, error: saleError } = await admin
     .from('sales')
     .select('*')
     .eq('id', saleId)
+    .eq('company_id', companyId)
     .maybeSingle() as unknown as { data: any; error: import('@/lib/errors/pgResult').PgErrorLike | null }
 
   if (saleError) {
@@ -261,13 +269,17 @@ async function getSale(id: string) {
 }
 
 export default async function VendaDetalhePage({ params }: { params: { id: string } }) {
-  const sale = await getSale(params.id)
+  // Menor role autenticado do ERP (admin/gerente/usuario todos passam) —
+  // qualquer acesso autenticado da EMPRESA pode ver/operar a venda,
+  // incluindo a seção fiscal (decisão de produto: operação fiscal de
+  // venda nunca foi pra ser admin-only, só configuração/credenciais
+  // continuam sendo). `profile.company_id` é a fonte de isolamento pra
+  // `getSale` abaixo — nunca lido de `params`/query string.
+  const profile = await requirePageRole('usuario')
+  const sale = profile.company_id ? await getSale(params.id, profile.company_id) : null
   if (!sale) notFound()
 
-  const serverClient = createClient()
-  const { data: { user: authUser } } = await serverClient.auth.getUser()
-  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
-  const requiresAuth = profile?.role === 'usuario'
+  const requiresAuth = profile.role === 'usuario'
 
   const isTerminal  = sale.status === 'cancelled' || sale.status === 'returned'
   const canReturn   = sale.status === 'delivered' || sale.status === 'paid'
@@ -319,7 +331,7 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   // linha (empresa sem fiscal configurado ainda) cai em 'homologacao',
   // o único ambiente realmente utilizável hoje (produção segue bloqueada
   // em submitNfeHomologacao.ts/submitNfceHomologacao.ts).
-  const { data: fiscalSettingsRow } = (profile?.company_id
+  const { data: fiscalSettingsRow } = (profile.company_id
     ? await (createAdminClient() as any)
         .from('company_fiscal_settings')
         .select('nfe_environment, nfce_environment')
@@ -716,18 +728,23 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
         </Card>
       )}
 
-      {/* Fiscal — só admin (mesma regra de "Fiscal" bloqueado pra usuario, Fase Fiscal 1) */}
-      {profile?.role === 'admin' && (
-        <DocumentoFiscalCard
-          saleId={sale.id}
-          saleStatus={sale.status}
-          resolvedType={resolvedFiscalDocumentType}
-          blockedReason={fiscalBlockedReason}
-          maskedCpf={maskedCustomerCpf}
-          initialDocuments={sale.fiscalDocuments as Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>}
-          currentEnvironment={{ nfe: nfeEnvironment, nfce: nfceEnvironment }}
-        />
-      )}
+      {/* Fiscal — decisão de produto (auditoria de acesso fiscal): operação
+          fiscal de UMA VENDA JÁ EXISTENTE (emitir/consultar/reconciliar/
+          DANFE/XML) nunca foi pensada pra ser admin-only — isso era um
+          gate residual da Fase Fiscal 1 (quando "Fiscal" era só uma
+          fundação incompleta). Configuração fiscal/credenciais
+          (Configurações → Fiscal, tokens, CSC, certificado) continuam
+          admin-only, intocadas — isolamento por empresa garantido acima,
+          em `getSale(params.id, profile.company_id)`, nunca aqui. */}
+      <DocumentoFiscalCard
+        saleId={sale.id}
+        saleStatus={sale.status}
+        resolvedType={resolvedFiscalDocumentType}
+        blockedReason={fiscalBlockedReason}
+        maskedCpf={maskedCustomerCpf}
+        initialDocuments={sale.fiscalDocuments as Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>}
+        currentEnvironment={{ nfe: nfeEnvironment, nfce: nfceEnvironment }}
+      />
     </div>
   )
 }

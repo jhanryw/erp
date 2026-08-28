@@ -13,10 +13,10 @@ export const dynamic = 'force-dynamic'
  *      (REPLACE, não PATCH — ver upsertSaleRecipient.ts; por isso o GET
  *      acima existe, pra o formulário sempre partir do estado real).
  *
- * Admin-only — mesma regra de "Fiscal" já usada por
- * `/api/fiscal/{nfe,nfce}/emitir-homologacao`. Nunca aceita `company_id`
- * do corpo — sempre o do usuário autenticado (multi-tenancy, seção 32 do
- * pedido).
+ * Qualquer usuário autenticado da empresa — mesma regra já usada por
+ * `/api/fiscal/{nfe,nfce}/emitir-homologacao` (operação fiscal de venda
+ * nunca foi pra ser admin-only). Nunca aceita `company_id` do corpo —
+ * sempre o do usuário autenticado (multi-tenancy, seção 32 do pedido).
  */
 
 import { z } from 'zod'
@@ -50,7 +50,7 @@ const bodySchema = z.object({
 })
 
 export async function GET(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 
@@ -64,7 +64,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 

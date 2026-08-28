@@ -8,12 +8,15 @@ export const dynamic = 'force-dynamic'
  * qualquer dado fiscal arbitrário no corpo — tudo isso vem do
  * ERP/configuração (`company_fiscal_settings`, `company_integrations`,
  * `sale_items`/`products`), nunca do cliente da API. `submitNfeHomologacao`
- * já bloqueia produção internamente (`nfe_environment !== 'homologacao'`
- * → 403) — esta rota não duplica essa lógica, só garante que não há
- * nenhum jeito de o corpo da requisição forçar outro ambiente.
+ * já valida ambiente internamente (aceita 'homologacao'/'producao'
+ * conforme `company_fiscal_settings.nfe_environment`) — esta rota não
+ * duplica essa lógica, só garante que não há nenhum jeito de o corpo da
+ * requisição forçar outro ambiente.
  *
- * Admin-only — mesma regra de "Fiscal" como módulo bloqueado pra
- * `usuario`, já estabelecida na Fase Fiscal 1.
+ * Qualquer usuário autenticado da empresa (decisão de produto — operação
+ * fiscal de UMA VENDA nunca foi pra ser admin-only; o gate residual da
+ * Fase Fiscal 1 foi removido). Configuração fiscal/credenciais
+ * continuam admin-only em `/configuracoes/fiscal`, intocadas.
  */
 
 import { z } from 'zod'
@@ -26,7 +29,7 @@ const bodySchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 

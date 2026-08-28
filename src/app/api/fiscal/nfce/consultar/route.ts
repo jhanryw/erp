@@ -4,8 +4,11 @@ export const dynamic = 'force-dynamic'
  * POST /api/fiscal/nfce/consultar — Fase Fiscal 4F.
  *
  * Verificação manual de status de NFC-e (não emite, não automatiza) —
- * mesmo papel de `/api/fiscal/nfe/consultar`. Admin-only. Único input:
- * `sale_id`.
+ * mesmo papel de `/api/fiscal/nfe/consultar`. Qualquer usuário
+ * autenticado da empresa (decisão de produto — operação fiscal de venda
+ * nunca foi pra ser admin-only). Único input: `sale_id`; isolamento
+ * garantido dentro de `consultNfceStatus` (sempre escopado por
+ * `user.company_id`).
  */
 
 import { z } from 'zod'
@@ -18,7 +21,7 @@ const bodySchema = z.object({
 })
 
 export async function POST(request: Request) {
-  const { user, response: unauth } = await requireRole('admin')
+  const { user, response: unauth } = await requireRole('usuario')
   if (unauth) return unauth
   if (!user.company_id) return forbidden()
 
