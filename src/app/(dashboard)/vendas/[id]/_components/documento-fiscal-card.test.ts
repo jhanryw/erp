@@ -34,8 +34,14 @@ describe('DocumentoFiscalCard — links Focus nunca usam caminho relativo cru co
     expect(SOURCE).toMatch(/result\.status === 'authorized' && resultEnvironment && <EnvironmentBadge/)
   })
 
-  it('continua mostrando o aviso geral de homologação no topo do card', () => {
+  it('aviso de homologação é condicionado ao ambiente REAL (resultEnvironment) — nunca um texto fixo incondicional (achado real, auditoria pré-go-live 2026-08-28: o card mostrava isso sempre, mesmo com a empresa em produção)', () => {
+    expect(SOURCE).toMatch(/resultEnvironment !== 'producao' && \(/)
     expect(SOURCE).toMatch(/AMBIENTE DE HOMOLOGAÇÃO — SEM VALIDADE FISCAL/)
+    // O card (DocumentoFiscalCard) não pode mais renderizar o aviso
+    // incondicionalmente antes de saber o resolvedType/documentos — só
+    // DocumentTypeSection (que tem resultEnvironment) pode.
+    const cardFn = SOURCE.slice(SOURCE.indexOf('export function DocumentoFiscalCard'))
+    expect(cardFn).not.toMatch(/AMBIENTE DE HOMOLOGAÇÃO/)
   })
 })
 

@@ -282,6 +282,26 @@ function DocumentTypeSection({
         )}
       </div>
 
+      {/* Ambiente-aware (achado real, auditoria pré-go-live 2026-08-28): esta
+          seção usada a mostrar um texto FIXO "AMBIENTE DE HOMOLOGAÇÃO — SEM
+          VALIDADE FISCAL" no card inteiro, incondicional — nunca lia
+          `resultEnvironment` nem nenhum dado real, então continuava
+          aparecendo mesmo com a empresa já configurada e emitindo em
+          produção. Movida pra dentro de CADA seção (NFC-e/NF-e têm
+          ambientes independentes — `company_fiscal_settings.nfce_environment`
+          pode divergir de `nfe_environment`) e condicionada ao mesmo
+          `resultEnvironment` que já alimenta o `EnvironmentBadge` — reflete
+          o ambiente REAL (documento já emitido, se houver; senão a config
+          atual da empresa), nunca aparece quando esse ambiente é 'producao'. */}
+      {resultEnvironment !== 'producao' && (
+        <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
+          <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
+          <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+            AMBIENTE DE HOMOLOGAÇÃO — SEM VALIDADE FISCAL
+          </p>
+        </div>
+      )}
+
       {type === 'nfce' && (
         <div className="flex items-center gap-2 text-xs text-text-secondary">
           <UserRound className="w-3.5 h-3.5 text-text-muted" />
@@ -426,13 +446,6 @@ export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedR
       <div className="flex items-center gap-2">
         <Receipt className="w-4 h-4 text-brand" />
         <h3 className="text-sm font-semibold text-text-primary">Fiscal</h3>
-      </div>
-
-      <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 rounded-md px-3 py-2">
-        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-        <p className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-          AMBIENTE DE HOMOLOGAÇÃO — SEM VALIDADE FISCAL
-        </p>
       </div>
 
       {resolvedType === 'blocked' && !initialDocuments.nfce && !initialDocuments.nfe && (
