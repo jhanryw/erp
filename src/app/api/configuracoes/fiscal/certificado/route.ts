@@ -75,8 +75,12 @@ export async function POST(request: Request) {
   auditLog({
     userId: user.id, userRole: user.role,
     action: 'update', resource: 'fiscal_certificate',
-    detail: `Certificado digital atualizado (fingerprint ${result.data.fingerprint})`,
+    detail: `Certificado digital atualizado (fingerprint ${result.data.local.fingerprint}) — sync Focus: ${result.data.focus.status}`,
   })
 
-  return ok({ certificate: result.data })
+  // `certificate` preserva o formato anterior (metadata local, usado hoje
+  // pela UI) — `focus` é o campo NOVO com o resultado da sincronização.
+  // Nunca colapsar os dois: um upload local bem-sucedido com falha de sync
+  // não pode aparecer pra UI como "pronto pra emitir".
+  return ok({ certificate: result.data.local, focus: result.data.focus })
 }

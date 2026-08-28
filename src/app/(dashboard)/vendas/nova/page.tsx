@@ -15,6 +15,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { useDebounce } from '@/hooks/useDebounce'
 import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
 import { createAutoPrintController } from '@/lib/sales/autoPrintTab'
+import { resolvePostSalePrintTarget } from '@/lib/sales/resolvePostSalePrintTarget'
 import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
 import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
 import { resolveFiscalDocumentType } from '@/lib/fiscal/resolveFiscalDocumentType'
@@ -602,7 +603,11 @@ export default function NovaVendaPage() {
       // já foi criada com sucesso independente do resultado fiscal.
       const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null } | undefined
       const fiscalPrint = json.fiscalPrint as { autoPrint: boolean; printNonFiscalReceipt: boolean } | undefined
-      const autoPrintedFiscal = !!fiscalPrint?.autoPrint && fiscal?.status === 'authorized' && fiscal.requested === 'nfce'
+      // Regra definitiva de impressão/QR Code — precedência (documento
+      // fiscal recém-autorizado sempre vence sobre o comprovante não
+      // fiscal) extraída pra função pura testável, ver resolvePostSalePrintTarget.ts.
+      const printTarget = resolvePostSalePrintTarget({ saleId: sale.id, fiscal, fiscalPrint })
+      const autoPrintedFiscal = printTarget.reason === 'fiscal_authorized'
       if (fiscal) {
         const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
         if (fiscal.status === 'authorized') {
@@ -641,12 +646,7 @@ export default function NovaVendaPage() {
       // (ver comentário acima). Se nenhum dos dois estiver ligado pra esta
       // operação (ex.: entrega — nem comprovante nem DANFE automáticos por
       // padrão), a aba pré-aberta é só fechada, sem imprimir nada.
-      const shouldPrintReceipt = fiscalPrint?.printNonFiscalReceipt ?? true // fail-safe: sem info do servidor, mantém comportamento antigo
-      const printUrl = shouldPrintReceipt
-        ? `/vendas/${sale.id}/comprovante`
-        : autoPrintedFiscal
-          ? `/vendas/${sale.id}/nfce`
-          : null
+      const printUrl = printTarget.url
 
       if (printUrl) {
         const printed = autoPrintRef.current!.redirectToReceipt(printUrl)

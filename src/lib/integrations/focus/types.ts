@@ -116,6 +116,20 @@ export interface FocusEmpresaInput {
   habilita_nfe?: boolean
   arquivo_certificado_base64?: string
   senha_certificado?: string
+  /**
+   * CSC de NFC-e (Motor Fiscal Configurável — Fase Certificado/CSC) —
+   * campos confirmados na doc oficial (doc.focusnfe.com.br/reference/
+   * empresas). A empresa guarda os DOIS pares (homologação e produção)
+   * simultaneamente — o par usado em cada emissão real é decidido pela
+   * Focus a partir do ambiente da chamada de emissão (`/v2/nfce` no host
+   * de homologação ou produção), nunca por um campo aqui. `habilita_nfce`
+   * precisa ser `true` pra qualquer um dos dois pares ter efeito.
+   */
+  habilita_nfce?: boolean
+  csc_nfce_homologacao?: string
+  id_token_nfce_homologacao?: string
+  csc_nfce_producao?: string
+  id_token_nfce_producao?: string
 }
 
 /**

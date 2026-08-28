@@ -46,7 +46,14 @@ export function CscManager() {
         toast.error('Erro ao salvar CSC', { description: typeof json.error === 'string' ? json.error : undefined })
         return
       }
-      toast.success('CSC salvo.')
+      // Local e Focus são reportados SEPARADAMENTE — salvar localmente
+      // nunca implica "sincronizado e pronto para emitir NFC-e".
+      toast.success('CSC salvo localmente.')
+      if (json.focus?.status === 'success') {
+        toast.success('CSC sincronizado com a Focus.')
+      } else {
+        toast.error('Falha ao sincronizar CSC com a Focus', { description: json.focus?.lastError ?? undefined })
+      }
       setFormCscId(''); setFormToken(''); setShowForm(false)
       load()
     } catch {

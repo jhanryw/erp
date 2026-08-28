@@ -1,8 +1,17 @@
 // Comprovante não fiscal — impressão interna (80mm térmica).
 //
-// Disponível independentemente de NFC-e/NF-e emitida ou não — comercial e
-// fiscal são independentes por design (requisito 7 do pedido). Nunca lê
-// fiscal_documents/Focus/resolveFiscalDocumentType.
+// Comercial e fiscal são independentes por design (requisito 7 do pedido)
+// ENQUANTO não existir documento fiscal autorizado para a venda — mas a
+// regra definitiva de impressão/QR Code (revisão desta fase) proíbe
+// mostrar o QR interno Qarvon depois que uma NF-e/NFC-e for autorizada.
+// Por isso esta página agora consulta `fiscal_documents` (só pra checar
+// `status='authorized'`, nunca pra montar o comprovante em si — o corpo
+// do comprovante continua vindo 100% de `getReceiptForSalePrint`, que
+// nunca lê fiscal_documents/Focus/resolveFiscalDocumentType) e:
+//   - NFC-e autorizada  → redireciona pra /vendas/[id]/nfce (DANFE local).
+//   - NF-e autorizada   → redireciona pro danfe_path oficial da Focus
+//     (`buildFocusDanfeUrl` — nunca aceita URL arbitrária, só o caminho já
+//     persistido em fiscal_documents pelo nosso próprio serviço de emissão).
 //
 // Não existe hoje nenhuma configuração de "política de troca" armazenada no
 // ERP (grep confirma — nenhuma tabela/coluna do tipo politica_troca/
@@ -10,12 +19,14 @@
 // inventa um texto jurídico de troca — a seção só apareceria se e quando tal
 // configuração existir.
 
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { headers } from 'next/headers'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getReceiptForSalePrint } from '@/lib/receipts/getReceiptData'
 import { generateReceiptQr, formatShortReceiptCode, buildVerificationUrl } from '@/lib/receipts/generateReceiptQr'
+import { findAuthorizedFiscalDocument } from '@/services/fiscal/findAuthorizedFiscalDocument'
+import { buildFocusDanfeUrl } from '@/lib/fiscal/buildFocusDanfeUrl'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { PrintTrigger } from './PrintTrigger'
@@ -60,6 +71,40 @@ export default async function ComprovantePage({ params }: { params: { id: string
   const profile = await requirePageRole('usuario')
   const saleId = Number(params.id)
   if (!saleId || !profile.company_id) notFound()
+
+  // Regra definitiva de impressão/QR Code: uma vez que existe documento
+  // fiscal AUTORIZADO pra esta venda, o comprovante não fiscal (e o QR
+  // interno Qarvon) nunca mais é mostrado — o documento fiscal passa a
+  // ser o comprovante. Checado ANTES de montar qualquer coisa do
+  // comprovante, pra nunca chegar a renderizar o QR interno por engano.
+  const authorizedDoc = await findAuthorizedFiscalDocument(saleId, profile.company_id)
+
+  if (authorizedDoc?.documentType === 'nfce') {
+    redirect(`/vendas/${saleId}/nfce`)
+  }
+
+  if (authorizedDoc?.documentType === 'nfe') {
+    const danfeUrl = buildFocusDanfeUrl(authorizedDoc.environment, authorizedDoc.danfePath)
+    if (danfeUrl) redirect(danfeUrl)
+
+    // NF-e autorizada mas sem danfe_path válido ainda persistido — nunca
+    // cai de volta pro comprovante não fiscal (mostraria o QR interno
+    // indevidamente); comunica o operador em vez disso, mesmo padrão de
+    // "nunca renderiza algo que pareça válido sem sê-lo" já usado em
+    // /vendas/[id]/nfce/page.tsx.
+    return (
+      <div style={{ fontFamily: 'sans-serif', padding: 24, maxWidth: 480, margin: '0 auto' }}>
+        <h1 style={{ fontSize: 16, fontWeight: 700, color: '#b91c1c' }}>NF-e autorizada — DANFE ainda não disponível</h1>
+        <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>
+          Esta venda já tem NF-e autorizada pela SEFAZ, mas o link do DANFE ainda não foi salvo localmente. Consulte a
+          tela da venda em alguns instantes.
+        </p>
+        <Link href={`/vendas/${saleId}`} style={{ fontSize: 13, color: '#2563eb', display: 'inline-block', marginTop: 12 }}>
+          ← Voltar para a venda
+        </Link>
+      </div>
+    )
+  }
 
   const receipt = await getReceiptForSalePrint({ saleId, companyId: profile.company_id })
   if (!receipt) notFound()

@@ -1,10 +1,13 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { syncFocusEmpresa } from './focusEmpresa.service'
-import * as resolveModule from './resolveFocusIntegration'
+import * as managementTokenModule from './resolveFocusManagementToken'
+import * as companyIntegrations from '@/services/integrations/company-integrations.service'
 import * as httpClient from '@/lib/integrations/focus/httpClient'
+import { FocusApiError } from '@/lib/integrations/focus/types'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }))
+vi.mock('@/services/integrations/company-integrations.service')
 
 const COMPLETE_SETTINGS = {
   cnpj: '11222333000181',
@@ -23,6 +26,19 @@ const COMPLETE_SETTINGS = {
   email: 'teste@example.com',
 }
 
+const INTEGRATION_ROW: companyIntegrations.CompanyIntegration = {
+  id: 1,
+  company_id: 1,
+  provider: 'focus_nfe',
+  external_account_id: null,
+  status: 'active',
+  settings: {},
+  last_error: null,
+  created_at: '',
+  updated_at: '',
+  created_by: null,
+}
+
 function mockSettingsRow(row: Record<string, unknown> | null) {
   ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
     from: () => ({
@@ -35,19 +51,49 @@ function mockSettingsRow(row: Record<string, unknown> | null) {
   })
 }
 
-function mockAvailableIntegration() {
-  vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+function mockAvailableManagementToken(token = 'master-tok-secreto') {
+  vi.spyOn(managementTokenModule, 'resolveFocusManagementToken').mockResolvedValue({
     ok: true,
-    data: { available: true, integration: { integrationId: 1, companyId: 1, token: 'tok-secreto', environment: 'homologacao' } },
+    data: { available: true, integration: { integrationId: 1, companyId: 1, token } },
   })
 }
+
+function mockIntegrationRow(overrides: Partial<companyIntegrations.CompanyIntegration> = {}) {
+  ;(companyIntegrations.getCompanyIntegration as any).mockResolvedValue({ ok: true, data: { ...INTEGRATION_ROW, ...overrides } })
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  ;(companyIntegrations.updateCompanyIntegration as any).mockResolvedValue({ ok: true, data: INTEGRATION_ROW })
+})
 
 describe('syncFocusEmpresa', () => {
   afterEach(() => {
     vi.restoreAllMocks()
   })
 
+  it('master_token indisponível → falha sem chamar a Focus', async () => {
+    vi.spyOn(managementTokenModule, 'resolveFocusManagementToken').mockResolvedValue({ ok: true, data: { available: false, reason: 'master_token_missing' } })
+    const listSpy = vi.spyOn(httpClient, 'listFocusEmpresas')
+
+    const result = await syncFocusEmpresa(1)
+    expect(result.ok).toBe(false)
+    expect(listSpy).not.toHaveBeenCalled()
+  })
+
+  it('integração focus_nfe inexistente → falha explícita, sem chamar a Focus', async () => {
+    mockAvailableManagementToken()
+    ;(companyIntegrations.getCompanyIntegration as any).mockResolvedValue({ ok: true, data: null })
+    const listSpy = vi.spyOn(httpClient, 'listFocusEmpresas')
+
+    const result = await syncFocusEmpresa(1)
+    expect(result.ok).toBe(false)
+    expect(listSpy).not.toHaveBeenCalled()
+  })
+
   it('company_fiscal_settings ausente → falha cedo, sem chamar a Focus', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
     mockSettingsRow(null)
     const listSpy = vi.spyOn(httpClient, 'listFocusEmpresas')
 
@@ -57,17 +103,19 @@ describe('syncFocusEmpresa', () => {
   })
 
   it('CRT ausente → falha, nunca assume um regime tributário', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
     mockSettingsRow({ ...COMPLETE_SETTINGS, crt: null })
-    mockAvailableIntegration()
 
     const result = await syncFocusEmpresa(1)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatch(/regime tributário/i)
   })
 
-  it('CNPJ não encontrado na Focus → cria (POST), nunca duplicata', async () => {
+  it('sem external_account_id cacheado e CNPJ não encontrado na Focus → cria (POST), nunca duplicata', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow({ external_account_id: null })
     mockSettingsRow(COMPLETE_SETTINGS)
-    mockAvailableIntegration()
     vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
     const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 42, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
     const updateSpy = vi.spyOn(httpClient, 'updateFocusEmpresa')
@@ -77,13 +125,14 @@ describe('syncFocusEmpresa', () => {
     if (result.ok) expect(result.data.action).toBe('created')
     expect(createSpy).toHaveBeenCalledOnce()
     expect(updateSpy).not.toHaveBeenCalled()
+    expect(companyIntegrations.updateCompanyIntegration).toHaveBeenCalledWith(1, 1, { externalAccountId: '42' })
   })
 
-  it('CNPJ já cadastrado na Focus → atualiza (PUT), nunca cria duplicata', async () => {
+  it('external_account_id já cacheado → usa PUT direto, nunca busca por CNPJ', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow({ external_account_id: '77' })
     mockSettingsRow(COMPLETE_SETTINGS)
-    mockAvailableIntegration()
-    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([{ id: 77, cnpj: COMPLETE_SETTINGS.cnpj, nome: 'Nome antigo' }])
-    const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa')
+    const listSpy = vi.spyOn(httpClient, 'listFocusEmpresas')
     const updateSpy = vi.spyOn(httpClient, 'updateFocusEmpresa').mockResolvedValue({ id: 77, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: '2027-01-01' })
 
     const result = await syncFocusEmpresa(1)
@@ -93,12 +142,27 @@ describe('syncFocusEmpresa', () => {
       expect(result.data.focusEmpresaId).toBe(77)
     }
     expect(updateSpy).toHaveBeenCalledWith(77, expect.anything(), expect.anything())
-    expect(createSpy).not.toHaveBeenCalled()
+    expect(listSpy).not.toHaveBeenCalled()
+  })
+
+  it('external_account_id cacheado mas obsoleto (404 na Focus) → cai pra busca por CNPJ automaticamente', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow({ external_account_id: '999' })
+    mockSettingsRow(COMPLETE_SETTINGS)
+    vi.spyOn(httpClient, 'updateFocusEmpresa')
+      .mockRejectedValueOnce(new FocusApiError(404, { mensagem: 'não encontrado' }))
+      .mockResolvedValueOnce({ id: 55, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([{ id: 55, cnpj: COMPLETE_SETTINGS.cnpj, nome: 'Nome antigo' }])
+
+    const result = await syncFocusEmpresa(1)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.focusEmpresaId).toBe(55)
   })
 
   it('regime_tributario enviado à Focus é sempre o crt de company_fiscal_settings — nunca hardcoded (suporta transição MEI→ME sem mudar código)', async () => {
-    mockSettingsRow({ ...COMPLETE_SETTINGS, crt: 1 }) // já migrada pra Simples Nacional normal
-    mockAvailableIntegration()
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow({ ...COMPLETE_SETTINGS, crt: 1 })
     vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
     const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 1, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
 
@@ -106,13 +170,25 @@ describe('syncFocusEmpresa', () => {
     expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({ regime_tributario: 1 }), expect.anything())
   })
 
-  it('certificado/senha passam pro input da Focus, mas nunca aparecem na mensagem de erro se a chamada falhar', async () => {
+  it('gerenciamento sempre usa host/token de produção (master_token), independente do ambiente de emissão configurado', async () => {
+    mockAvailableManagementToken('master-tok-secreto')
+    mockIntegrationRow({ settings: { environment: 'homologacao' } })
     mockSettingsRow(COMPLETE_SETTINGS)
-    mockAvailableIntegration()
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
+    const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 1, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
+
+    await syncFocusEmpresa(1)
+    expect(createSpy).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ environment: 'producao', token: 'master-tok-secreto' }))
+  })
+
+  it('certificado/senha passam pro input da Focus, mas nunca aparecem na mensagem de erro se a chamada falhar', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow(COMPLETE_SETTINGS)
     vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
     vi.spyOn(httpClient, 'createFocusEmpresa').mockRejectedValue(new Error('HTTP 422: cnpj inválido'))
 
-    const result = await syncFocusEmpresa(1, { arquivoBase64: 'BASE64-SUPER-SECRETO-DO-CERTIFICADO', senha: 'senha-secreta-123' })
+    const result = await syncFocusEmpresa(1, { certificate: { arquivoBase64: 'BASE64-SUPER-SECRETO-DO-CERTIFICADO', senha: 'senha-secreta-123' } })
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.error).not.toContain('BASE64-SUPER-SECRETO-DO-CERTIFICADO')
@@ -120,13 +196,75 @@ describe('syncFocusEmpresa', () => {
     }
   })
 
-  it('integração Focus indisponível → falha sem chamar listFocusEmpresas', async () => {
+  it('CSC de homologação envia só o par homologação, nunca o par de produção', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
     mockSettingsRow(COMPLETE_SETTINGS)
-    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({ ok: true, data: { available: false, reason: 'token_missing' } })
-    const listSpy = vi.spyOn(httpClient, 'listFocusEmpresas')
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
+    const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 1, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
 
-    const result = await syncFocusEmpresa(1)
-    expect(result.ok).toBe(false)
-    expect(listSpy).not.toHaveBeenCalled()
+    await syncFocusEmpresa(1, { csc: { environment: 'homologacao', cscId: 'id-homolog', cscToken: 'tok-homolog' } })
+
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ habilita_nfce: true, id_token_nfce_homologacao: 'id-homolog', csc_nfce_homologacao: 'tok-homolog' }),
+      expect.anything(),
+    )
+    const sentInput = createSpy.mock.calls[0][0] as unknown as Record<string, unknown>
+    expect(sentInput.csc_nfce_producao).toBeUndefined()
+    expect(sentInput.id_token_nfce_producao).toBeUndefined()
+  })
+
+  it('CSC de produção envia só o par produção, nunca o par de homologação', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow(COMPLETE_SETTINGS)
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
+    const createSpy = vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 1, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
+
+    await syncFocusEmpresa(1, { csc: { environment: 'producao', cscId: 'id-prod', cscToken: 'tok-prod' } })
+
+    const sentInput = createSpy.mock.calls[0][0] as unknown as Record<string, unknown>
+    expect(sentInput.csc_nfce_producao).toBe('tok-prod')
+    expect(sentInput.id_token_nfce_producao).toBe('id-prod')
+    expect(sentInput.csc_nfce_homologacao).toBeUndefined()
+    expect(sentInput.id_token_nfce_homologacao).toBeUndefined()
+  })
+
+  it('sucesso registra status independente por recurso (company/certificate/csc) via updateCompanyIntegration', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow(COMPLETE_SETTINGS)
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
+    vi.spyOn(httpClient, 'createFocusEmpresa').mockResolvedValue({ id: 1, cnpj: COMPLETE_SETTINGS.cnpj, nome: COMPLETE_SETTINGS.razao_social, certificado_valido_ate: null })
+
+    await syncFocusEmpresa(1, {
+      certificate: { arquivoBase64: 'b64', senha: 'x' },
+      csc: { environment: 'producao', cscId: 'id', cscToken: 'tok' },
+    })
+
+    const syncCall = (companyIntegrations.updateCompanyIntegration as any).mock.calls.find((call: unknown[]) => (call[2] as any)?.settings)
+    expect(syncCall).toBeTruthy()
+    const syncState = (syncCall![2] as any).settings.focusManagementSync
+    expect(syncState.company.status).toBe('success')
+    expect(syncState.certificate.status).toBe('success')
+    expect(syncState.csc.producao.status).toBe('success')
+    expect(syncState.csc.homologacao).toBeUndefined()
+  })
+
+  it('erro na Focus registra status=error com lastError preenchido, nunca oculta a falha', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow(COMPLETE_SETTINGS)
+    vi.spyOn(httpClient, 'listFocusEmpresas').mockResolvedValue([])
+    vi.spyOn(httpClient, 'createFocusEmpresa').mockRejectedValue(new Error('HTTP 500: instabilidade'))
+
+    await syncFocusEmpresa(1, { certificate: { arquivoBase64: 'b64', senha: 'x' } })
+
+    const syncCall = (companyIntegrations.updateCompanyIntegration as any).mock.calls.find((call: unknown[]) => (call[2] as any)?.settings)
+    expect(syncCall).toBeTruthy()
+    const syncState = (syncCall![2] as any).settings.focusManagementSync
+    expect(syncState.company.status).toBe('error')
+    expect(syncState.certificate.status).toBe('error')
+    expect(syncState.company.lastError).toMatch(/instabilidade/)
   })
 })

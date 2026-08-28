@@ -1,38 +1,52 @@
 'use client'
 
 /**
- * Botão "Testar conexão" — único gatilho de chamada de rede real à Focus
- * NFe nesta fase (GET /v2/empresas via /api/fiscal/health POST). Nunca
- * automático — só dispara com clique explícito do usuário.
+ * Botão "Testar conexão" — dispara DOIS testes de rede reais e
+ * INDEPENDENTES à Focus NFe via POST /api/fiscal/health (nunca automático
+ * — só com clique explícito):
+ *   - emissão: token de emissão do ambiente atual, operação read-only.
+ *   - gerenciamento: master_token, sempre contra produção.
+ * Um nunca prova o outro — por isso sempre aparecem como duas linhas
+ * separadas, nunca um resultado único "tudo ok"/"tudo falhou".
  */
 
 import { useState } from 'react'
 import { Loader2, PlugZap } from 'lucide-react'
 
-interface ConnectionTestResult {
+interface EmissionTestResult {
   connected: boolean
   environment?: string
+  error?: string
+}
+
+interface ManagementTestResult {
+  connected: boolean
   empresasCount?: number
   error?: string
 }
 
 export function TestFocusConnectionButton() {
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<ConnectionTestResult | null>(null)
+  const [emissionResult, setEmissionResult] = useState<EmissionTestResult | null>(null)
+  const [managementResult, setManagementResult] = useState<ManagementTestResult | null>(null)
+  const [generalError, setGeneralError] = useState<string | null>(null)
 
   async function handleTest() {
     setBusy(true)
-    setResult(null)
+    setEmissionResult(null)
+    setManagementResult(null)
+    setGeneralError(null)
     try {
       const res = await fetch('/api/fiscal/health', { method: 'POST' })
       const data = await res.json()
       if (!res.ok) {
-        setResult({ connected: false, error: data.error ?? 'Falha ao testar conexão.' })
+        setGeneralError(typeof data.error === 'string' ? data.error : 'Falha ao testar conexão.')
         return
       }
-      setResult(data.connectionTest)
+      setEmissionResult(data.emissionTest)
+      setManagementResult(data.managementTest)
     } catch (err) {
-      setResult({ connected: false, error: err instanceof Error ? err.message : 'Erro desconhecido.' })
+      setGeneralError(err instanceof Error ? err.message : 'Erro desconhecido.')
     } finally {
       setBusy(false)
     }
@@ -49,11 +63,19 @@ export function TestFocusConnectionButton() {
         Testar conexão com a Focus NFe
       </button>
 
-      {result && (
-        <p className={`text-xs ${result.connected ? 'text-emerald-600' : 'text-red-500'}`}>
-          {result.connected
-            ? `Conectado (${result.environment}) — ${result.empresasCount} empresa(s) habilitada(s) neste token.`
-            : result.error}
+      {generalError && <p className="text-xs text-red-500">{generalError}</p>}
+
+      {emissionResult && (
+        <p className={`text-xs ${emissionResult.connected ? 'text-emerald-600' : 'text-red-500'}`}>
+          Emissão: {emissionResult.connected ? `conectado (${emissionResult.environment})` : emissionResult.error}
+        </p>
+      )}
+
+      {managementResult && (
+        <p className={`text-xs ${managementResult.connected ? 'text-emerald-600' : 'text-red-500'}`}>
+          Gerenciamento: {managementResult.connected
+            ? `conectado — ${managementResult.empresasCount} empresa(s) na conta.`
+            : managementResult.error}
         </p>
       )}
     </div>

@@ -3,11 +3,13 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import * as companyIntegrations from '@/services/integrations/company-integrations.service'
 import * as secrets from '@/services/integrations/secrets.service'
 import * as pkcs12 from '@/lib/fiscal/certificate/parsePkcs12'
+import * as focusEmpresaModule from './focusEmpresa.service'
 import { uploadCertificate, validateStoredCertificate, saveCsc, getCscMasked } from './certificateService'
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }))
 vi.mock('@/services/integrations/company-integrations.service')
 vi.mock('@/services/integrations/secrets.service')
+vi.mock('./focusEmpresa.service')
 vi.mock('@/lib/fiscal/certificate/parsePkcs12', async (importOriginal) => {
   const actual = await importOriginal<typeof pkcs12>()
   return { ...actual, parsePkcs12: vi.fn() }
@@ -47,6 +49,7 @@ function buildFakeAdmin(fiscalSettingsRow: any) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  ;(focusEmpresaModule.syncFocusEmpresa as any).mockResolvedValue({ ok: true, data: { action: 'updated', focusEmpresaId: 1, certificadoValidoAte: null } })
 })
 
 describe('uploadCertificate', () => {
@@ -61,12 +64,32 @@ describe('uploadCertificate', () => {
 
     expect(result.ok).toBe(true)
     if (result.ok) {
-      expect(result.data.status).toBe('valid')
-      expect(result.data.cnpjMismatch).toBe(false)
-      expect(result.data.fingerprint).toBe('AA:BB:CC')
+      expect(result.data.local.status).toBe('valid')
+      expect(result.data.local.cnpjMismatch).toBe(false)
+      expect(result.data.local.fingerprint).toBe('AA:BB:CC')
+      expect(result.data.focus.status).toBe('success')
     }
     expect(secrets.setIntegrationSecret).toHaveBeenCalledWith(INTEGRATION_ID, COMPANY_ID, 'certificate_pfx_b64', expect.any(String))
     expect(secrets.setIntegrationSecret).toHaveBeenCalledWith(INTEGRATION_ID, COMPANY_ID, 'certificate_password', 'senha123')
+    expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, { certificate: { arquivoBase64: expect.any(String), senha: 'senha123' } })
+  })
+
+  it('sincronização com a Focus falha, mas NUNCA desfaz o salvamento local — local e focus são reportados separadamente', async () => {
+    ;(pkcs12.parsePkcs12 as any).mockReturnValue(VALID_METADATA)
+    ;(companyIntegrations.getCompanyIntegration as any).mockResolvedValue({ ok: true, data: { id: INTEGRATION_ID } })
+    ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
+    ;(companyIntegrations.updateCompanyIntegration as any).mockResolvedValue({ ok: true, data: {} })
+    ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: '11222333000181' }))
+    ;(focusEmpresaModule.syncFocusEmpresa as any).mockResolvedValue({ ok: false, error: 'Falha ao sincronizar empresa com a Focus NFe: HTTP 500', status: 502 })
+
+    const result = await uploadCertificate({ companyId: COMPANY_ID, userId: USER_ID, pfxBuffer: Buffer.from('fake-pfx'), password: 'senha123' })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.local.status).toBe('valid')
+      expect(result.data.focus.status).toBe('error')
+      expect(result.data.focus.lastError).toMatch(/HTTP 500/)
+    }
   })
 
   it('cria a integração quando ainda não existe (primeiro upload)', async () => {
@@ -112,7 +135,7 @@ describe('uploadCertificate', () => {
 
     const result = await uploadCertificate({ companyId: COMPANY_ID, userId: USER_ID, pfxBuffer: Buffer.from('x'), password: 'y' })
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.data.cnpjMismatch).toBe(true)
+    if (result.ok) expect(result.data.local.cnpjMismatch).toBe(true)
   })
 
   it('certificado vencido → status=expired, não bloqueia o upload', async () => {
@@ -124,7 +147,7 @@ describe('uploadCertificate', () => {
 
     const result = await uploadCertificate({ companyId: COMPANY_ID, userId: USER_ID, pfxBuffer: Buffer.from('x'), password: 'y' })
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.data.status).toBe('expired')
+    if (result.ok) expect(result.data.local.status).toBe('expired')
   })
 
   it('nenhuma linha em company_fiscal_settings → falha explícita, nunca silenciosa', async () => {
@@ -180,7 +203,41 @@ describe('saveCsc / getCscMasked', () => {
 
     const result = await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000001', cscToken: 'meu-token-secreto' })
     expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.local.cscId).toBe('000001')
+      expect(result.data.focus.status).toBe('success')
+    }
     expect(secrets.setIntegrationSecret).toHaveBeenCalledWith(INTEGRATION_ID, COMPANY_ID, 'csc_token', 'meu-token-secreto')
+  })
+
+  it('saveCsc sincroniza o par de ambiente correto — lê settings.environment da integração focus_nfe, não do cofre fiscal_certificate', async () => {
+    ;(companyIntegrations.getCompanyIntegration as any).mockImplementation((_companyId: number, provider: string) => {
+      if (provider === 'focus_nfe') return Promise.resolve({ ok: true, data: { id: 999, settings: { environment: 'producao' } } })
+      return Promise.resolve({ ok: true, data: { id: INTEGRATION_ID } }) // fiscal_certificate
+    })
+    ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
+    ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
+
+    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000002', cscToken: 'token-producao' })
+
+    expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, {
+      csc: { environment: 'producao', cscId: '000002', cscToken: 'token-producao' },
+    })
+  })
+
+  it('saveCsc sem environment configurado (ou fiscal_nfe ausente) → sincroniza como homologacao (default seguro)', async () => {
+    ;(companyIntegrations.getCompanyIntegration as any).mockImplementation((_companyId: number, provider: string) => {
+      if (provider === 'focus_nfe') return Promise.resolve({ ok: true, data: null })
+      return Promise.resolve({ ok: true, data: { id: INTEGRATION_ID } })
+    })
+    ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
+    ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
+
+    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000003', cscToken: 'token-homolog' })
+
+    expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, {
+      csc: { environment: 'homologacao', cscId: '000003', cscToken: 'token-homolog' },
+    })
   })
 
   it('getCscMasked nunca devolve o token completo — só os últimos 4 caracteres', async () => {

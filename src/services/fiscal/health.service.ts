@@ -1,16 +1,23 @@
 /**
- * Health/config da fundação fiscal (Fase Fiscal 1, seção 8 do pedido).
+ * Health/config da fundação fiscal (Fase Fiscal 1, seção 8 do pedido;
+ * revisada no Motor Fiscal Configurável — Certificado/CSC).
  *
- * Dois níveis, deliberadamente separados:
+ * TRÊS níveis, deliberadamente separados:
  *   - `getFiscalHealth` — só leitura local (company_integrations,
  *     integration_secrets, company_fiscal_settings), sem chamada de rede.
  *     É o que a página de Configurações → Fiscal usa em todo carregamento.
- *   - `testFocusConnection` — chamada de rede real (`GET /v2/empresas`),
- *     só executada quando explicitamente acionada (botão "Testar conexão"
- *     na UI) — nunca automática, pra não haver surpresa de chamada externa
- *     em todo page load.
+ *   - `testFocusEmission` — chamada de rede real, READ-ONLY, usando o
+ *     MESMO par (token de emissão + host do ambiente) que a emissão de
+ *     verdade usaria (`GET /v2/nfce/inutilizacoes?cnpj=`, nunca `/v2/
+ *     empresas` — essa é API de GERENCIAMENTO, nunca prova nada sobre
+ *     emissão). Só executada quando explicitamente acionada.
+ *   - `testFocusManagement` — chamada de rede real e SEPARADA, usando
+ *     `master_token` + host de produção (`/v2/empresas`), nunca o token de
+ *     emissão. Prova só que o cadastro de empresa/certificado/CSC
+ *     funciona, nunca que a emissão funciona (e vice-versa) — os dois
+ *     health checks nunca substituem um ao outro.
  *
- * O token NUNCA é incluído no retorno de nenhuma das duas funções.
+ * O token NUNCA é incluído no retorno de nenhuma das três funções.
  *
  * `company_fiscal_settings` ainda não existe em `database.types.ts` (não
  * regenerado nesta fase, por instrução explícita) — acesso via
@@ -21,7 +28,10 @@
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveFocusIntegration } from './resolveFocusIntegration'
-import { listFocusEmpresas } from '@/lib/integrations/focus/httpClient'
+import { resolveFocusManagementToken } from './resolveFocusManagementToken'
+import { readFocusManagementSync, type FocusManagementSyncState } from './focusManagementSync'
+import { getCompanyIntegration } from '@/services/integrations/company-integrations.service'
+import { listFocusEmpresas, consultInutilizacoesNfce } from '@/lib/integrations/focus/httpClient'
 import { FocusApiError } from '@/lib/integrations/focus/types'
 import type { FocusEnvironment } from '@/lib/integrations/focus/types'
 import type { ServiceOutcome } from '@/services/produtos.service'
@@ -79,7 +89,7 @@ export interface FiscalHealthStatus {
   }
   focusIntegration: {
     connected: boolean
-    reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | null
+    reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | 'production_token_missing' | null
   }
   /** Motor Fiscal Configurável Fase 2 — status de prontidão do certificado/CSC (seção 31 do pedido). */
   certificate: {
@@ -90,6 +100,14 @@ export interface FiscalHealthStatus {
   }
   csc: { configured: boolean }
   readyForHomologacao: boolean
+  /**
+   * Motor Fiscal Configurável — status independente de sincronização com a
+   * Focus (company/certificate/csc.homologacao/csc.producao). Lido direto
+   * de `company_integrations` (provider='focus_nfe') `.settings.
+   * focusManagementSync` — nunca inferido de `certificate`/`csc` acima
+   * (aqueles refletem só o cofre LOCAL, nunca se a Focus recebeu o valor).
+   */
+  focusManagementSync: FocusManagementSyncState
 }
 
 export async function getFiscalHealth(companyId: number): Promise<ServiceOutcome<FiscalHealthStatus>> {
@@ -127,6 +145,13 @@ export async function getFiscalHealth(companyId: number): Promise<ServiceOutcome
     ? Math.ceil((new Date(settings.certificate_valid_until).getTime() - Date.now()) / 86_400_000)
     : null
 
+  // Informativo — nunca falha o health check inteiro se a leitura falhar
+  // (ex.: integração 'focus_nfe' ainda não existe pra esta empresa).
+  const focusNfeIntegrationResult = await getCompanyIntegration(companyId, 'focus_nfe')
+  const focusManagementSync = readFocusManagementSync(
+    focusNfeIntegrationResult.ok ? focusNfeIntegrationResult.data?.settings : null,
+  )
+
   return success({
     fiscalSettingsConfigured: !!settings,
     nfeEnabled: settings?.nfe_enabled ?? false,
@@ -142,22 +167,36 @@ export async function getFiscalHealth(companyId: number): Promise<ServiceOutcome
     },
     csc: { configured: !!settings?.csc_id },
     readyForHomologacao: emitenteComplete && focusIntegration.connected && environment === 'homologacao',
+    focusManagementSync,
   })
 }
 
-export interface FocusConnectionTestResult {
+async function fetchCnpj(companyId: number): Promise<string | null> {
+  const admin = createAdminClient()
+  const { data } = await (admin as any)
+    .from('company_fiscal_settings')
+    .select('cnpj')
+    .eq('company_id', companyId)
+    .maybeSingle() as { data: { cnpj: string | null } | null }
+  return data?.cnpj ?? null
+}
+
+export interface FocusEmissionTestResult {
   connected: boolean
   environment?: FocusEnvironment
-  empresasCount?: number
   error?: string
 }
 
 /**
- * Chamada de rede real — só invocada explicitamente (nunca em todo page
- * load). Usa `GET /v2/empresas` exclusivamente pra validar credencial,
- * nunca emite nada.
+ * Chamada de rede real, READ-ONLY — só invocada explicitamente (nunca em
+ * todo page load). Usa `GET /v2/nfce/inutilizacoes?cnpj=` com o token de
+ * EMISSÃO do ambiente atual (`resolveFocusIntegration`) — o MESMO par que
+ * `issueFocusNfce`/`issueFocusNfce` de verdade usariam, ao contrário de
+ * `/v2/empresas` (API de gerenciamento, nunca prova nada sobre emissão).
+ * Devolve 200 com array vazio mesmo numa empresa sem nenhum documento
+ * emitido ainda — nunca exige dado pré-existente.
  */
-export async function testFocusConnection(companyId: number): Promise<ServiceOutcome<FocusConnectionTestResult>> {
+export async function testFocusEmission(companyId: number): Promise<ServiceOutcome<FocusEmissionTestResult>> {
   const integrationResult = await resolveFocusIntegration(companyId)
   if (!integrationResult.ok) return failure(integrationResult.error, integrationResult.status)
 
@@ -167,13 +206,51 @@ export async function testFocusConnection(companyId: number): Promise<ServiceOut
 
   const { token, environment } = integrationResult.data.integration
 
+  const cnpj = await fetchCnpj(companyId)
+  if (!cnpj) {
+    return success({ connected: false, environment, error: 'CNPJ não cadastrado em company_fiscal_settings — cadastre antes de testar a emissão.' })
+  }
+
   try {
-    const empresas = await listFocusEmpresas({ token, environment })
-    return success({ connected: true, environment, empresasCount: empresas.length })
+    await consultInutilizacoesNfce(cnpj, { token, environment })
+    return success({ connected: true, environment })
   } catch (err) {
     if (err instanceof FocusApiError) {
       return success({ connected: false, environment, error: `Focus NFe retornou erro (${err.httpStatus}): ${err.mensagem ?? err.message}` })
     }
-    return success({ connected: false, environment, error: err instanceof Error ? err.message : 'Erro desconhecido ao testar conexão.' })
+    return success({ connected: false, environment, error: err instanceof Error ? err.message : 'Erro desconhecido ao testar emissão.' })
+  }
+}
+
+export interface FocusManagementTestResult {
+  connected: boolean
+  empresasCount?: number
+  error?: string
+}
+
+/**
+ * Chamada de rede real e SEPARADA da de emissão — usa `master_token` +
+ * SEMPRE `FOCUS_BASE_URLS.producao` (`GET /v2/empresas`), nunca o token de
+ * emissão nem o host do ambiente configurado. Prova só que o cadastro de
+ * empresa/certificado/CSC funciona.
+ */
+export async function testFocusManagement(companyId: number): Promise<ServiceOutcome<FocusManagementTestResult>> {
+  const managementResult = await resolveFocusManagementToken(companyId)
+  if (!managementResult.ok) return failure(managementResult.error, managementResult.status)
+
+  if (!managementResult.data.available) {
+    return success({ connected: false, error: `Token mestre da Focus não disponível (${managementResult.data.reason}).` })
+  }
+
+  const { token } = managementResult.data.integration
+
+  try {
+    const empresas = await listFocusEmpresas({ token, environment: 'producao' })
+    return success({ connected: true, empresasCount: empresas.length })
+  } catch (err) {
+    if (err instanceof FocusApiError) {
+      return success({ connected: false, error: `Focus NFe retornou erro (${err.httpStatus}): ${err.mensagem ?? err.message}` })
+    }
+    return success({ connected: false, error: err instanceof Error ? err.message : 'Erro desconhecido ao testar gerenciamento.' })
   }
 }

@@ -94,4 +94,70 @@ describe('resolveFocusIntegration', () => {
     const serialized = JSON.stringify(result)
     expect(serialized).not.toMatch(/token-real|segredo/i)
   })
+
+  it('homologação sem emission_token_homologacao → cai pro legado api_token (compatibilidade)', async () => {
+    vi.spyOn(companyIntegrations, 'getCompanyIntegration').mockResolvedValue({ ok: true, data: integration({ settings: { environment: 'homologacao' } }) })
+    vi.spyOn(secrets, 'getIntegrationSecret').mockImplementation(async (_id, _cid, key) => {
+      if (key === 'emission_token_homologacao') return { ok: true, data: null }
+      if (key === 'api_token') return { ok: true, data: 'token-legado-homolog' }
+      throw new Error(`chave inesperada: ${key}`)
+    })
+
+    const result = await resolveFocusIntegration(1)
+    expect(result.ok).toBe(true)
+    if (result.ok && result.data.available) {
+      expect(result.data.integration.token).toBe('token-legado-homolog')
+      expect(result.data.integration.environment).toBe('homologacao')
+    } else {
+      throw new Error('esperava available: true')
+    }
+  })
+
+  it('homologação com emission_token_homologacao presente → usa o token específico, nunca consulta o legado', async () => {
+    vi.spyOn(companyIntegrations, 'getCompanyIntegration').mockResolvedValue({ ok: true, data: integration({ settings: { environment: 'homologacao' } }) })
+    const getSecretSpy = vi.spyOn(secrets, 'getIntegrationSecret').mockImplementation(async (_id, _cid, key) => {
+      if (key === 'emission_token_homologacao') return { ok: true, data: 'token-especifico-homolog' }
+      if (key === 'api_token') return { ok: true, data: 'token-legado-nunca-deveria-ser-usado' }
+      throw new Error(`chave inesperada: ${key}`)
+    })
+
+    const result = await resolveFocusIntegration(1)
+    if (result.ok && result.data.available) {
+      expect(result.data.integration.token).toBe('token-especifico-homolog')
+    } else {
+      throw new Error('esperava available: true')
+    }
+    expect(getSecretSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'api_token')
+  })
+
+  it('REGRA DE SEGURANÇA: produção sem emission_token_producao → NUNCA cai pro api_token legado, retorna production_token_missing', async () => {
+    vi.spyOn(companyIntegrations, 'getCompanyIntegration').mockResolvedValue({ ok: true, data: integration({ settings: { environment: 'producao' } }) })
+    const getSecretSpy = vi.spyOn(secrets, 'getIntegrationSecret').mockImplementation(async (_id, _cid, key) => {
+      if (key === 'emission_token_producao') return { ok: true, data: null }
+      if (key === 'api_token') return { ok: true, data: 'token-legado-homolog-JAMAIS-usar-em-producao' }
+      throw new Error(`chave inesperada: ${key}`)
+    })
+
+    const result = await resolveFocusIntegration(1)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data).toEqual({ available: false, reason: 'production_token_missing' })
+    // nunca consulta o secret legado em produção — nem pra checar se existe
+    expect(getSecretSpy).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), 'api_token')
+  })
+
+  it('produção com emission_token_producao presente → usa o token específico de produção', async () => {
+    vi.spyOn(companyIntegrations, 'getCompanyIntegration').mockResolvedValue({ ok: true, data: integration({ settings: { environment: 'producao' } }) })
+    vi.spyOn(secrets, 'getIntegrationSecret').mockImplementation(async (_id, _cid, key) => {
+      if (key === 'emission_token_producao') return { ok: true, data: 'token-especifico-producao' }
+      throw new Error(`chave inesperada: ${key}`)
+    })
+
+    const result = await resolveFocusIntegration(1)
+    if (result.ok && result.data.available) {
+      expect(result.data.integration.token).toBe('token-especifico-producao')
+      expect(result.data.integration.environment).toBe('producao')
+    } else {
+      throw new Error('esperava available: true')
+    }
+  })
 })

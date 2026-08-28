@@ -95,7 +95,8 @@ export interface FiscalOperationContext {
 
 export interface FiscalFocusIntegrationContext {
   available: boolean
-  reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | null
+  /** `production_token_missing` — Motor Fiscal Configurável: environment='producao' sem `emission_token_producao`, nunca cai pro `api_token` legado. Ver `resolveFocusIntegration.ts`. */
+  reason: 'integration_not_found' | 'integration_disabled' | 'token_missing' | 'production_token_missing' | null
 }
 
 /**

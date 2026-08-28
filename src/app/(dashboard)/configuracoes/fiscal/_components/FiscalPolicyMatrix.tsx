@@ -140,7 +140,18 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: (p: Policy) 
 
       <div className="flex items-center justify-between">
         <span className="text-xs text-text-secondary">Emitir automaticamente</span>
-        <ToggleButton on={policy.auto_issue} disabled={disabled} onClick={() => save({ auto_issue: !policy.auto_issue })} />
+        <ToggleButton
+          on={policy.auto_issue}
+          disabled={disabled}
+          onClick={() => {
+            const turningOn = !policy.auto_issue
+            // Regra definitiva de impressão/QR Code: emissão automática e
+            // comprovante não fiscal nunca coexistem — ligar uma desliga a
+            // outra no MESMO salvamento (nunca um estado intermediário
+            // inválido persistido, nem que seja por um instante).
+            save(turningOn ? { auto_issue: true, print_non_fiscal_receipt: false } : { auto_issue: false })
+          }}
+        />
       </div>
 
       <div className="flex items-center justify-between">
@@ -154,8 +165,17 @@ function PolicyCard({ policy, onSaved }: { policy: Policy; onSaved: (p: Policy) 
       </div>
 
       <div className="flex items-center justify-between">
-        <span className="text-xs text-text-secondary">Comprovante não fiscal</span>
-        <ToggleButton on={policy.print_non_fiscal_receipt} onClick={() => save({ print_non_fiscal_receipt: !policy.print_non_fiscal_receipt })} />
+        <div>
+          <span className="text-xs text-text-secondary">Comprovante não fiscal</span>
+          {policy.auto_issue && (
+            <p className="text-[10px] text-warning">⚠ desligado — com emissão automática, o documento fiscal é o comprovante</p>
+          )}
+        </div>
+        <ToggleButton
+          on={policy.print_non_fiscal_receipt}
+          disabled={policy.auto_issue}
+          onClick={() => save({ print_non_fiscal_receipt: !policy.print_non_fiscal_receipt })}
+        />
       </div>
 
       <div className="flex items-center justify-between">

@@ -45,15 +45,27 @@ export async function GET() {
   return NextResponse.json({ policies: data ?? [] })
 }
 
-const putSchema = z.object({
-  operation_type: z.enum(OPERATION_TYPES),
-  fiscal_enabled: z.boolean(),
-  document_mode: z.enum(['auto', 'nfce', 'nfe', 'none']),
-  auto_issue: z.boolean(),
-  auto_print: z.boolean(),
-  print_non_fiscal_receipt: z.boolean(),
-  manual_issue_allowed: z.boolean(),
-})
+const putSchema = z
+  .object({
+    operation_type: z.enum(OPERATION_TYPES),
+    fiscal_enabled: z.boolean(),
+    document_mode: z.enum(['auto', 'nfce', 'nfe', 'none']),
+    auto_issue: z.boolean(),
+    auto_print: z.boolean(),
+    print_non_fiscal_receipt: z.boolean(),
+    manual_issue_allowed: z.boolean(),
+  })
+  // Regra definitiva de impressão/QR Code: impossível persistir emissão
+  // automática junto com comprovante não fiscal habilitado — uma vez que
+  // a emissão é automática, o documento fiscal É o comprovante; manter
+  // print_non_fiscal_receipt=true nesse caso permitiria mostrar o QR
+  // interno Qarvon ao lado (ou no lugar) de um documento fiscal já
+  // autorizado. Gate AUTORITATIVO — a UI (FiscalPolicyMatrix) só evita
+  // chegar aqui por conveniência, nunca é a garantia real.
+  .refine((data) => !(data.auto_issue && data.print_non_fiscal_receipt), {
+    message: 'Emissão automática e comprovante não fiscal não podem estar ativos ao mesmo tempo — com emissão automática, o documento fiscal passa a ser o comprovante.',
+    path: ['print_non_fiscal_receipt'],
+  })
 
 export async function PUT(request: Request) {
   const { user, response: unauth } = await requireRole('admin')

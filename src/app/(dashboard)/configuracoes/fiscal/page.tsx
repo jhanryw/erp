@@ -8,6 +8,7 @@ import { getFiscalHealth } from '@/services/fiscal/health.service'
 import { FiscalPolicyMatrix } from './_components/FiscalPolicyMatrix'
 import { CertificateManager } from './_components/CertificateManager'
 import { CscManager } from './_components/CscManager'
+import { FocusTokensManager } from './_components/FocusTokensManager'
 
 export const dynamic = 'force-dynamic'
 
@@ -15,6 +16,13 @@ const FOCUS_REASON_LABELS: Record<string, string> = {
   integration_not_found: 'Integração Focus NFe não cadastrada.',
   integration_disabled: 'Integração Focus NFe cadastrada, mas não está ativa.',
   token_missing: 'Integração ativa, mas sem token configurado.',
+  production_token_missing: 'Ambiente configurado é produção, mas o token de emissão de produção não foi cadastrado (nunca reaproveita o token de homologação).',
+}
+
+function syncDetail(entry: { status: 'success' | 'error'; lastSyncAt: string; lastError: string | null } | undefined): string | undefined {
+  if (!entry) return 'Ainda não sincronizado com a Focus.'
+  if (entry.status === 'success') return `Sincronizado em ${new Date(entry.lastSyncAt).toLocaleString('pt-BR')}.`
+  return `Falha ao sincronizar (${new Date(entry.lastSyncAt).toLocaleString('pt-BR')}): ${entry.lastError ?? 'erro desconhecido'}`
 }
 
 function StatusRow({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) {
@@ -108,10 +116,41 @@ export default async function ConfigFiscalPage() {
             />
           </Card>
 
+          <Card className="p-5 divide-y divide-border">
+            <div className="pb-2 mb-1">
+              <p className="text-sm font-semibold text-text-primary">Sincronização com a Focus</p>
+              <p className="text-xs text-text-muted mt-0.5">
+                Salvar aqui grava localmente (cifrado) — este checklist mostra separadamente se cada recurso já foi
+                efetivamente ENVIADO e aceito pela Focus. Um "salvo" sem "sincronizado" nunca significa pronto para emitir.
+              </p>
+            </div>
+            <StatusRow
+              ok={result.data.focusManagementSync.company?.status === 'success'}
+              label="Cadastro da empresa sincronizado"
+              detail={syncDetail(result.data.focusManagementSync.company)}
+            />
+            <StatusRow
+              ok={result.data.focusManagementSync.certificate?.status === 'success'}
+              label="Certificado sincronizado"
+              detail={syncDetail(result.data.focusManagementSync.certificate)}
+            />
+            <StatusRow
+              ok={result.data.focusManagementSync.csc?.homologacao?.status === 'success'}
+              label="CSC (homologação) sincronizado"
+              detail={syncDetail(result.data.focusManagementSync.csc?.homologacao)}
+            />
+            <StatusRow
+              ok={result.data.focusManagementSync.csc?.producao?.status === 'success'}
+              label="CSC (produção) sincronizado"
+              detail={syncDetail(result.data.focusManagementSync.csc?.producao)}
+            />
+          </Card>
+
           <Card className="p-5">
             <p className="text-sm font-semibold text-text-primary mb-2">Testar conexão</p>
             <p className="text-xs text-text-muted mb-3">
-              Faz uma chamada real e segura à Focus NFe (consulta de empresas habilitadas) para confirmar que o token está válido. Não emite nenhum documento.
+              Dois testes reais e independentes: emissão (token do ambiente atual, operação read-only, nunca emite
+              nada) e gerenciamento (token mestre, sempre contra produção). Um nunca substitui o outro.
             </p>
             <TestFocusConnectionButton />
           </Card>
@@ -129,11 +168,19 @@ export default async function ConfigFiscalPage() {
 
           <div className="space-y-3">
             <div>
+              <h3 className="text-sm font-semibold text-text-primary mb-1">Tokens da Focus NFe</h3>
+              <p className="text-xs text-text-muted mb-3">
+                Emissão e gerenciamento usam credenciais separadas — configure os 3 tokens abaixo antes de sincronizar
+                certificado/CSC ou emitir em produção.
+              </p>
+              <FocusTokensManager />
+            </div>
+            <div>
               <h3 className="text-sm font-semibold text-text-primary mb-1">Certificado digital</h3>
               <p className="text-xs text-text-muted mb-3">
-                Arquivo e senha ficam criptografados (AES-256-GCM) — nunca são reexibidos depois de salvos. Esta
-                fundação é independente do fluxo de emissão vigente (que continua com seu próprio cadastro de
-                certificado na Focus) — é infraestrutura preparada para uma arquitetura multi-provider futura.
+                Arquivo e senha ficam criptografados (AES-256-GCM) — nunca são reexibidos depois de salvos. Ao
+                enviar, o certificado é salvo localmente E encaminhado para o cadastro real da empresa na Focus —
+                veja o checklist de sincronização acima para confirmar que a Focus recebeu.
               </p>
               <CertificateManager />
             </div>

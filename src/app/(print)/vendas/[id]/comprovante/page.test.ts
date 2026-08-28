@@ -114,6 +114,31 @@ describe('comprovante (impressão interna) — QR usa a origem real da requisiç
   })
 })
 
+describe('comprovante (impressão interna) — regra definitiva de impressão/QR Code (nunca mostra QR interno com documento fiscal autorizado)', () => {
+  it('consulta findAuthorizedFiscalDocument ANTES de montar o comprovante (getReceiptForSalePrint)', () => {
+    const authIdx = SOURCE.indexOf('findAuthorizedFiscalDocument(saleId')
+    const receiptIdx = SOURCE.indexOf('getReceiptForSalePrint({')
+    expect(authIdx).toBeGreaterThan(-1)
+    expect(receiptIdx).toBeGreaterThan(-1)
+    expect(authIdx).toBeLessThan(receiptIdx)
+  })
+
+  it('NFC-e autorizada redireciona pra /vendas/[id]/nfce, nunca renderiza o comprovante', () => {
+    expect(SOURCE).toMatch(/authorizedDoc\?\.documentType === 'nfce'/)
+    expect(SOURCE).toMatch(/redirect\(`\/vendas\/\$\{saleId\}\/nfce`\)/)
+  })
+
+  it('NF-e autorizada usa buildFocusDanfeUrl (nunca aceita danfe_path bruto/arbitrário)', () => {
+    expect(SOURCE).toMatch(/authorizedDoc\?\.documentType === 'nfe'/)
+    expect(SOURCE).toMatch(/buildFocusDanfeUrl\(authorizedDoc\.environment, authorizedDoc\.danfePath\)/)
+  })
+
+  it('nunca redireciona pra uma URL vinda direto do request/cliente — só pro que buildFocusDanfeUrl devolveu', () => {
+    expect(SOURCE).not.toMatch(/redirect\(params\./)
+    expect(SOURCE).not.toMatch(/redirect\(request\./)
+  })
+})
+
 describe('comprovante (impressão interna) — conteúdo do modelo aprovado', () => {
   it('nome da loja não é mais lido de company_fiscal_settings/companies (removido do arquivo)', () => {
     expect(SOURCE).not.toMatch(/company_fiscal_settings|nome_fantasia|razao_social/)

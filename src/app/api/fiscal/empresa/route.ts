@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     return validationError({ certificado: ['Envie o certificado como arquivo (multipart), não como texto.'] })
   }
 
-  const result = await syncFocusEmpresa(user.company_id, certificate)
+  const result = await syncFocusEmpresa(user.company_id, certificate ? { certificate } : undefined)
   if (!result.ok) return err(result.error, result.status)
 
   // Nunca inclui certificado/token na resposta — só o resultado do sync.

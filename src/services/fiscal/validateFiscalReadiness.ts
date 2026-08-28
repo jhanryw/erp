@@ -67,6 +67,8 @@ export function validateCommonFiscalReadiness(ctx: FiscalDocumentContext): Fisca
       errors.push(err('focus_integration_disabled', 'Integração Focus NFe cadastrada, mas não está ativa.'))
     } else if (ctx.focusIntegration.reason === 'token_missing') {
       errors.push(err('focus_token_missing', 'Integração Focus NFe ativa, mas sem token configurado.'))
+    } else if (ctx.focusIntegration.reason === 'production_token_missing') {
+      errors.push(err('focus_production_token_missing', 'Token de emissão da Focus para produção não configurado.'))
     }
   }
 

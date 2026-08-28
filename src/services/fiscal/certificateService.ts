@@ -25,6 +25,7 @@ import {
 } from '@/services/integrations/company-integrations.service'
 import { setIntegrationSecret, getIntegrationSecret } from '@/services/integrations/secrets.service'
 import { parsePkcs12, Pkcs12ParseError, type ParsedCertificateMetadata } from '@/lib/fiscal/certificate/parsePkcs12'
+import { syncFocusEmpresa } from './focusEmpresa.service'
 import type { ServiceOutcome } from '@/services/produtos.service'
 
 function success<T>(data: T): ServiceOutcome<T> {
@@ -52,6 +53,22 @@ export interface CertificateMetadataResult {
   uploadedAt: string | null
   /** `true` quando o CNPJ extraído do certificado diverge do CNPJ cadastrado da empresa — nunca bloqueia, só avisa (item 53). */
   cnpjMismatch: boolean
+}
+
+/**
+ * Resultado da tentativa de `syncFocusEmpresa` — NUNCA colapsado com o
+ * resultado local. `error`/`lastError` refletem qualquer motivo (integração
+ * Focus inexistente, master_token ausente, CNPJ/CRT faltando, erro HTTP da
+ * Focus) — quem chama decide como exibir, mas o contrato nunca finge que
+ * "salvou localmente" equivale a "sincronizado com a Focus".
+ */
+export interface FocusSyncOutcome {
+  status: 'success' | 'error'
+  lastError: string | null
+}
+
+function toFocusSyncOutcome(result: ServiceOutcome<unknown>): FocusSyncOutcome {
+  return result.ok ? { status: 'success', lastError: null } : { status: 'error', lastError: result.error }
 }
 
 /**
@@ -117,12 +134,17 @@ async function persistCertificateMetadata(
  * futuro, isso exige uma tabela nova — meta 'replaced' documentado hoje
  * só como valor possível de `certificate_status`, sem uso real ainda.
  */
+export interface UploadCertificateResult {
+  local: CertificateMetadataResult
+  focus: FocusSyncOutcome
+}
+
 export async function uploadCertificate(params: {
   companyId: number
   userId: string
   pfxBuffer: Buffer
   password: string
-}): Promise<ServiceOutcome<CertificateMetadataResult>> {
+}): Promise<ServiceOutcome<UploadCertificateResult>> {
   let metadata: ParsedCertificateMetadata
   try {
     metadata = parsePkcs12(params.pfxBuffer, params.password)
@@ -160,11 +182,20 @@ export async function uploadCertificate(params: {
 
   const cnpjMismatch = !!(metadata.cnpj && settings?.cnpj && metadata.cnpj !== settings.cnpj.replace(/\D/g, ''))
 
-  return success({
+  const local: CertificateMetadataResult = {
     status, subject: metadata.subject, cnpj: metadata.cnpj, issuer: metadata.issuer,
     serial: metadata.serialNumber, validFrom: metadata.validFrom, validUntil: metadata.validUntil,
     fingerprint: metadata.fingerprint, uploadedAt: new Date().toISOString(), cnpjMismatch,
+  }
+
+  // O certificado já está salvo localmente (cifrado) a esta altura —
+  // qualquer falha daqui pra frente é só de SINCRONIZAÇÃO com a Focus,
+  // nunca desfaz o salvamento local nem é reportada como se fosse.
+  const focusResult = await syncFocusEmpresa(params.companyId, {
+    certificate: { arquivoBase64: params.pfxBuffer.toString('base64'), senha: params.password },
   })
+
+  return success({ local, focus: toFocusSyncOutcome(focusResult) })
 }
 
 /**
@@ -213,7 +244,12 @@ export async function validateStoredCertificate(companyId: number): Promise<Serv
  * retornado integralmente depois de salvo (a rota GET só devolve os
  * últimos 4 caracteres mascarados, ver `getCscMasked`).
  */
-export async function saveCsc(params: { companyId: number; userId: string; cscId: string; cscToken: string }): Promise<ServiceOutcome<void>> {
+export interface SaveCscResult {
+  local: { cscId: string }
+  focus: FocusSyncOutcome
+}
+
+export async function saveCsc(params: { companyId: number; userId: string; cscId: string; cscToken: string }): Promise<ServiceOutcome<SaveCscResult>> {
   const vault = await getOrCreateCertificateVault(params.companyId, params.userId)
   if (!vault.ok) return failure(vault.error, vault.status)
 
@@ -227,7 +263,20 @@ export async function saveCsc(params: { companyId: number; userId: string; cscId
     .eq('company_id', params.companyId)
 
   if (error) return failure(error.message)
-  return success(undefined)
+
+  // O CSC é POR AMBIENTE na Focus (dois pares simultâneos na mesma
+  // empresa) — o ambiente sincronizado é sempre o de EMISSÃO configurado
+  // hoje (`company_integrations` provider='focus_nfe'), nunca o vault
+  // 'fiscal_certificate' usado só pra guardar o segredo localmente.
+  const focusIntegration = await getCompanyIntegration(params.companyId, 'focus_nfe')
+  const environment: 'homologacao' | 'producao' =
+    focusIntegration.ok && focusIntegration.data?.settings?.environment === 'producao' ? 'producao' : 'homologacao'
+
+  const focusResult = await syncFocusEmpresa(params.companyId, {
+    csc: { environment, cscId: params.cscId, cscToken: params.cscToken },
+  })
+
+  return success({ local: { cscId: params.cscId }, focus: toFocusSyncOutcome(focusResult) })
 }
 
 /** Nunca devolve o token completo — só os últimos 4 caracteres, pro admin confirmar "é este mesmo" sem reexpor o segredo (seção 28/54). */

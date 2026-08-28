@@ -76,10 +76,17 @@ export function CertificateManager() {
         toast.error('Erro ao enviar certificado', { description: typeof json.error === 'string' ? json.error : 'Verifique o arquivo e a senha.' })
         return
       }
+      // Local e Focus são reportados SEPARADAMENTE — salvar localmente
+      // nunca implica "sincronizado e pronto para emitir".
       if (json.certificate?.cnpjMismatch) {
-        toast.warning('Certificado salvo, mas o CNPJ do certificado diverge do CNPJ cadastrado da empresa — confira.')
+        toast.warning('Certificado salvo localmente, mas o CNPJ diverge do CNPJ cadastrado da empresa — confira.')
       } else {
-        toast.success('Certificado enviado e validado com sucesso.')
+        toast.success('Certificado salvo localmente.')
+      }
+      if (json.focus?.status === 'success') {
+        toast.success('Certificado sincronizado com a Focus.')
+      } else {
+        toast.error('Falha ao sincronizar certificado com a Focus', { description: json.focus?.lastError ?? undefined })
       }
       setFile(null)
       setPassword('')

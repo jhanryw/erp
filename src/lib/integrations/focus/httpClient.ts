@@ -163,3 +163,23 @@ export async function issueFocusNfce(ref: string, payload: unknown, options: Foc
   const query = `?ref=${encodeURIComponent(ref)}`
   return focusRequest<FocusNfceConsultaResponse>(`/v2/nfce${query}`, options, { method: 'POST', body: payload })
 }
+
+/**
+ * `GET /v2/nfce/inutilizacoes?cnpj=<cnpj>` — consulta XMLs de numerações
+ * inutilizadas de NFC-e. Escolhida como health-check de EMISSÃO (Motor
+ * Fiscal Configurável, revisão do certificado/CSC) especificamente porque:
+ *   - usa o MESMO par (api_token de emissão + host do ambiente) que
+ *     `issueFocusNfce` usaria de verdade — prova a credencial certa, ao
+ *     contrário de `/v2/empresas` (que é API de gerenciamento, token
+ *     diferente, host sempre produção — nunca prova nada sobre emissão).
+ *   - é 100% read-only, sem side effect algum.
+ *   - devolve HTTP 200 com array vazio quando não há nenhuma inutilização
+ *     — funciona mesmo numa empresa nova sem nenhum documento emitido
+ *     ainda, confirmado na doc oficial (`doc.focusnfe.com.br/reference/
+ *     consultar_inutilizacoes_nfce`). Nunca precisa de uma `ref` que já
+ *     exista, ao contrário de `consultFocusNfce`.
+ */
+export async function consultInutilizacoesNfce(cnpj: string, options: FocusRequestOptions): Promise<unknown[]> {
+  const query = `?cnpj=${encodeURIComponent(cnpj.replace(/\D/g, ''))}`
+  return focusRequest<unknown[]>(`/v2/nfce/inutilizacoes${query}`, options)
+}

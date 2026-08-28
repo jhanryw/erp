@@ -46,8 +46,10 @@ export async function PUT(request: Request) {
   auditLog({
     userId: user.id, userRole: user.role,
     action: 'update', resource: 'fiscal_csc',
-    detail: `CSC atualizado (ID ${parsed.data.csc_id})`,
+    detail: `CSC atualizado (ID ${parsed.data.csc_id}) — sync Focus: ${result.data.focus.status}`,
   })
 
-  return ok({ saved: true })
+  // Nunca reduzir a `{saved: true}` — salvar localmente e sincronizar com a
+  // Focus são resultados distintos, a UI precisa saber dos dois.
+  return ok({ saved: true, focus: result.data.focus })
 }

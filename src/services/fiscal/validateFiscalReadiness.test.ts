@@ -67,6 +67,13 @@ describe('validateNfeReadiness — integração Focus', () => {
     const ctx = baseFiscalContext({ focusIntegration: { available: false, reason: 'token_missing' } })
     expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('focus_token_missing')
   })
+
+  it('produção sem emission_token_producao → focus_production_token_missing, nunca confundido com token_missing genérico', () => {
+    const ctx = baseFiscalContext({ focusIntegration: { available: false, reason: 'production_token_missing' } })
+    const codes = validateNfeReadiness(ctx).map((e) => e.code)
+    expect(codes).toContain('focus_production_token_missing')
+    expect(codes).not.toContain('focus_token_missing')
+  })
 })
 
 describe('validateNfeReadiness — cadastro fiscal incompleto (emitente)', () => {

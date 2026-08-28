@@ -18,6 +18,7 @@ import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
 import { DocumentoFiscalCard, type InitialFiscalDocument } from './_components/documento-fiscal-card'
 import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
+import { buildFocusDanfeUrl } from '@/lib/fiscal/buildFocusDanfeUrl'
 import { validateCPF, maskCPF } from '@/lib/utils/cpf'
 import type { SaleStatus } from '@/types/database.types'
 import { ArrowRightLeft } from 'lucide-react'
@@ -128,7 +129,7 @@ async function getSale(id: string) {
     // mais recentes por tipo, sem filtro de status (rascunho/pendente/
     // autorizada/rejeitada, tudo relevante pra UI decidir o que mostrar).
     (admin as any).from('fiscal_documents')
-      .select('id, document_type, status, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, created_at')
+      .select('id, document_type, status, environment, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, created_at')
       .eq('sale_id', sale.id)
       .order('created_at', { ascending: false }),
   ]) as any[]
@@ -309,6 +310,22 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   const customerCpf = sale.customers?.cpf ?? null
   const maskedCustomerCpf = customerCpf && validateCPF(customerCpf) ? maskCPF(customerCpf) : null
 
+  // Regra definitiva de impressão/QR Code: o botão principal de impressão
+  // reflete o estado REAL do documento fiscal, nunca um "Imprimir
+  // Comprovante" genérico quando já existe NF-e/NFC-e autorizada. Só
+  // `status === 'authorized'` conta — pending/processing/rejected/error
+  // continuam levando ao comprovante não fiscal (QR interno Qarvon ainda
+  // válido, nenhum documento fiscal pronto pra substituí-lo).
+  const authorizedNfce = sale.fiscalDocuments?.nfce?.status === 'authorized' ? sale.fiscalDocuments.nfce : null
+  const authorizedNfe = sale.fiscalDocuments?.nfe?.status === 'authorized' ? sale.fiscalDocuments.nfe : null
+  const nfeDanfeUrl = authorizedNfe ? buildFocusDanfeUrl(authorizedNfe.environment, authorizedNfe.danfe_path) : null
+
+  const printAction = authorizedNfce
+    ? { label: 'Imprimir DANFE NFC-e', href: `/vendas/${sale.id}/nfce`, external: false }
+    : authorizedNfe && nfeDanfeUrl
+      ? { label: 'Abrir DANFE NF-e', href: nfeDanfeUrl, external: true }
+      : { label: 'Imprimir Comprovante', href: `/vendas/${sale.id}/comprovante`, external: false }
+
   return (
     <div className="space-y-5 max-w-4xl">
       {/* Header */}
@@ -372,14 +389,25 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
               </Button>
             </Link>
           )}
-          {/* Comprovante não fiscal — sempre disponível, independente de NF-e/NFC-e
-              emitida ou não (comercial e fiscal são independentes por design). */}
-          <Link href={`/vendas/${sale.id}/comprovante`} target="_blank">
-            <Button variant="outline" size="sm">
-              <Printer className="w-3.5 h-3.5 mr-1.5" />
-              Imprimir Comprovante
-            </Button>
-          </Link>
+          {/* Regra definitiva de impressão/QR Code: o rótulo/destino refletem
+              o documento fiscal AUTORIZADO mais recente desta venda, se
+              houver — nunca "Imprimir Comprovante" quando já existe NF-e/
+              NFC-e pronta pra ser o documento oficial (ver printAction acima). */}
+          {printAction.external ? (
+            <a href={printAction.href} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline" size="sm">
+                <Printer className="w-3.5 h-3.5 mr-1.5" />
+                {printAction.label}
+              </Button>
+            </a>
+          ) : (
+            <Link href={printAction.href} target="_blank">
+              <Button variant="outline" size="sm">
+                <Printer className="w-3.5 h-3.5 mr-1.5" />
+                {printAction.label}
+              </Button>
+            </Link>
+          )}
           {canExchange && (
             <Link href={`/vendas/${sale.id}/troca`}>
               <Button variant="secondary" size="sm">
