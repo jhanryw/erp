@@ -49,11 +49,57 @@ function mockHappyPathDependencies() {
   vi.spyOn(validateModule, 'validateNfceReadiness').mockReturnValue([])
 }
 
-describe('submitNfceHomologacao — bloqueio de produção (gate SEPARADO de NF-e)', () => {
+describe('submitNfceHomologacao — gate de ambiente NFC-e (aberto pra produção, auditoria de readiness — SEPARADO de NF-e)', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('nfce_environment=producao → 403, nunca chama Focus', async () => {
+  it('nfce_environment=producao + integração resolvida também producao → PROSSEGUE (nunca mais 403 só por ser produção)', async () => {
     setupFake({ fiscalSettings: { nfce_environment: 'producao' } })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'token-producao-jamais-deveria-vazar', environment: 'producao' } },
+    })
+    const contextSpy = vi.spyOn(loadModule, 'loadSaleFiscalContext').mockResolvedValue(nfceBalcaoContext())
+    vi.spyOn(validateModule, 'validateNfceReadiness').mockReturnValue([])
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfce').mockResolvedValue({ status: 'autorizado', chave_nfe: '9'.repeat(44), numero: '1', serie: '1', protocolo: '111111111111111' })
+
+    const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.status).toBe('authorized')
+    expect(issueSpy).toHaveBeenCalledWith('qarvon-1-777-nfce-producao', expect.anything(), { token: 'token-producao-jamais-deveria-vazar', environment: 'producao' })
+    // environment REAL propagado pro snapshot fiscal — nunca mais o literal 'homologacao' hardcoded.
+    expect(contextSpy).toHaveBeenCalledWith(expect.objectContaining({ environment: 'producao' }))
+  })
+
+  it('nfce_environment=producao MAS a integração resolvida ainda aponta pra homologação (divergência) → 403, nunca chama Focus (nunca emite com ambientes cruzados)', async () => {
+    setupFake({ fiscalSettings: { nfce_environment: 'producao' } })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfce')
+
+    const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.status).toBe(403)
+    expect(issueSpy).not.toHaveBeenCalled()
+  })
+
+  it('nfce_environment=homologacao MAS a integração resolvida aponta pra produção (divergência inversa) → 403, nunca chama Focus', async () => {
+    setupFake() // default: nfce_environment='homologacao'
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'producao' } },
+    })
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfce')
+
+    const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.status).toBe(403)
+    expect(issueSpy).not.toHaveBeenCalled()
+  })
+
+  it('nfce_environment com valor fora do enum conhecido (defensivo, nunca deveria acontecer — CHECK constraint) → 403, nunca chama Focus', async () => {
+    setupFake({ fiscalSettings: { nfce_environment: 'sandbox' } })
     const issueSpy = vi.spyOn(httpClient, 'issueFocusNfce')
 
     const result = await submitNfceHomologacao(SALE_ID, COMPANY_ID)

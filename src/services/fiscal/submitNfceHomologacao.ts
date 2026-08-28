@@ -2,11 +2,16 @@
  * Transmission service de NFC-e — Fase Fiscal 4E.
  *
  * `submitNfceHomologacao(saleId, companyId)` é o ÚNICO ponto do projeto que
- * chama `POST /v2/nfce`. Só em homologação — bloqueia produção
- * explicitamente antes de qualquer outra coisa (mesmo padrão de
- * `submitNfeHomologacao.ts`). Nunca chamado automaticamente nesta fase —
- * nenhuma rota/UI foi conectada ainda (fora de escopo desta fase, ver
- * `docs/fiscal-fase4-nfce-arquitetura-proposta.md`, fase 4F).
+ * chama `POST /v2/nfce`. O NOME da função é histórico (Fase 4E, quando só
+ * homologação existia) — mantido de propósito pra não quebrar imports em
+ * todo o projeto; o comportamento real, desde a abertura do gate de
+ * produção de NFC-e (auditoria de readiness, CSC de produção confirmado
+ * sincronizado com a Focus), aceita QUALQUER `company_fiscal_settings.
+ * nfce_environment` válido ('homologacao' OU 'producao'), sempre o valor
+ * real configurado, nunca um literal fixo. NF-e (`submitNfeHomologacao.ts`)
+ * NÃO foi alterado nesta abertura — continua exigindo 'homologacao'
+ * incondicionalmente, gate independente por design (nunca um switch
+ * único entre os dois tipos de documento).
  *
  * ─── Reaproveitamento de infraestrutura (Fase 4, decisão aprovada) ───────
  *
@@ -25,7 +30,9 @@
  *   CFOP interno fixo, `presenca_comprador` restrito a presencial).
  * - `issueFocusNfce`/`consultFocusNfce` (`POST`/`GET /v2/nfce`).
  * - `company_fiscal_settings.nfce_enabled`/`nfce_environment` — gate
- *   SEPARADO do de NF-e (decisão aprovada: nunca um switch único).
+ *   SEPARADO do de NF-e (decisão aprovada: nunca um switch único). NFC-e
+ *   aceita 'producao' desde a abertura de readiness; NF-e continua só
+ *   'homologacao'.
  * - `mapFocusNfceStatus` inclui `'denegado'` (status real de NFC-e sem
  *   equivalente confirmado em NF-e) → mapeado pra `authorization_failed`
  *   (mesmo bucket de `erro_autorizacao` — SEFAZ recusou, `status_sefaz`/
@@ -359,15 +366,18 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
 
   if (!settings) return failure('Configuração fiscal da empresa não encontrada (company_fiscal_settings).', 422)
   if (!settings.nfce_enabled) return failure('Emissão de NFC-e não habilitada (company_fiscal_settings.nfce_enabled=false).', 422)
-  if (settings.nfce_environment !== 'homologacao') {
-    return failure('Bloqueado: esta rota só emite em homologação. company_fiscal_settings.nfce_environment não é "homologacao".', 403)
+  // GATE DE PRODUÇÃO NFC-e ABERTO (auditoria de readiness, CSC de produção
+  // confirmado sincronizado com a Focus) — NFC-e agora aceita tanto
+  // 'homologacao' quanto 'producao', sempre o valor REAL de
+  // `company_fiscal_settings.nfce_environment` (nunca um literal fixo).
+  // A checagem abaixo é só defensiva (a CHECK constraint da coluna já
+  // garante isto) — nunca prossegue com um valor fora do enum conhecido.
+  // NF-e (submitNfeHomologacao.ts) NÃO foi tocado — continua exigindo
+  // 'homologacao' incondicionalmente, gate independente por design.
+  if (settings.nfce_environment !== 'homologacao' && settings.nfce_environment !== 'producao') {
+    return failure(`Bloqueado: company_fiscal_settings.nfce_environment tem valor inesperado ("${settings.nfce_environment}").`, 403)
   }
 
-  // `settings.nfce_environment` (não literal hardcoded) — já confirmado
-  // === 'homologacao' pelo gate acima, mas usar a variável real evita
-  // outra edição quando o gate for removido numa fase futura. Nome
-  // `configuredEnvironment` pra não colidir com o `environment` resolvido
-  // mais abaixo a partir de `resolveFocusIntegration`.
   const configuredEnvironment = settings.nfce_environment as FocusEnvironment
   const providerRef = buildProviderRef(companyId, saleId, configuredEnvironment, 'nfce')
 
@@ -402,8 +412,15 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     return failure(`Integração Focus NFe não disponível (${integrationResult.data.reason}).`, 422)
   }
   const { token, environment } = integrationResult.data.integration
-  if (environment !== 'homologacao') {
-    return failure('Bloqueado: a integração Focus NFe resolvida não está configurada para homologação.', 403)
+  // Cross-check: o ambiente da INTEGRAÇÃO resolvida (token/host que serão
+  // realmente usados) precisa ser EXATAMENTE o mesmo configurado em
+  // `company_fiscal_settings.nfce_environment` — nunca emitir com os dois
+  // divergentes (ex.: configurado 'producao' mas a integração ainda
+  // resolvendo pro token de homologação, ou vice-versa). Substitui os dois
+  // checks hardcoded '!== homologacao' que existiam antes (um pra cada
+  // fonte) por uma única comparação real, aberta a qualquer ambiente válido.
+  if (environment !== configuredEnvironment) {
+    return failure(`Bloqueado: ambiente da integração Focus resolvida ("${environment}") não corresponde ao configurado em company_fiscal_settings.nfce_environment ("${configuredEnvironment}").`, 403)
   }
 
   // ─── Carrega contexto + valida ───────────────────────────────────────────
@@ -415,7 +432,10 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
   let context
   try {
     context = await loadSaleFiscalContext({
-      saleId, companyId, providerRef, environment: 'homologacao',
+      // `configuredEnvironment` (não mais o literal 'homologacao') — o
+      // snapshot fiscal precisa registrar o ambiente REAL da emissão,
+      // essencial agora que produção é um valor possível.
+      saleId, companyId, providerRef, environment: configuredEnvironment,
       operationOverrides: { presencaComprador: 1, modalidadeFrete: 9 },
     })
   } catch (err) {

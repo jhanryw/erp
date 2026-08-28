@@ -157,17 +157,28 @@ describe('rpc_claim_fiscal_emission (fake) — environment na identidade da linh
   })
 })
 
-describe('gate de produção — continua recusando (item 13/19 do pedido: NÃO liberar produção nesta fundação)', () => {
-  it('submitNfeHomologacao.ts ainda bloqueia environment != homologacao antes de qualquer claim/provider_ref', () => {
+describe('gate de produção — NF-e continua recusando; NFC-e foi aberta (auditoria de readiness, CSC de produção confirmado sincronizado com a Focus)', () => {
+  it('submitNfeHomologacao.ts (NF-e) ainda bloqueia environment != homologacao antes de qualquer claim/provider_ref — NÃO tocado nesta abertura', () => {
     const source = readFileSync(join(__dirname, 'submitNfeHomologacao.ts'), 'utf-8')
     expect(source).toMatch(/if \(settings\.nfe_environment !== 'homologacao'\) \{/)
     expect(source).toMatch(/Bloqueado: esta rota só emite em homologação/)
   })
 
-  it('submitNfceHomologacao.ts ainda bloqueia environment != homologacao antes de qualquer claim/provider_ref', () => {
+  it('submitNfceHomologacao.ts (NFC-e) aceita homologacao OU producao — nunca mais bloqueia só por ser produção', () => {
     const source = readFileSync(join(__dirname, 'submitNfceHomologacao.ts'), 'utf-8')
-    expect(source).toMatch(/if \(settings\.nfce_environment !== 'homologacao'\) \{/)
-    expect(source).toMatch(/Bloqueado: esta rota só emite em homologação/)
+    expect(source).not.toMatch(/if \(settings\.nfce_environment !== 'homologacao'\) \{/)
+    expect(source).toMatch(/if \(settings\.nfce_environment !== 'homologacao' && settings\.nfce_environment !== 'producao'\) \{/)
+  })
+
+  it('submitNfceHomologacao.ts nunca emite com o ambiente configurado divergente do ambiente da integração resolvida (cross-check real, nunca dois literais independentes)', () => {
+    const source = readFileSync(join(__dirname, 'submitNfceHomologacao.ts'), 'utf-8')
+    expect(source).toMatch(/if \(environment !== configuredEnvironment\) \{/)
+    expect(source).not.toMatch(/if \(environment !== 'homologacao'\) \{/)
+  })
+
+  it('submitNfceHomologacao.ts propaga configuredEnvironment real pro snapshot fiscal (loadSaleFiscalContext) — nunca mais o literal "homologacao" fixo', () => {
+    const source = readFileSync(join(__dirname, 'submitNfceHomologacao.ts'), 'utf-8')
+    expect(source).toMatch(/saleId, companyId, providerRef, environment: configuredEnvironment,/)
   })
 })
 
