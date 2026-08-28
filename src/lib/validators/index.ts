@@ -194,7 +194,11 @@ export const saleSchema = z.object({
   // payment_method: mantido para compatibilidade — derivado do método dominante no submit
   payment_method:   z.enum(['pix', 'card', 'cash', 'credit_card', 'debit_card']).optional(),
   payments:         z.array(paymentEntrySchema).min(1).optional(),
-  delivery_mode:    z.enum(['pickup', 'delivery']).default('delivery'),
+  // Velocidade operacional de balcão (2026-08-28) — mantido em sincronia
+  // com o defaultValues de useForm em vendas/nova/page.tsx (único
+  // consumidor deste schema); só entra em jogo aqui se o campo chegar
+  // undefined no parse, o que não deveria acontecer no fluxo normal.
+  delivery_mode:    z.enum(['pickup', 'delivery']).default('pickup'),
   // PDV atacado/varejo (2026-09-02) — modalidade COMERCIAL da venda,
   // escolhida explicitamente no Passo 0 (Itens), antes de buscar produtos.
   // sales_channel NÃO é um campo deste formulário — o PDV sempre grava

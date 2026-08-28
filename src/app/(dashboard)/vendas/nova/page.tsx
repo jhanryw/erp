@@ -91,10 +91,12 @@ export default function NovaVendaPage() {
 
   // ── Modalidade da venda (PDV atacado/varejo, 2026-09-02) ─────────────────────
   // `saleTypeChosen` é distinto do valor em si: o form nasce com default
-  // 'retail' (retrocompatibilidade/segurança), mas a UI exige uma escolha
-  // EXPLÍCITA do vendedor antes de liberar o Passo 0 — não basta o default
-  // silencioso valer como escolha.
-  const [saleTypeChosen, setSaleTypeChosen] = useState(false)
+  // 'retail'. Velocidade operacional de balcão (2026-08-28) — o default
+  // agora conta como escolha desde a abertura da tela (nasce `true`): o
+  // botão VAREJO já aparece ativo e a busca de produto já libera sem
+  // exigir clique, já que a maioria das vendas é varejo mesmo. Clicar em
+  // ATACADO continua trocando normalmente via handleSaleTypeChange.
+  const [saleTypeChosen, setSaleTypeChosen] = useState(true)
 
   // ── Caixa ────────────────────────────────────────────────────────────────────
   const [cashSession, setCashSession] = useState<{ id: number; opened_at: string } | null | undefined>(undefined)
@@ -174,7 +176,10 @@ export default function NovaVendaPage() {
       surcharge_amount: 0,
       cashback_used:    0,
       shipping_charged: 0,
-      delivery_mode:    'delivery',
+      // Velocidade operacional de balcão (2026-08-28) — retirada é o modo
+      // mais comum no balcão físico; o operador troca pra "Envio"
+      // normalmente quando for o caso.
+      delivery_mode:    'pickup',
       delivery_recipient: null,
       // Fase Fiscal 7 — 'auto' é o default: a emissão fiscal é automática
       // ao finalizar (ver effectiveFiscalMode/resolveFiscalOperation

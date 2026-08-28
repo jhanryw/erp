@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import type { Seller, SellersResponse } from '@/app/api/sellers/route'
+import { pickDefaultSeller } from '@/lib/sales/pickDefaultSeller'
 
 interface SellerPickerProps {
   value: number | null
@@ -27,10 +28,9 @@ export function SellerPicker({ value, onChange, onBlockedError, onLockedChange, 
       .then((json: SellersResponse) => {
         setSellers(json.sellers)
         onLockedChange?.(json.locked)
-        // Pre-seleciona o vendedor vinculado à conta como sugestão — não é
-        // mais a única opção selecionável, só o valor inicial do form.
-        if (!value && json.my_seller) {
-          onChange(json.my_seller.id)
+        const defaultSellerId = pickDefaultSeller(json.sellers, value)
+        if (defaultSellerId != null && defaultSellerId !== value) {
+          onChange(defaultSellerId)
         }
       })
       .catch(() => {
