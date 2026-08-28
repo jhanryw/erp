@@ -6,6 +6,7 @@ import { createSale } from '@/services/vendas.service'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { validateAuthorizationToken } from '@/lib/auth/validateAuthorizationToken'
+import { isExemptFromExchangeAuthorization } from '@/lib/auth/exchangeAuthorizationExemptions'
 
 const returnedItemSchema = z.object({
   sale_item_id:      z.coerce.number().int().positive(),
@@ -55,7 +56,7 @@ export async function POST(
   let authorizedBy: string | undefined
   let authReason: string | undefined
 
-  if (user.role === 'usuario') {
+  if (user.role === 'usuario' && !isExemptFromExchangeAuthorization(user.id)) {
     if (!authorization_token_id) {
       return NextResponse.json(
         { error: 'Autorização de gerente necessária para registrar troca.' },
