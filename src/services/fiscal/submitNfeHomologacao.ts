@@ -83,6 +83,7 @@
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { logError } from '@/lib/errors/log'
 import { resolveFocusIntegration } from './resolveFocusIntegration'
 import { loadSaleFiscalContext, FiscalContextError } from './loadSaleFiscalContext'
 import { validateNfeReadiness } from './validateFiscalReadiness'
@@ -90,7 +91,7 @@ import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { buildFiscalDocumentSnapshot } from './buildFiscalSnapshot'
 import { issueFocusNfe, consultFocusNfe } from '@/lib/integrations/focus/httpClient'
-import { FocusApiError, type FocusNfeConsultaResponse } from '@/lib/integrations/focus/types'
+import { FocusApiError, type FocusNfeConsultaResponse, type FocusEnvironment } from '@/lib/integrations/focus/types'
 import type { ServiceOutcome } from '@/services/produtos.service'
 import type { FiscalValidationError } from './types'
 
@@ -167,9 +168,21 @@ export interface FiscalClaimResult {
  * `provider_ref`, nunca a mesma) — `UNIQUE(provider, provider_ref)` é
  * global por provider, então uma ref compartilhada entre os dois tipos
  * colidiria ou misturaria claim/lease de tentativas diferentes.
+ *
+ * `environment` no sufixo (fundação homologação↔produção, sessão de
+ * auditoria "mesma venda, dois ambientes"): pela MESMA razão do
+ * `documentType` acima — homologação e produção da mesma venda+tipo
+ * viram linhas SEPARADAS (cada uma com seu próprio claim/lease), nunca
+ * podem compartilhar `provider_ref` sob pena de colidir em
+ * `UNIQUE(provider, provider_ref)` ou de uma reclamar a linha da outra.
+ * `environment` é OBRIGATÓRIO (sem default) — nunca comportamento
+ * implícito sobre qual ambiente está sendo referenciado. Refs HISTÓRICAS
+ * (formato antigo, sem sufixo de ambiente) continuam válidas e nunca são
+ * reescritas — este é só o formato para NOVAS linhas a partir de agora
+ * (ver migration da fundação homologação/produção).
  */
-export function buildProviderRef(companyId: number, saleId: number, documentType: 'nfe' | 'nfce' = 'nfe'): string {
-  return `qarvon-${companyId}-${saleId}-${documentType}`
+export function buildProviderRef(companyId: number, saleId: number, environment: FocusEnvironment, documentType: 'nfe' | 'nfce' = 'nfe'): string {
+  return `qarvon-${companyId}-${saleId}-${documentType}-${environment}`
 }
 
 function mapFocusStatus(status: FocusNfeConsultaResponse['status']): FiscalDocumentDomainStatus {
@@ -353,11 +366,29 @@ async function applyFocusResponse(
   admin: ReturnType<typeof createAdminClient>,
   fiscalDocumentId: number,
   response: FocusNfeConsultaResponse,
+  providerRef: string,
 ): Promise<FiscalDocumentDomainStatus> {
   const domainStatus = mapFocusStatus(response.status)
 
+  // Mesmo achado/correção aplicado em NFC-e (venda 703, homologação,
+  // 2026-08-28, ver comentário completo em
+  // submitNfceHomologacao.ts:applyFocusNfceResponse) — esta função também
+  // reconcilia documentos JÁ authorized ("Verificar status"), não só
+  // confirma pending. Uma consulta nunca pode degradar dado local já
+  // confiável só porque a resposta desta consulta específica omitiu o
+  // campo. Lê o estado atual ANTES de decidir o que persistir.
+  const { data: currentRaw } = await (admin as any)
+    .from('fiscal_documents')
+    .select('status, authorized_at, authorization_protocol, access_key, number, series, xml_path, danfe_path, sale_id, company_id, document_type, environment')
+    .eq('id', fiscalDocumentId)
+    .maybeSingle()
+  const current = (currentRaw ?? {}) as Record<string, unknown>
+
   const patch: Record<string, unknown> = {
     status: domainStatus,
+    // `provider_payload` é a ÚLTIMA resposta bruta recebida da Focus pra
+    // este documento, não um histórico imutável — ver mesma nota em
+    // submitNfceHomologacao.ts:applyFocusNfceResponse.
     provider_payload: response,
     status_sefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
     status_message: response.mensagem_sefaz ?? null,
@@ -378,16 +409,57 @@ async function applyFocusResponse(
   }
 
   if (domainStatus === 'authorized') {
-    patch.number = response.numero ?? null
-    patch.series = response.serie ?? null
-    patch.access_key = response.chave_nfe ?? null
-    patch.authorization_protocol = response.protocolo_nota_fiscal?.numero_protocolo ?? null
-    patch.xml_path = response.caminho_xml_nota_fiscal ?? null
-    patch.danfe_path = response.caminho_danfe ?? null
-    patch.authorized_at = new Date().toISOString()
+    // Campo confiável presente NESTA resposta → atualiza. Ausente →
+    // preserva o valor local já existente (nunca apaga um dado bom só
+    // porque esta consulta específica omitiu o campo). `access_key` aqui
+    // nunca passou por `extractFocusAccessKey` (débito técnico separado,
+    // pré-existente, fora de escopo — ver nota em
+    // submitNfceHomologacao.ts:extractFocusAccessKey) — preserva o mesmo
+    // comportamento permissivo já existente, só evita apagar com null.
+    patch.number = response.numero ?? current.number ?? null
+    patch.series = response.serie ?? current.series ?? null
+    patch.access_key = response.chave_nfe ?? current.access_key ?? null
+    patch.authorization_protocol = response.protocolo_nota_fiscal?.numero_protocolo ?? (current.authorization_protocol as string | null | undefined) ?? null
+    patch.xml_path = response.caminho_xml_nota_fiscal ?? current.xml_path ?? null
+    patch.danfe_path = response.caminho_danfe ?? current.danfe_path ?? null
+    // `authorized_at` é a data do EVENTO de autorização, não da consulta —
+    // ver mesma nota em submitNfceHomologacao.ts:applyFocusNfceResponse.
+    patch.authorized_at = (current.status === 'authorized' && current.authorized_at)
+      ? current.authorized_at
+      : new Date().toISOString()
+
+    if (!patch.authorization_protocol) {
+      logError({
+        route: 'consultAndUpdateFiscalDocument (authorization_protocol ausente)',
+        err: new Error('authorized fiscal document missing local authorization protocol — Focus confirmou NF-e autorizada, mas nenhuma resposta (esta consulta ou uma anterior) trouxe protocolo_nota_fiscal.numero_protocolo.'),
+        context: {
+          fiscal_document_id: fiscalDocumentId,
+          company_id: current.company_id ?? null,
+          sale_id: current.sale_id ?? null,
+          document_type: current.document_type ?? 'nfe',
+          environment: current.environment ?? null,
+          provider_ref: providerRef,
+          access_key: patch.access_key ?? null,
+        },
+      })
+    }
   }
 
-  await (admin as any).from('fiscal_documents').update(patch).eq('id', fiscalDocumentId)
+  // Mesmo padrão já adotado em NFC-e (achado real, venda 626, item 7 da
+  // auditoria — ver applyFocusNfceResponse): esta chamada nunca checava
+  // `error` — uma falha de escrita era engolida em silêncio, e a função
+  // devolvia `domainStatus` (ex.: 'authorized') mesmo que NADA tivesse
+  // sido gravado. Qualquer erro de escrita agora propaga (lança), nunca é
+  // engolido — o chamador (`consultAndUpdateFiscalDocument`) cai no
+  // branch de erro e NUNCA afirma um status que não foi persistido.
+  const { error: updateError } = await (admin as any).from('fiscal_documents').update(patch).eq('id', fiscalDocumentId)
+  if (updateError) {
+    const context = domainStatus === 'authorized'
+      ? 'Focus confirmou autorização, mas a gravação no banco falhou — NUNCA considere esta NF-e autorizada até uma reconciliação confirmar o estado real persistido.'
+      : `Falha ao persistir status fiscal (documento ${fiscalDocumentId}).`
+    throw new Error(`${context} Causa: ${updateError.message}`)
+  }
+
   return domainStatus
 }
 
@@ -420,7 +492,7 @@ export async function consultAndUpdateFiscalDocument(
 
   try {
     const response = await consultFocusNfe(providerRef, { token, environment })
-    const status = await applyFocusResponse(admin, fiscalDocumentId, response)
+    const status = await applyFocusResponse(admin, fiscalDocumentId, response, providerRef)
 
     const { data: row } = await (admin as any)
       .from('fiscal_documents')
@@ -486,10 +558,19 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     return failure('Bloqueado: esta rota só emite em homologação. company_fiscal_settings.nfe_environment não é "homologacao".', 403)
   }
 
-  const providerRef = buildProviderRef(companyId, saleId, 'nfe')
+  // `settings.nfe_environment` (não um literal 'homologacao' hardcoded) —
+  // já confirmado === 'homologacao' pelo gate acima nesta fase, mas usar a
+  // variável real (em vez do literal) significa que este call site não
+  // precisa de outra edição no dia em que o gate acima for removido numa
+  // fase futura de produção. Nome `configuredEnvironment` (não
+  // `environment`) pra não colidir com o `environment` resolvido mais
+  // abaixo a partir de `resolveFocusIntegration` (mesmo valor esperado
+  // hoje, fontes conceitualmente distintas).
+  const configuredEnvironment = settings.nfe_environment as FocusEnvironment
+  const providerRef = buildProviderRef(companyId, saleId, configuredEnvironment, 'nfe')
 
   // ─── Claim atômico curto — decide ANTES de qualquer HTTP ────────────────
-  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, 'homologacao', 'nfe')
+  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, configuredEnvironment, 'nfe')
 
   if (claim.decision === 'already_authorized' || claim.decision === 'already_cancelled') {
     return success(rowToResult(claim.row))

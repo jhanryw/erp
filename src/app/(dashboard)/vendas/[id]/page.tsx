@@ -18,7 +18,7 @@ import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
 import { DocumentoFiscalCard, type InitialFiscalDocument } from './_components/documento-fiscal-card'
 import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
-import { buildFocusDanfeUrl } from '@/lib/fiscal/buildFocusDanfeUrl'
+import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { validateCPF, maskCPF } from '@/lib/utils/cpf'
 import type { SaleStatus } from '@/types/database.types'
 import { ArrowRightLeft } from 'lucide-react'
@@ -310,18 +310,38 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   const customerCpf = sale.customers?.cpf ?? null
   const maskedCustomerCpf = customerCpf && validateCPF(customerCpf) ? maskCPF(customerCpf) : null
 
+  // Fundação homologação↔produção (auditoria 2026-09-06): ambiente
+  // CONFIGURADO atualmente por tipo de documento — usado tanto pra saber
+  // se um "autorizado" existente já é oficial quanto pra rotular uma
+  // futura emissão nova. Nunca lido de fiscal_documents (isso é o
+  // ambiente de um documento JÁ emitido, um conceito diferente) — sempre
+  // de company_fiscal_settings, a config atual da empresa. Ausência de
+  // linha (empresa sem fiscal configurado ainda) cai em 'homologacao',
+  // o único ambiente realmente utilizável hoje (produção segue bloqueada
+  // em submitNfeHomologacao.ts/submitNfceHomologacao.ts).
+  const { data: fiscalSettingsRow } = (profile?.company_id
+    ? await (createAdminClient() as any)
+        .from('company_fiscal_settings')
+        .select('nfe_environment, nfce_environment')
+        .eq('company_id', profile.company_id)
+        .maybeSingle()
+    : { data: null }) as { data: { nfe_environment: string; nfce_environment: string } | null }
+  const nfeEnvironment: 'homologacao' | 'producao' = fiscalSettingsRow?.nfe_environment === 'producao' ? 'producao' : 'homologacao'
+  const nfceEnvironment: 'homologacao' | 'producao' = fiscalSettingsRow?.nfce_environment === 'producao' ? 'producao' : 'homologacao'
+
   // Regra definitiva de impressão/QR Code: o botão principal de impressão
   // reflete o estado REAL do documento fiscal, nunca um "Imprimir
-  // Comprovante" genérico quando já existe NF-e/NFC-e autorizada. Só
-  // `status === 'authorized'` conta — pending/processing/rejected/error
-  // continuam levando ao comprovante não fiscal (QR interno Qarvon ainda
-  // válido, nenhum documento fiscal pronto pra substituí-lo).
-  const authorizedNfce = sale.fiscalDocuments?.nfce?.status === 'authorized' ? sale.fiscalDocuments.nfce : null
-  const authorizedNfe = sale.fiscalDocuments?.nfe?.status === 'authorized' ? sale.fiscalDocuments.nfe : null
-  const nfeDanfeUrl = authorizedNfe ? buildFocusDanfeUrl(authorizedNfe.environment, authorizedNfe.danfe_path) : null
+  // Comprovante" genérico quando já existe NF-e/NFC-e autorizada — MAS só
+  // quando autorizada EM PRODUÇÃO (mesma regra de
+  // findAuthorizedFiscalDocument/comprovante/page.tsx). Homologação é só
+  // teste, sem valor fiscal — nunca troca o botão nem esconde o
+  // comprovante. `status === 'authorized'` sozinho nunca basta.
+  const authorizedNfce = sale.fiscalDocuments?.nfce?.status === 'authorized' && sale.fiscalDocuments.nfce?.environment === 'producao' ? sale.fiscalDocuments.nfce : null
+  const authorizedNfe = sale.fiscalDocuments?.nfe?.status === 'authorized' && sale.fiscalDocuments.nfe?.environment === 'producao' ? sale.fiscalDocuments.nfe : null
+  const nfeDanfeUrl = authorizedNfe ? resolveFocusResourceUrl({ path: authorizedNfe.danfe_path, environment: authorizedNfe.environment }) : null
 
   const printAction = authorizedNfce
-    ? { label: 'Imprimir DANFE NFC-e', href: `/vendas/${sale.id}/nfce`, external: false }
+    ? { label: 'Imprimir DANFE NFC-e', href: `/vendas/${sale.id}/nfce?environment=producao`, external: false }
     : authorizedNfe && nfeDanfeUrl
       ? { label: 'Abrir DANFE NF-e', href: nfeDanfeUrl, external: true }
       : { label: 'Imprimir Comprovante', href: `/vendas/${sale.id}/comprovante`, external: false }
@@ -674,6 +694,7 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           blockedReason={fiscalBlockedReason}
           maskedCpf={maskedCustomerCpf}
           initialDocuments={sale.fiscalDocuments as Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>}
+          currentEnvironment={{ nfe: nfeEnvironment, nfce: nfceEnvironment }}
         />
       )}
     </div>

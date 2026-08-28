@@ -28,6 +28,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { logError } from '@/lib/errors/log'
 import type { FiscalDocumentContext } from './types'
+import type { FocusEnvironment } from '@/lib/integrations/focus/types'
 
 const ROUTE = 'getNfceDanfeData'
 
@@ -85,14 +86,25 @@ export type NfceDanfeResult =
 
 /**
  * Só devolve `ok:true` quando existe uma NFC-e com `status='authorized'`
- * pra esta venda, nesta empresa, E os dados locais necessários pro DANFE
- * estão todos presentes. Qualquer outro caso (não emitida, pendente,
- * rejeitada, cancelada, venda de outra empresa) devolve `not_found`; um
- * documento autorizado mas com dado local faltando devolve `incomplete`
+ * pra esta venda, nesta empresa, NESTE AMBIENTE, E os dados locais
+ * necessários pro DANFE estão todos presentes. Qualquer outro caso (não
+ * emitida, pendente, rejeitada, cancelada, venda de outra empresa,
+ * ambiente diferente do pedido) devolve `not_found`; um documento
+ * autorizado mas com dado local faltando devolve `incomplete`
  * explicitamente — nunca um DANFE parcial/enganoso.
+ *
+ * `environment` é OBRIGATÓRIO, sem default — fundação homologação↔
+ * produção (auditoria 2026-09-06): antes desta revisão a query assumia
+ * "no máximo 1 NFC-e autorizada por venda" (verdade só enquanto o índice
+ * `uq_fiscal_documents_sale_authorized` não incluía `environment` — ver
+ * migration 202609061000). Uma vez que homologação e produção podem
+ * coexistir autorizadas pra mesma venda, `.maybeSingle()` sem filtro de
+ * ambiente lançaria erro (2 linhas). Nunca escolhido implicitamente
+ * ("pega produção se existir, senão homologação") — quem chama decide
+ * explicitamente qual DANFE quer ver.
  */
-export async function getNfceDanfeData(params: { saleId: number; companyId: number }): Promise<NfceDanfeResult> {
-  const { saleId, companyId } = params
+export async function getNfceDanfeData(params: { saleId: number; companyId: number; environment: FocusEnvironment }): Promise<NfceDanfeResult> {
+  const { saleId, companyId, environment } = params
   const admin = createAdminClient()
 
   const { data: sale, error: saleError } = await (admin as any)
@@ -110,6 +122,7 @@ export async function getNfceDanfeData(params: { saleId: number; companyId: numb
     .eq('sale_id', saleId)
     .eq('company_id', companyId)
     .eq('document_type', 'nfce')
+    .eq('environment', environment)
     .eq('status', 'authorized')
     .maybeSingle() as {
       data: {

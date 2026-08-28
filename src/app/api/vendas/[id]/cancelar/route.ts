@@ -53,19 +53,26 @@ export async function POST(
     // rota/serviço chama `DELETE /v2/nfe|nfce/{ref}` da Focus — auditado
     // nesta fase, gap documentado no relatório). Sem essa peça, permitir
     // cancelar uma venda no ERP enquanto ela tem uma NF-e/NFC-e AUTORIZADA
-    // deixaria o sistema fiscal (SEFAZ) e o ERP divergentes — a nota
-    // continuaria válida do lado de fora, sem nenhum registro aqui de que
-    // a operação foi desfeita. Bloqueio explícito é a correção de menor
-    // risco: nunca "apagar" o documento silenciosamente, nunca fingir que
-    // cancelar a venda também cancela a nota. Documento em qualquer OUTRO
-    // status (draft/pending/validation_failed/authorization_failed/
-    // submission_error/cancelled/cancellation_failed) nunca teve valor
-    // fiscal externo — não bloqueia.
+    // EM PRODUÇÃO deixaria o sistema fiscal (SEFAZ) e o ERP divergentes —
+    // a nota continuaria válida do lado de fora, sem nenhum registro aqui
+    // de que a operação foi desfeita. Bloqueio explícito é a correção de
+    // menor risco: nunca "apagar" o documento silenciosamente, nunca
+    // fingir que cancelar a venda também cancela a nota. Documento em
+    // qualquer OUTRO status (draft/pending/validation_failed/
+    // authorization_failed/submission_error/cancelled/cancellation_failed)
+    // nunca teve valor fiscal externo — não bloqueia.
+    //
+    // `environment='producao'` explícito (fundação homologação↔produção,
+    // 2026-09-06): um documento AUTORIZADO EM HOMOLOGAÇÃO é só teste, sem
+    // valor fiscal — nunca deveria impedir o cancelamento de uma venda
+    // real. Sem esse filtro, uma NFC-e de homologação (o único ambiente
+    // que existe hoje) bloquearia cancelamento como se fosse nota oficial.
     const { data: authorizedDoc } = await (admin as any)
       .from('fiscal_documents')
       .select('id, document_type, number, series')
       .eq('sale_id', saleId)
       .eq('company_id', user.company_id)
+      .eq('environment', 'producao')
       .eq('status', 'authorized')
       .maybeSingle()
 

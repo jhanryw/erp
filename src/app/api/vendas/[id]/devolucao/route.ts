@@ -48,15 +48,20 @@ export async function POST(
     // Fase Fiscal 6, seção 23 do pedido — mesma coordenação venda×fiscal
     // aplicada em /cancelar (ver comentário completo lá): uma devolução
     // total tem o MESMO risco de deixar o ERP divergente da SEFAZ se a
-    // venda já tem um documento fiscal AUTORIZADO. Cancelamento fiscal
-    // automatizado ainda não existe neste ERP (gap documentado) — bloqueio
-    // explícito é a correção de menor risco.
+    // venda já tem um documento fiscal AUTORIZADO EM PRODUÇÃO. Cancelamento
+    // fiscal automatizado ainda não existe neste ERP (gap documentado) —
+    // bloqueio explícito é a correção de menor risco.
+    //
+    // `environment='producao'` explícito (fundação homologação↔produção,
+    // 2026-09-06): homologação é só teste, sem valor fiscal — nunca deve
+    // bloquear devolução de uma venda real.
     const admin = createAdminClient()
     const { data: authorizedDoc } = await (admin as any)
       .from('fiscal_documents')
       .select('id, document_type, number, series')
       .eq('sale_id', saleId)
       .eq('company_id', user.company_id)
+      .eq('environment', 'producao')
       .eq('status', 'authorized')
       .maybeSingle()
 

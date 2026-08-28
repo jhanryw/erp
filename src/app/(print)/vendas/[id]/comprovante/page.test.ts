@@ -116,24 +116,28 @@ describe('comprovante (impressão interna) — QR usa a origem real da requisiç
 
 describe('comprovante (impressão interna) — regra definitiva de impressão/QR Code (nunca mostra QR interno com documento fiscal autorizado)', () => {
   it('consulta findAuthorizedFiscalDocument ANTES de montar o comprovante (getReceiptForSalePrint)', () => {
-    const authIdx = SOURCE.indexOf('findAuthorizedFiscalDocument(saleId')
+    const authIdx = SOURCE.indexOf('findAuthorizedFiscalDocument({')
     const receiptIdx = SOURCE.indexOf('getReceiptForSalePrint({')
     expect(authIdx).toBeGreaterThan(-1)
     expect(receiptIdx).toBeGreaterThan(-1)
     expect(authIdx).toBeLessThan(receiptIdx)
   })
 
-  it('NFC-e autorizada redireciona pra /vendas/[id]/nfce, nunca renderiza o comprovante', () => {
-    expect(SOURCE).toMatch(/authorizedDoc\?\.documentType === 'nfce'/)
+  it('fundação homologação↔produção: consulta SEMPRE com environment "producao" explícito — homologação nunca substitui o comprovante', () => {
+    expect(SOURCE).toMatch(/findAuthorizedFiscalDocument\(\{\s*saleId,\s*companyId:\s*profile\.company_id,\s*environment:\s*'producao'\s*\}\)/)
+  })
+
+  it('NFC-e autorizada EM PRODUÇÃO redireciona pra /vendas/[id]/nfce, nunca renderiza o comprovante', () => {
+    expect(SOURCE).toMatch(/officialDoc\?\.documentType === 'nfce'/)
     expect(SOURCE).toMatch(/redirect\(`\/vendas\/\$\{saleId\}\/nfce`\)/)
   })
 
-  it('NF-e autorizada usa buildFocusDanfeUrl (nunca aceita danfe_path bruto/arbitrário)', () => {
-    expect(SOURCE).toMatch(/authorizedDoc\?\.documentType === 'nfe'/)
-    expect(SOURCE).toMatch(/buildFocusDanfeUrl\(authorizedDoc\.environment, authorizedDoc\.danfePath\)/)
+  it('NF-e autorizada EM PRODUÇÃO usa resolveFocusResourceUrl (nunca aceita danfe_path bruto/arbitrário)', () => {
+    expect(SOURCE).toMatch(/officialDoc\?\.documentType === 'nfe'/)
+    expect(SOURCE).toMatch(/resolveFocusResourceUrl\(\{ path: officialDoc\.danfePath, environment: officialDoc\.environment \}\)/)
   })
 
-  it('nunca redireciona pra uma URL vinda direto do request/cliente — só pro que buildFocusDanfeUrl devolveu', () => {
+  it('nunca redireciona pra uma URL vinda direto do request/cliente — só pro que resolveFocusResourceUrl devolveu', () => {
     expect(SOURCE).not.toMatch(/redirect\(params\./)
     expect(SOURCE).not.toMatch(/redirect\(request\./)
   })

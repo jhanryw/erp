@@ -1,17 +1,28 @@
 // Comprovante não fiscal — impressão interna (80mm térmica).
 //
 // Comercial e fiscal são independentes por design (requisito 7 do pedido)
-// ENQUANTO não existir documento fiscal autorizado para a venda — mas a
-// regra definitiva de impressão/QR Code (revisão desta fase) proíbe
-// mostrar o QR interno Qarvon depois que uma NF-e/NFC-e for autorizada.
-// Por isso esta página agora consulta `fiscal_documents` (só pra checar
-// `status='authorized'`, nunca pra montar o comprovante em si — o corpo
-// do comprovante continua vindo 100% de `getReceiptForSalePrint`, que
-// nunca lê fiscal_documents/Focus/resolveFiscalDocumentType) e:
-//   - NFC-e autorizada  → redireciona pra /vendas/[id]/nfce (DANFE local).
-//   - NF-e autorizada   → redireciona pro danfe_path oficial da Focus
-//     (`buildFocusDanfeUrl` — nunca aceita URL arbitrária, só o caminho já
-//     persistido em fiscal_documents pelo nosso próprio serviço de emissão).
+// ENQUANTO não existir documento fiscal AUTORIZADO EM PRODUÇÃO para a
+// venda — a regra definitiva de impressão/QR Code (revisada na fundação
+// homologação↔produção, 2026-09-06) proíbe mostrar o QR interno Qarvon
+// depois que uma NF-e/NFC-e OFICIAL (produção) for autorizada, mas
+// EXPLICITAMENTE NÃO conta homologação pra essa decisão — um documento de
+// homologação é só teste, sem valor fiscal, e nunca esconde o comprovante
+// operacional. Por isso `findAuthorizedFiscalDocument` é chamado aqui com
+// `environment: 'producao'` explícito, nunca "o mais recente autorizado
+// seja lá qual ambiente for". Esta página consulta `fiscal_documents` só
+// pra essa checagem — nunca pra montar o comprovante em si (o corpo
+// continua vindo 100% de `getReceiptForSalePrint`, que nunca lê
+// fiscal_documents/Focus/resolveFiscalDocumentType) — e:
+//   - NFC-e autorizada EM PRODUÇÃO → redireciona pra /vendas/[id]/nfce
+//     (DANFE local; a própria página mostra o badge de ambiente).
+//   - NF-e autorizada EM PRODUÇÃO  → redireciona pro danfe_path oficial da
+//     Focus (`resolveFocusResourceUrl` — nunca aceita URL arbitrária, só o
+//     caminho já persistido em fiscal_documents pelo nosso próprio
+//     serviço de emissão).
+//   - Só homologação autorizada (ou nenhum documento) → comprovante não
+//     fiscal normal, com QR interno Qarvon. O DANFE de homologação
+//     continua acessível explicitamente via /vendas/[id]/nfce pra
+//     debug/teste — só não é usado como substituto automático aqui.
 //
 // Não existe hoje nenhuma configuração de "política de troca" armazenada no
 // ERP (grep confirma — nenhuma tabela/coluna do tipo politica_troca/
@@ -26,7 +37,7 @@ import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getReceiptForSalePrint } from '@/lib/receipts/getReceiptData'
 import { generateReceiptQr, formatShortReceiptCode, buildVerificationUrl } from '@/lib/receipts/generateReceiptQr'
 import { findAuthorizedFiscalDocument } from '@/services/fiscal/findAuthorizedFiscalDocument'
-import { buildFocusDanfeUrl } from '@/lib/fiscal/buildFocusDanfeUrl'
+import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { PrintTrigger } from './PrintTrigger'
@@ -72,19 +83,23 @@ export default async function ComprovantePage({ params }: { params: { id: string
   const saleId = Number(params.id)
   if (!saleId || !profile.company_id) notFound()
 
-  // Regra definitiva de impressão/QR Code: uma vez que existe documento
-  // fiscal AUTORIZADO pra esta venda, o comprovante não fiscal (e o QR
-  // interno Qarvon) nunca mais é mostrado — o documento fiscal passa a
-  // ser o comprovante. Checado ANTES de montar qualquer coisa do
-  // comprovante, pra nunca chegar a renderizar o QR interno por engano.
-  const authorizedDoc = await findAuthorizedFiscalDocument(saleId, profile.company_id)
+  // Regra definitiva de impressão/QR Code (revisada na fundação
+  // homologação↔produção, 2026-09-06): só um documento fiscal AUTORIZADO
+  // EM PRODUÇÃO substitui o comprovante não fiscal — uma NFC-e/NF-e de
+  // HOMOLOGAÇÃO é só teste, sem valor fiscal, e nunca pode fazer o QR
+  // interno Qarvon desaparecer. Por isso `environment: 'producao'` é
+  // passado explicitamente aqui — nunca "o mais recente autorizado, seja
+  // lá qual ambiente for". Checado ANTES de montar qualquer coisa do
+  // comprovante, pra nunca chegar a renderizar o QR interno por engano
+  // quando já existe documento oficial.
+  const officialDoc = await findAuthorizedFiscalDocument({ saleId, companyId: profile.company_id, environment: 'producao' })
 
-  if (authorizedDoc?.documentType === 'nfce') {
+  if (officialDoc?.documentType === 'nfce') {
     redirect(`/vendas/${saleId}/nfce`)
   }
 
-  if (authorizedDoc?.documentType === 'nfe') {
-    const danfeUrl = buildFocusDanfeUrl(authorizedDoc.environment, authorizedDoc.danfePath)
+  if (officialDoc?.documentType === 'nfe') {
+    const danfeUrl = resolveFocusResourceUrl({ path: officialDoc.danfePath, environment: officialDoc.environment })
     if (danfeUrl) redirect(danfeUrl)
 
     // NF-e autorizada mas sem danfe_path válido ainda persistido — nunca

@@ -52,7 +52,7 @@ describe('Claim concorrente — a primitiva RPC fake, isolada', () => {
 
   it('N chamadas concorrentes de rpc_claim_fiscal_emission pra mesma venda → exatamente 1 "claimed", as demais "busy"', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
 
     const N = 10
     const results = await Promise.all(
@@ -82,8 +82,8 @@ describe('rpc_claim_fiscal_emission — isolamento por document_type (Fase Fisca
 
   it('claim de nfe e claim de nfce pra MESMA venda → 2 linhas fiscal_documents separadas, cada uma "claimed" (nunca "busy" uma da outra)', async () => {
     const fake = setupFake()
-    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'nfe')
-    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'nfce')
+    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao', 'nfe')
+    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao', 'nfce')
     expect(refNfe).not.toBe(refNfce)
 
     const claimNfe = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
@@ -104,8 +104,8 @@ describe('rpc_claim_fiscal_emission — isolamento por document_type (Fase Fisca
 
   it('nfe "busy" (lease ativa) nunca bloqueia um claim de nfce pra mesma venda, e vice-versa', async () => {
     const fake = setupFake()
-    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'nfe')
-    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'nfce')
+    const refNfe = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao', 'nfe')
+    const refNfce = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao', 'nfce')
 
     await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
       p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: refNfe, p_environment: 'homologacao', p_lease_seconds: 60, p_document_type: 'nfe',
@@ -125,7 +125,7 @@ describe('rpc_claim_fiscal_emission — isolamento por document_type (Fase Fisca
 
   it('sem p_document_type informado (chamador antigo) → default "nfe", mesmo comportamento de sempre', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
 
     const claim = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
       p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: ref, p_environment: 'homologacao', p_lease_seconds: 60,
@@ -178,7 +178,7 @@ describe('Lease expirada — NUNCA autoriza retransmissão direta (seção 7 do 
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-antigo', submission_lease_until: new Date(Date.now() - 1000).toISOString(), // já expirou
       submission_started_at: new Date(Date.now() - 2000).toISOString(), // uma transmissão real foi despachada sob o claim anterior
     })
@@ -198,7 +198,7 @@ describe('Lease expirada — NUNCA autoriza retransmissão direta (seção 7 do 
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-ativo', submission_lease_until: new Date(Date.now() + 60_000).toISOString(),
     })
 
@@ -222,7 +222,7 @@ describe('Recuperação de crash — cenário A: processo morre ANTES do POST (s
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-morto', submission_lease_until: new Date(Date.now() - 1000).toISOString(),
       // submission_started_at NÃO setado — o processo morreu durante
       // validação/montagem do payload, ANTES de rpc_begin_fiscal_transmission
@@ -251,7 +251,7 @@ describe('Recuperação de crash — cenário B: processo morre DURANTE o POST (
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-morto-durante-post', submission_lease_until: new Date(Date.now() - 1000).toISOString(),
       submission_started_at: new Date(Date.now() - 2000).toISOString(), // POST foi de fato despachado antes do crash
     })
@@ -276,7 +276,7 @@ describe('Recuperação de crash — cenário C: Focus respondeu (rejeição), p
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-morto-pos-resposta', submission_lease_until: new Date(Date.now() - 1000).toISOString(),
       submission_started_at: new Date(Date.now() - 2000).toISOString(), // POST foi de fato despachado antes do crash
     })
@@ -307,7 +307,7 @@ describe('Recuperação de crash — cenário D: Focus autorizou, ERP não persi
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-morto', submission_lease_until: new Date(Date.now() - 1000).toISOString(),
       submission_started_at: new Date(Date.now() - 2000).toISOString(), // POST foi de fato despachado antes do crash
     })
@@ -383,7 +383,7 @@ describe('Fechamento do risco residual #2 — submission_started_at protege POST
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_claim_token: 'token-crash-pos-begin',
       submission_lease_until: new Date(Date.now() - 1000).toISOString(), // expirada
       submission_started_at: new Date(Date.now() - 2000).toISOString(), // marcado, mas o resultado do POST nunca chegou a ser gravado
@@ -403,7 +403,7 @@ describe('Fechamento do risco residual #2 — submission_started_at protege POST
   it('(e) reconciliação após esse crash: 404 confirma ausência inequívoca → retentável → PRÓXIMA chamada transmite com a MESMA provider_ref', async () => {
     const fake = setupFake()
     mockHappyPathDependencies()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
       environment: 'homologacao', provider_ref: ref, status: 'pending',
@@ -454,7 +454,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(1) begin com lease válida → sucesso, submission_started_at gravado', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimed = await claim(fake, ref)
     expect(claimed.decision).toBe('claimed')
 
@@ -465,7 +465,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(2) begin com lease JÁ EXPIRADA (mesmo claim_token, ninguém mais reclamou) → zero linhas — este é exatamente o bug real reportado (lease 02:40:01, begin às 02:40:21)', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimed = await claim(fake, ref)
 
     // Simula o worker demorando mais que a lease ANTES de sequer chamar
@@ -483,7 +483,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(3) segundo begin com o MESMO claim_token (já iniciado antes) → zero linhas, nunca reabre/reafirma', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimed = await claim(fake, ref)
 
     const first = await begin(fake, claimed.id, claimed.submission_claim_token)
@@ -499,7 +499,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(4) claim novo após expiração → token ANTIGO não consegue begin (mesmo se tentar depois)', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimedA = await claim(fake, ref)
     const tokenA = claimedA.submission_claim_token
 
@@ -519,7 +519,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(5) token NOVO (o claim B do teste acima) consegue begin normalmente', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimedA = await claim(fake, ref)
     const row = fake.tables.fiscal_documents.find((r) => r.id === claimedA.id)
     row.submission_lease_until = new Date(Date.now() - 1000).toISOString()
@@ -532,7 +532,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(6) worker antigo não consegue sobrescrever o estado pertencente ao claim novo, mesmo depois de B já ter iniciado E concluído a transmissão', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimedA = await claim(fake, ref)
     const tokenA = claimedA.submission_claim_token
     const row = fake.tables.fiscal_documents.find((r) => r.id === claimedA.id)
@@ -560,7 +560,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(7) complete de transmissão legitimamente iniciada continua funcionando MESMO SE a lease expirar depois do begin e antes da resposta chegar', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimed = await claim(fake, ref)
     const beginRes = await begin(fake, claimed.id, claimed.submission_claim_token)
     expect(beginRes.data).toHaveLength(1)
@@ -582,7 +582,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(8) timeout/rede após begin mantém submission_started_at (complete com status=pending preserva) e força reconciliation_required na próxima claim', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimed = await claim(fake, ref)
     await begin(fake, claimed.id, claimed.submission_claim_token)
 
@@ -603,7 +603,7 @@ describe('rpc_begin_fiscal_transmission — race condition real fechada (lease v
 
   it('(9) nenhum cenário permite dois begin bem-sucedidos (logo dois POSTs) pro mesmo documento — reproduz a corrida exata do bug real, prova que fecha', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
     const claimedA = await claim(fake, ref)
     const tokenA = claimedA.submission_claim_token
 
@@ -635,7 +635,7 @@ describe('Proteção contra worker antigo (seção 10 do pedido)', () => {
 
   it('conclusão com claim_token superado nunca sobrescreve o resultado do claim vigente', async () => {
     const fake = setupFake()
-    const ref = buildProviderRef(COMPANY_ID, SALE_ID)
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
 
     // Claim A.
     const claimA = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
@@ -687,12 +687,12 @@ describe('Duas NF-e autorizadas para a mesma venda — claim nunca permite (comp
     const fake = setupFake()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'authorized',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'authorized',
       access_key: 'chave-ja-autorizada',
     })
 
     const result = await (fake.client as any).rpc('rpc_claim_fiscal_emission', {
-      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), p_environment: 'homologacao', p_lease_seconds: 60,
+      p_company_id: COMPANY_ID, p_sale_id: SALE_ID, p_provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), p_environment: 'homologacao', p_lease_seconds: 60,
     })
 
     expect(result.data[0].decision).toBe('already_authorized')
@@ -708,7 +708,7 @@ describe('Recuperação de crash — cenário E: documento já authorized', () =
     mockHappyPathDependencies()
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'authorized',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'authorized',
       access_key: 'chave-ja-autorizada', number: '5', series: '1',
     })
 

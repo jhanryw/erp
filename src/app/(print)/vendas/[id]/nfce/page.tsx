@@ -8,6 +8,19 @@
 // do pedido). Reimpressão = navegar de novo pra esta mesma URL: os dados
 // vêm de fiscal_documents/fiscal_document_items (snapshot imutável),
 // nunca recalculados — nunca cria um documento novo nem reconsulta a Focus.
+//
+// ─── `?environment=` (fundação homologação↔produção, 2026-09-06) ───────────
+//
+// `getNfceDanfeData` agora exige `environment` explícito (uma venda pode
+// ter NFC-e autorizada em homologação E em produção simultaneamente — ver
+// migration 202609061000). Esta página lê `?environment=homologacao|
+// producao` da querystring; qualquer valor ausente/inválido cai no
+// default `'homologacao'` — hoje o único ambiente que realmente tem
+// documentos autorizados (produção continua bloqueada em
+// submitNfceHomologacao.ts), então o default preserva 100% do
+// comportamento de todo link/bookmark existente sem querystring. Quem
+// sabe explicitamente que quer o documento oficial (comprovante.tsx,
+// depois que produção existir) passa `?environment=producao`.
 
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
@@ -39,12 +52,13 @@ async function generateFiscalQr(content: string): Promise<string | null> {
   }
 }
 
-export default async function DanfeNfcePage({ params }: { params: { id: string } }) {
+export default async function DanfeNfcePage({ params, searchParams }: { params: { id: string }; searchParams: { environment?: string } }) {
   const profile = await requirePageRole('usuario')
   const saleId = Number(params.id)
   if (!saleId || !profile.company_id) notFound()
 
-  const result = await getNfceDanfeData({ saleId, companyId: profile.company_id })
+  const environment = searchParams.environment === 'producao' ? 'producao' : 'homologacao'
+  const result = await getNfceDanfeData({ saleId, companyId: profile.company_id, environment })
   // Nunca renderiza NADA daqui se não houver NFC-e AUTORIZADA pra esta
   // venda nesta empresa — inclusive pendente/rejeitada/cancelada cai aqui
   // (item 27/28 do pedido: nunca mostrar "autorizado" pra algo que não foi).

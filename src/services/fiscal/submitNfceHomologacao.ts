@@ -47,7 +47,7 @@ import { FiscalBuildError } from './buildNfePayload'
 import { buildNfceDocumentSnapshot } from './buildFiscalSnapshot'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { issueFocusNfce, consultFocusNfce } from '@/lib/integrations/focus/httpClient'
-import { FocusApiError, type FocusNfceConsultaResponse } from '@/lib/integrations/focus/types'
+import { FocusApiError, type FocusNfceConsultaResponse, type FocusEnvironment } from '@/lib/integrations/focus/types'
 import {
   buildProviderRef,
   claimFiscalEmission,
@@ -130,15 +130,80 @@ export function extractFocusAccessKey(chaveNfe: string | null | undefined): stri
   return semPrefixo
 }
 
+/**
+ * Resolve `authorization_protocol` da resposta de NFC-e — ÚNICO ponto que
+ * decide isso, usado tanto na emissão (`submitNfceHomologacao`) quanto na
+ * reconciliação (`applyFocusNfceResponse`), pra nunca duplicar a lógica.
+ *
+ * ACHADO REAL (venda 703, homologação, 2026-08-28): o campo correto é
+ * `protocolo`, PLANO no nível raiz da resposta — confirmado por
+ * `provider_payload` de uma emissão real. `numero_protocolo` (o campo que
+ * o código assumia antes, por analogia ao nome usado em NF-e) NUNCA foi
+ * confirmado em nenhuma resposta real da Focus — ver comentário completo
+ * em `FocusNfceConsultaResponse` (types.ts). Mantido só como fallback de
+ * compatibilidade legada (fixtures/integrações antigas que possam ter
+ * usado esse nome), sempre depois de `protocolo`.
+ *
+ * `existingProtocol` (opcional) é o valor JÁ persistido localmente — só
+ * usado pela reconciliação, pra nunca degradar um protocolo já confiável
+ * quando a resposta desta consulta específica (por qualquer motivo) vier
+ * sem o campo. Na emissão (documento novo, sem valor local anterior) é
+ * omitido.
+ */
+export function resolveNfceAuthorizationProtocol(
+  response: FocusNfceConsultaResponse,
+  existingProtocol?: string | null,
+): string | null {
+  return response.protocolo ?? response.numero_protocolo ?? existingProtocol ?? null
+}
+
+/**
+ * Resolve `access_key` pra RECONCILIAÇÃO (nunca pra emissão nova — lá
+ * `extractFocusAccessKey(response.chave_nfe)` continua direto, sem
+ * fallback, porque uma emissão nova nunca tem valor local anterior pra
+ * preservar). Uma consulta que confirma `autorizado` mas cuja resposta
+ * (por qualquer motivo) venha sem `chave_nfe` NUNCA pode apagar uma
+ * access_key já persistida — só lança quando não há resposta confiável
+ * NEM valor local já existente (nada seguro pra persistir).
+ */
+function resolveAccessKeyForReconciliation(chaveNfe: string | null | undefined, existingAccessKey: string | null | undefined): string {
+  if (chaveNfe) return extractFocusAccessKey(chaveNfe)
+  if (existingAccessKey) return existingAccessKey
+  throw new FocusAccessKeyError('Focus retornou status "autorizado" sem chave_nfe na resposta, e não há access_key local já persistida para preservar — não é seguro persistir a autorização sem a chave de acesso.')
+}
+
 async function applyFocusNfceResponse(
   admin: ReturnType<typeof createAdminClient>,
   fiscalDocumentId: number,
   response: FocusNfceConsultaResponse,
+  providerRef: string,
 ): Promise<FiscalDocumentDomainStatus> {
   const domainStatus = mapFocusNfceStatus(response.status)
 
+  // ACHADO REAL (venda 703, homologação, 2026-08-28): esta função é usada
+  // TANTO pra confirmar um documento ainda pending QUANTO pra
+  // reconciliar/"Verificar status" de um documento JÁ authorized — uma
+  // consulta de status é informação NOVA se preencher algo que faltava,
+  // mas NUNCA pode DEGRADAR um dado local já confiável só porque a
+  // resposta desta consulta específica omitiu o campo (ex.: uma consulta
+  // que não traga `protocolo` não pode apagar um `authorization_protocol`
+  // já persistido de uma resposta anterior). Lê
+  // o estado atual ANTES de decidir o que persistir.
+  const { data: currentRaw } = await (admin as any)
+    .from('fiscal_documents')
+    .select('status, authorized_at, authorization_protocol, access_key, number, series, xml_path, danfe_path, qrcode_url, sale_id, company_id, document_type, environment')
+    .eq('id', fiscalDocumentId)
+    .maybeSingle()
+  const current = (currentRaw ?? {}) as Record<string, unknown>
+
   const patch: Record<string, unknown> = {
     status: domainStatus,
+    // `provider_payload` é a ÚLTIMA resposta bruta recebida da Focus pra
+    // este documento, não um histórico imutável — cada reconciliação
+    // substitui a anterior de propósito ("o que a Focus disse da última
+    // vez que perguntamos", não um log de auditoria). Os campos fiscais
+    // extraídos dela (abaixo) é que precisam de preservação individual —
+    // o payload bruto em si não.
     provider_payload: response,
     status_sefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
     status_message: response.mensagem_sefaz ?? null,
@@ -151,24 +216,57 @@ async function applyFocusNfceResponse(
   }
 
   if (domainStatus === 'authorized') {
-    patch.number = response.numero ?? null
-    patch.series = response.serie ?? null
-    // Lança FocusAccessKeyError se malformada — nunca persiste lixo, nunca
-    // deixa o Postgres reportar um erro genérico de coluna.
-    patch.access_key = extractFocusAccessKey(response.chave_nfe)
-    // Débito técnico fechado (achado da auditoria da venda 626, item 1):
-    // `numero_protocolo` é FLAT na resposta de NFC-e (`FocusNfceConsultaResponse`,
-    // diferente de NF-e, que aninha em `protocolo_nota_fiscal.numero_protocolo`)
-    // — nunca era mapeado pra `authorization_protocol`, ficava sempre null
-    // mesmo em nota autorizada.
-    patch.authorization_protocol = response.numero_protocolo ?? null
-    patch.xml_path = response.caminho_xml_nota_fiscal ?? null
-    patch.danfe_path = response.caminho_danfe ?? null
+    // Campo confiável presente NESTA resposta → atualiza. Ausente →
+    // preserva o valor local já existente (nunca apaga um dado bom só
+    // porque esta consulta específica omitiu o campo).
+    patch.number = response.numero ?? current.number ?? null
+    patch.series = response.serie ?? current.series ?? null
+    patch.access_key = resolveAccessKeyForReconciliation(response.chave_nfe, current.access_key as string | null | undefined)
+    // CORRIGIDO (venda 703, evidência real de payload): o campo correto é
+    // `protocolo`, não `numero_protocolo` — ver `resolveNfceAuthorizationProtocol`
+    // e o comentário completo em `FocusNfceConsultaResponse` (types.ts).
+    // Se nem `protocolo` nem o fallback legado vierem nesta resposta e não
+    // houver valor local já confiável, permanece null (nunca fabrica
+    // protocolo) — só o warning abaixo torna esse estado visível.
+    patch.authorization_protocol = resolveNfceAuthorizationProtocol(response, current.authorization_protocol as string | null | undefined)
+    patch.xml_path = response.caminho_xml_nota_fiscal ?? current.xml_path ?? null
+    patch.danfe_path = response.caminho_danfe ?? current.danfe_path ?? null
     // `202609051000_fiscal_documents_qrcode_url.sql` — conteúdo real do QR
     // Code fiscal (URL de consulta com a chave/hash), nunca construído
     // localmente. Sem equivalente em NF-e (ver FocusNfceConsultaResponse).
-    patch.qrcode_url = response.qrcode_url ?? null
-    patch.authorized_at = new Date().toISOString()
+    patch.qrcode_url = response.qrcode_url ?? current.qrcode_url ?? null
+    // `authorized_at` é a data do EVENTO de autorização, não da consulta.
+    // Uma reconciliação que confirma um documento JÁ authorized nunca
+    // reescreve essa data — só preenche quando ainda não havia (primeira
+    // vez que este documento passa a authorized via reconciliação).
+    // `FocusNfceConsultaResponse` (ver types.ts) não tem nenhum campo de
+    // data/hora da autorização — confirmado por leitura direta do tipo,
+    // não uma omissão — então `new Date()` no momento da reconciliação é
+    // a única fonte possível quando ainda não há valor local.
+    patch.authorized_at = (current.status === 'authorized' && current.authorized_at)
+      ? current.authorized_at
+      : new Date().toISOString()
+
+    if (!patch.authorization_protocol) {
+      // Nunca vira exceção — mentiria sobre o estado fiscal real (a NFC-e
+      // ESTÁ autorizada no SEFAZ; só o dado local pra montar o DANFE com
+      // segurança está incompleto). O gate de impressão (`getNfceDanfeData`)
+      // já recusa imprimir sem `authorization_protocol` — este warning só
+      // torna o caso visível em log/alerta, sem repetir dado sensível.
+      logError({
+        route: 'consultAndUpdateNfceDocument (authorization_protocol ausente)',
+        err: new Error('authorized fiscal document missing local authorization protocol — Focus confirmou NFC-e autorizada, mas nenhuma resposta (esta consulta ou uma anterior) trouxe protocolo (nem o fallback legado numero_protocolo).'),
+        context: {
+          fiscal_document_id: fiscalDocumentId,
+          company_id: current.company_id ?? null,
+          sale_id: current.sale_id ?? null,
+          document_type: current.document_type ?? 'nfce',
+          environment: current.environment ?? null,
+          provider_ref: providerRef,
+          access_key: patch.access_key ?? null,
+        },
+      })
+    }
   }
 
   // ACHADO REAL (venda 626, item 7 da auditoria): esta chamada NUNCA
@@ -214,7 +312,7 @@ export async function consultAndUpdateNfceDocument(
 
   try {
     const response = await consultFocusNfce(providerRef, { token, environment })
-    const status = await applyFocusNfceResponse(admin, fiscalDocumentId, response)
+    const status = await applyFocusNfceResponse(admin, fiscalDocumentId, response, providerRef)
 
     const { data: row } = await (admin as any)
       .from('fiscal_documents')
@@ -265,10 +363,16 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     return failure('Bloqueado: esta rota só emite em homologação. company_fiscal_settings.nfce_environment não é "homologacao".', 403)
   }
 
-  const providerRef = buildProviderRef(companyId, saleId, 'nfce')
+  // `settings.nfce_environment` (não literal hardcoded) — já confirmado
+  // === 'homologacao' pelo gate acima, mas usar a variável real evita
+  // outra edição quando o gate for removido numa fase futura. Nome
+  // `configuredEnvironment` pra não colidir com o `environment` resolvido
+  // mais abaixo a partir de `resolveFocusIntegration`.
+  const configuredEnvironment = settings.nfce_environment as FocusEnvironment
+  const providerRef = buildProviderRef(companyId, saleId, configuredEnvironment, 'nfce')
 
   // ─── Claim atômico curto — decide ANTES de qualquer HTTP ────────────────
-  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, 'homologacao', 'nfce')
+  const claim = await claimFiscalEmission(admin, companyId, saleId, providerRef, configuredEnvironment, 'nfce')
 
   if (claim.decision === 'already_authorized' || claim.decision === 'already_cancelled') {
     return success(rowToResult(claim.row))
@@ -400,10 +504,12 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
         number: response.numero ?? null,
         series: response.serie ?? null,
         accessKey,
-        // Débito técnico fechado (achado da auditoria da venda 626, item
-        // 1): `numero_protocolo` é FLAT na resposta de NFC-e — ver mesma
-        // nota em applyFocusNfceResponse.
-        authorizationProtocol: response.numero_protocolo ?? null,
+        // CORRIGIDO (venda 703, evidência real de payload): o campo
+        // correto é `protocolo`, não `numero_protocolo` — ver
+        // `resolveNfceAuthorizationProtocol` e o comentário completo em
+        // `FocusNfceConsultaResponse` (types.ts). Emissão nova nunca tem
+        // valor local anterior pra preservar, por isso sem 2º argumento.
+        authorizationProtocol: resolveNfceAuthorizationProtocol(response),
         xmlPath: response.caminho_xml_nota_fiscal ?? null,
         danfePath: response.caminho_danfe ?? null,
         authorizedAt: new Date().toISOString(),

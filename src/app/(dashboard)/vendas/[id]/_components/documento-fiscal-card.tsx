@@ -34,6 +34,8 @@ import { Loader2, Receipt, AlertTriangle, CheckCircle2, XCircle, RefreshCw, User
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
+import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
+import type { FocusEnvironment } from '@/lib/integrations/focus/types'
 
 interface EmissionResult {
   status: string
@@ -53,6 +55,8 @@ export interface InitialFiscalDocument {
   id: number
   document_type: 'nfe' | 'nfce'
   status: string
+  /** Ambiente EM QUE ESTE DOCUMENTO foi emitido — nunca confundir com o ambiente configurado atualmente (`currentEnvironment`, que pode já ter mudado desde então). */
+  environment: FocusEnvironment
   number: string | null
   series: string | null
   access_key: string | null
@@ -63,6 +67,20 @@ export interface InitialFiscalDocument {
   submission_error_message: string | null
   xml_path: string | null
   danfe_path: string | null
+}
+
+/** Badge discreto — mesmo padrão visual de badge já usado no restante do card (texto pequeno, cor de fundo suave). Nunca "Autorizada" sozinho: o operador precisa distinguir teste de documento oficial imediatamente. */
+function EnvironmentBadge({ environment }: { environment: FocusEnvironment }) {
+  const isProducao = environment === 'producao'
+  return (
+    <span
+      className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide ${
+        isProducao ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+      }`}
+    >
+      {isProducao ? 'Produção' : 'Homologação'}
+    </span>
+  )
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -109,10 +127,12 @@ interface DocumentoFiscalCardProps {
   /** CPF já mascarado (`maskCPF`), só quando presente E válido — nunca o CPF cru. `null` = consumidor não identificado. */
   maskedCpf: string | null
   initialDocuments: Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>
+  /** Ambiente CONFIGURADO agora por tipo (company_fiscal_settings.nfe_environment/nfce_environment) — usado pra saber se um "autorizado" já existente ainda corresponde ao ambiente atual, nunca lido de fiscal_documents. */
+  currentEnvironment: { nfe: FocusEnvironment; nfce: FocusEnvironment }
 }
 
 function DocumentTypeSection({
-  saleId, type, label, eligible, ineligibleReason, saleBlocked, initial,
+  saleId, type, label, eligible, ineligibleReason, saleBlocked, initial, currentEnvironment,
 }: {
   saleId: number
   type: 'nfe' | 'nfce'
@@ -121,9 +141,19 @@ function DocumentTypeSection({
   ineligibleReason: string | null
   saleBlocked: boolean
   initial: InitialFiscalDocument | undefined
+  currentEnvironment: FocusEnvironment
 }) {
   const [busy, setBusy] = useState<'emitir' | 'consultar' | null>(null)
   const [result, setResult] = useState<EmissionResult | null>(toResult(initial))
+  // Ambiente do `result` atual — herdado do documento carregado do
+  // servidor (`initial.environment`) até a primeira emissão/consulta
+  // bem-sucedida DESTA sessão de página, quando passa a ser o ambiente
+  // configurado no momento da chamada (é o que o backend usou de fato).
+  // Nunca inferido do resultado da API em si — SubmitNfeResult/
+  // rpc_claim_fiscal_emission deliberadamente não carregam `environment`
+  // no retorno (mudar isso exigiria alterar o RETURNS TABLE da RPC, fora
+  // do escopo desta fundação — ver auditoria).
+  const [resultEnvironment, setResultEnvironment] = useState<FocusEnvironment | null>(initial?.environment ?? null)
   const [error, setError] = useState<string | null>(null)
   const [showRecipientForm, setShowRecipientForm] = useState(false)
   const [recipientValue, setRecipientValue] = useState<FiscalRecipientValue>(EMPTY_FISCAL_RECIPIENT)
@@ -152,6 +182,11 @@ function DocumentTypeSection({
         return
       }
       setResult(data.emission ?? data.status)
+      // O resultado que ACABOU de chegar foi necessariamente emitido no
+      // ambiente configurado agora (o backend nunca emite em outro) —
+      // atualiza o ambiente exibido junto com o resultado, mesmo sem
+      // `environment` vir na resposta da API.
+      setResultEnvironment(currentEnvironment)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro desconhecido.')
     } finally {
@@ -212,7 +247,22 @@ function DocumentTypeSection({
   }
 
   const hasDestinatarioIssue = result?.validationErrors?.some((e) => e.code.startsWith('destinatario_')) ?? false
-  const canEmit = eligible && !saleBlocked && result?.status !== 'authorized'
+  // Fundação homologação↔produção: um autorizado só bloqueia nova emissão
+  // quando foi autorizado NO MESMO ambiente que seria usado agora. Uma
+  // homologação autorizada nunca trava o botão pra uma futura emissão em
+  // produção (e vice-versa) — a decisão considera o ambiente ALVO, nunca
+  // só "existe algo autorizado?". Hoje `currentEnvironment` é sempre
+  // 'homologacao' (gate em submitNfeHomologacao.ts/submitNfceHomologacao.ts),
+  // então o comportamento observável não muda enquanto produção não for
+  // liberada — mas a fórmula já está correta para quando mudar.
+  const authorizedInCurrentEnvironment = result?.status === 'authorized' && resultEnvironment === currentEnvironment
+  const canEmit = eligible && !saleBlocked && !authorizedInCurrentEnvironment
+
+  // Resolvidos uma vez só — nunca concatenação espalhada no JSX (achado
+  // real, venda 703: href={result.danfePath} cru resolvia contra a
+  // origem da PÁGINA, nunca contra a Focus, e devolvia 404).
+  const danfeFocusUrl = resolveFocusResourceUrl({ path: result?.danfePath, environment: resultEnvironment ?? 'homologacao' })
+  const xmlFocusUrl = resolveFocusResourceUrl({ path: result?.xmlPath, environment: resultEnvironment ?? 'homologacao' })
 
   return (
     <div className="rounded-lg border border-border p-3 space-y-2">
@@ -222,6 +272,7 @@ function DocumentTypeSection({
           <span className="inline-flex items-center gap-1.5 text-xs font-medium">
             <StatusIcon status={result.status} />
             {STATUS_LABELS[result.status] ?? result.status}
+            {result.status === 'authorized' && resultEnvironment && <EnvironmentBadge environment={resultEnvironment} />}
           </span>
         )}
       </div>
@@ -316,17 +367,22 @@ function DocumentTypeSection({
           {result.number && <p><span className="text-text-muted">Número/Série:</span> {result.number}/{result.series}</p>}
           <div className="flex gap-3 pt-1">
             {type === 'nfce' && (
-              <a href={`/vendas/${saleId}/nfce`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+              <a href={`/vendas/${saleId}/nfce?environment=${resultEnvironment ?? 'homologacao'}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
                 <FileText className="w-3.5 h-3.5" /> Imprimir DANFE NFC-e (térmica)
               </a>
             )}
-            {result.danfePath && (
-              <a href={result.danfePath} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+            {/* danfe_path/xml_path da Focus são caminhos RELATIVOS
+                (caminho_danfe/caminho_xml_nota_fiscal) — resolveFocusResourceUrl
+                é o único ponto que combina isso com o host correto do
+                ambiente; nunca usar result.danfePath/xmlPath direto como
+                href (resolveria contra a URL desta página, não da Focus). */}
+            {danfeFocusUrl && (
+              <a href={danfeFocusUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
                 <FileText className="w-3.5 h-3.5" /> DANFE (Focus)
               </a>
             )}
-            {result.xmlPath && (
-              <a href={result.xmlPath} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
+            {xmlFocusUrl && (
+              <a href={xmlFocusUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
                 <FileDown className="w-3.5 h-3.5" /> XML
               </a>
             )}
@@ -344,7 +400,7 @@ function DocumentTypeSection({
   )
 }
 
-export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedReason, maskedCpf, initialDocuments }: DocumentoFiscalCardProps) {
+export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedReason, maskedCpf, initialDocuments, currentEnvironment }: DocumentoFiscalCardProps) {
   const saleBlocked = TERMINAL_SALE_STATUSES.has(saleStatus)
 
   return (
@@ -380,6 +436,7 @@ export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedR
         ineligibleReason={resolvedType !== 'nfce' ? 'Não elegível para esta venda (modalidade de entrega/origem indica NF-e ou está indeterminada).' : null}
         saleBlocked={saleBlocked}
         initial={initialDocuments.nfce}
+        currentEnvironment={currentEnvironment.nfce}
       />
       <DocumentTypeSection
         saleId={saleId} type="nfe" label="NF-e"
@@ -387,6 +444,7 @@ export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedR
         ineligibleReason={null}
         saleBlocked={saleBlocked}
         initial={initialDocuments.nfe}
+        currentEnvironment={currentEnvironment.nfe}
       />
     </Card>
   )

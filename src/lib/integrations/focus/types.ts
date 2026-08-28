@@ -184,9 +184,7 @@ export interface FocusNfeConsultaResponse {
 /**
  * Resposta de emissão (`POST /v2/nfce`, síncrona — o resultado já vem
  * nesta mesma chamada, nunca precisa de polling) e de consulta
- * (`GET /v2/nfce/{referencia}`) — Fase Fiscal 4E. Fonte: OpenAPI real
- * (`doc.focusnfe.com.br/reference/{emitir_nfce,consultar_nfce}.md`, curl
- * bruto + parse, não resumo de IA).
+ * (`GET /v2/nfce/{referencia}`) — Fase Fiscal 4E.
  *
  * `status`: união dos 3 schemas reais de resposta de consulta
  * (`NFCeConsultaResponse`/`CanceladaResponse`/`ErroAutorizacaoResponse`) —
@@ -199,6 +197,24 @@ export interface FocusNfeConsultaResponse {
  * mesmo assim por segurança defensiva (mesmo padrão de NF-e: nunca assumir
  * que um valor documentado como "não deveria aparecer aqui" realmente
  * nunca aparece).
+ *
+ * ─── `protocolo` (CORRIGIDO — venda 703, homologação, 2026-08-28) ────────
+ *
+ * O campo REAL do protocolo de autorização (`nProt` do XML) na resposta de
+ * NFC-e é `protocolo` PLANO no nível raiz — confirmado por
+ * `provider_payload` capturado de uma emissão real (venda 703):
+ * `{..., "chave_nfe": "NFe2426...", "protocolo": "324260000079215",
+ * "qrcode_url": "...", ...}`. NUNCA `numero_protocolo` — esse nome foi
+ * assumido por analogia ao campo de NF-e (que usa
+ * `protocolo_nota_fiscal.numero_protocolo`, aninhado, CONFIRMADO à parte —
+ * ver `FocusNfeProtocoloNotaFiscal`) sem verificação real, e nenhuma
+ * resposta real de NFC-e jamais trouxe essa chave (é por isso que a venda
+ * 703 ficou com `authorization_protocol` NULL apesar de autorizada — ver
+ * auditoria completa em `submitNfceHomologacao.ts`). `numero_protocolo`
+ * continua tipado abaixo só como FALLBACK de compatibilidade legada (nunca
+ * confirmado em nenhuma resposta real da Focus) — resolução sempre
+ * prioriza `protocolo`, ver `resolveNfceAuthorizationProtocol` em
+ * `submitNfceHomologacao.ts`.
  */
 export interface FocusNfceConsultaResponse {
   cnpj_emitente?: string
@@ -216,6 +232,9 @@ export interface FocusNfceConsultaResponse {
   qrcode_url?: string
   url_consulta_nf?: string
   caminho_xml_cancelamento?: string
+  /** Campo REAL do protocolo de autorização (`nProt`) — confirmado por payload real (venda 703). Ver comentário completo acima da interface. */
+  protocolo?: string | null
+  /** LEGADO/FALLBACK — nunca confirmado em nenhuma resposta real da Focus. Mantido só por compatibilidade com integrações/fixtures antigas; `protocolo` é sempre preferido. Ver comentário completo acima da interface. */
   numero_protocolo?: string
   /** Presente só em erro_autorizacao — lista de erros de validação/rejeição, formato não detalhado no OpenAPI público. */
   erros?: unknown[]

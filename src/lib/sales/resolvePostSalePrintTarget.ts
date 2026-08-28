@@ -46,7 +46,7 @@ export function resolvePostSalePrintTarget(input: ResolvePostSalePrintTargetInpu
 
   // Auto-impressão automática do DANFE só existe hoje pra NFC-e (página
   // local /vendas/[id]/nfce) — NF-e autorizada não abre nada aqui sozinha
-  // (o DANFE oficial é hospedado pela Focus, ver buildFocusDanfeUrl; não
+  // (o DANFE oficial é hospedado pela Focus, ver resolveFocusResourceUrl; não
   // há auto-open dele nesta fase, só o botão contextual na tela da venda).
   const autoPrintedFiscal = !!input.fiscalPrint?.autoPrint && fiscalJustAuthorized && input.fiscal?.requested === 'nfce'
 

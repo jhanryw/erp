@@ -7,6 +7,13 @@
  * Não é um mock genérico de Supabase — não tentar reaproveitar fora deste
  * escopo.
  *
+ * `findMostRecentFiscalDocument` é escopada por (company_id, sale_id,
+ * document_type, environment) — fundação homologação↔produção
+ * (202609061000_fiscal_documents_environment_scoped_authorization.sql):
+ * espelha a mesma correção feita na RPC real, onde antes o `environment`
+ * não entrava no WHERE e uma linha de homologação `authorized` era
+ * encontrada/devolvida mesmo pedindo `p_environment='producao'`.
+ *
  * ─── `.rpc('rpc_claim_fiscal_emission'/'rpc_complete_fiscal_emission'/
  *     'rpc_begin_fiscal_transmission')` ──────────────────────────────────
  *
@@ -166,9 +173,9 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
     }
   }
 
-  function findMostRecentFiscalDocument(companyId: number, saleId: number, documentType: string): FakeFiscalDocumentRow | null {
+  function findMostRecentFiscalDocument(companyId: number, saleId: number, documentType: string, environment: string): FakeFiscalDocumentRow | null {
     const rows = (tables.fiscal_documents as FakeFiscalDocumentRow[]).filter(
-      (r) => r.company_id === companyId && r.sale_id === saleId && r.document_type === documentType,
+      (r) => r.company_id === companyId && r.sale_id === saleId && r.document_type === documentType && r.environment === environment,
     )
     rows.sort((a, b) => b.id - a.id)
     return rows[0] ?? null
@@ -208,7 +215,7 @@ export function createFakeAdmin(seed: Record<string, any[]> = {}) {
     const leaseSeconds = params.p_lease_seconds ?? 60
     const documentType = params.p_document_type ?? 'nfe'
 
-    let row = findMostRecentFiscalDocument(companyId, saleId, documentType)
+    let row = findMostRecentFiscalDocument(companyId, saleId, documentType, environment)
 
     if (!row) {
       const dup = (tables.fiscal_documents as FakeFiscalDocumentRow[]).find((r) => r.provider === 'focus_nfe' && r.provider_ref === providerRef)

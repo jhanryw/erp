@@ -98,7 +98,7 @@ describe('getNfceDanfeData — caminho feliz', () => {
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.data.emitente.razaoSocial).toBe('Emitente Congelado no Snapshot LTDA')
@@ -125,7 +125,7 @@ describe('getNfceDanfeData — caminho feliz', () => {
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.total).toBe(75)
   })
@@ -142,7 +142,7 @@ describe('getNfceDanfeData — caminho feliz', () => {
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.destinatario).toBeNull()
   })
@@ -154,7 +154,7 @@ describe('getNfceDanfeData — item 10: leitura pura, nenhum efeito colateral', 
     const { client, readCalls } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const results = await Promise.all(Array.from({ length: 100 }, () => getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })))
+    const results = await Promise.all(Array.from({ length: 100 }, () => getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })))
     expect(results.every((r) => r.ok)).toBe(true)
     // Nenhuma chamada gravou nada — se tivesse, os `throw` dentro de
     // insert/update/delete/rpc já teriam derrubado o teste antes daqui.
@@ -169,7 +169,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: 999 })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: 999, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -178,7 +178,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -187,7 +187,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -196,7 +196,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -205,7 +205,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -214,7 +214,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result).toEqual({ ok: false, reason: 'not_found' })
   })
 
@@ -223,7 +223,7 @@ describe('getNfceDanfeData — item 11: isolamento multiempresa e status', () =>
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(true)
   })
 })
@@ -235,7 +235,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') expect(result.missing).toContain('access_key')
     expect(logError).toHaveBeenCalled()
@@ -246,7 +246,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') expect(result.missing).toContain('qrcode_url')
   })
@@ -256,7 +256,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') expect(result.missing).toContain('authorization_protocol')
   })
@@ -266,7 +266,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') expect(result.missing).toContain('fiscal_context_snapshot')
   })
@@ -276,7 +276,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: [] })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') expect(result.missing).toContain('fiscal_document_items')
   })
@@ -286,7 +286,7 @@ describe('getNfceDanfeData — item 8: documento autorizado com dado local incom
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(false)
     if (!result.ok && result.reason === 'incomplete') {
       expect(result.missing).toContain('number')
@@ -301,7 +301,7 @@ describe('getNfceDanfeData — item 12: ambiente vem do campo estruturado, nunca
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'producao' })
     expect(result.ok).toBe(true)
     // A URL do QR continua sendo a de homologação (dado real, não alterado)
     // — mas o campo que decide o banner é `environment`, nunca um regex na URL.
@@ -316,9 +316,41 @@ describe('getNfceDanfeData — item 12: ambiente vem do campo estruturado, nunca
     const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [doc], fiscal_document_items: items })
     ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
 
-    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID })
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
     expect(result.ok).toBe(true)
     if (result.ok) expect(result.data.fiscalDocument.environment).toBe('homologacao')
+  })
+})
+
+describe('getNfceDanfeData — fundação homologação↔produção (auditoria 2026-09-06, itens 17/18 da lista de testes)', () => {
+  it('17) mesma venda com homologação E produção autorizadas → environment=homologacao explícito carrega SÓ a de homologação, sem lançar', async () => {
+    const { sale, doc: docHomolog, items } = seedAuthorizedNfce({ docOverrides: { id: 501, environment: 'homologacao', access_key: '41190612345678000123650010000000121743484310' } })
+    const docProducao = { ...docHomolog, id: 502, environment: 'producao', access_key: '41190612345678000123650010000000121743484399' }
+    const itemsProducao = items.map((item: any) => ({ ...item, id: item.id + 100, fiscal_document_id: 502 }))
+    const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [docHomolog, docProducao], fiscal_document_items: [...items, ...itemsProducao] })
+    ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
+
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'homologacao' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.fiscalDocument.environment).toBe('homologacao')
+      expect(result.data.fiscalDocument.id).toBe(501)
+    }
+  })
+
+  it('18) mesma venda com homologação E produção autorizadas → environment=producao explícito carrega SÓ a de produção, sem lançar', async () => {
+    const { sale, doc: docHomolog, items } = seedAuthorizedNfce({ docOverrides: { id: 501, environment: 'homologacao', access_key: '41190612345678000123650010000000121743484310' } })
+    const docProducao = { ...docHomolog, id: 502, environment: 'producao', access_key: '41190612345678000123650010000000121743484399' }
+    const itemsProducao = items.map((item: any) => ({ ...item, id: item.id + 100, fiscal_document_id: 502 }))
+    const { client } = buildFakeAdmin({ sales: [sale], fiscal_documents: [docHomolog, docProducao], fiscal_document_items: [...items, ...itemsProducao] })
+    ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue(client)
+
+    const result = await getNfceDanfeData({ saleId: SALE_ID, companyId: COMPANY_ID, environment: 'producao' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data.fiscalDocument.environment).toBe('producao')
+      expect(result.data.fiscalDocument.id).toBe(502)
+    }
   })
 })
 

@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { submitNfeHomologacao, buildProviderRef } from './submitNfeHomologacao'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { submitNfeHomologacao, buildProviderRef, consultAndUpdateFiscalDocument } from './submitNfeHomologacao'
 import * as resolveModule from './resolveFocusIntegration'
 import * as loadModule from './loadSaleFiscalContext'
 import * as validateModule from './validateFiscalReadiness'
@@ -10,6 +10,7 @@ import { createFakeAdmin, mockCreateAdminClient } from './testFakeAdminClient'
 import { baseFiscalContext } from './testFixtures'
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }))
+vi.mock('@/lib/errors/log', () => ({ logError: vi.fn() }))
 
 const COMPANY_ID = 1
 const SALE_ID = 555
@@ -288,9 +289,15 @@ describe('submitNfeHomologacao — timeout/falha de rede (resultado desconhecido
 describe('submitNfeHomologacao — idempotência: retry com a mesma ref', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('provider_ref é determinístico — sempre o mesmo pra (company, sale), nunca um UUID novo', () => {
-    expect(buildProviderRef(1, 555)).toBe('qarvon-1-555-nfe')
-    expect(buildProviderRef(1, 555)).toBe(buildProviderRef(1, 555))
+  it('provider_ref é determinístico — sempre o mesmo pra (company, sale, environment), nunca um UUID novo', () => {
+    expect(buildProviderRef(1, 555, 'homologacao')).toBe('qarvon-1-555-nfe-homologacao')
+    expect(buildProviderRef(1, 555, 'homologacao')).toBe(buildProviderRef(1, 555, 'homologacao'))
+  })
+
+  it('homologação e produção NUNCA compartilham provider_ref — fundação da coexistência entre ambientes', () => {
+    expect(buildProviderRef(1, 555, 'homologacao')).toBe('qarvon-1-555-nfe-homologacao')
+    expect(buildProviderRef(1, 555, 'producao')).toBe('qarvon-1-555-nfe-producao')
+    expect(buildProviderRef(1, 555, 'homologacao')).not.toBe(buildProviderRef(1, 555, 'producao'))
   })
 
   it('issueFocusNfe é chamado com a MESMA ref em duas tentativas sequenciais após submission_error', async () => {
@@ -305,7 +312,7 @@ describe('submitNfeHomologacao — idempotência: retry com a mesma ref', () => 
     const [ref1] = issueSpy.mock.calls[0]
     const [ref2] = issueSpy.mock.calls[1]
     expect(ref1).toBe(ref2)
-    expect(ref1).toBe(buildProviderRef(COMPANY_ID, SALE_ID))
+    expect(ref1).toBe(buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'))
   })
 
   it('linha pending (resultado desconhecido) → segunda chamada CONSULTA em vez de reemitir — issueFocusNfe não é chamado de novo', async () => {
@@ -319,7 +326,7 @@ describe('submitNfeHomologacao — idempotência: retry com a mesma ref', () => 
     // #2).
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'pending',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
       submission_started_at: new Date(Date.now() - 2000).toISOString(),
     })
 
@@ -344,7 +351,7 @@ describe('submitNfeHomologacao — duplo clique / venda já autorizada', () => {
 
     fake.seedFiscalDocument({
       company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
-      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID), status: 'authorized',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'authorized',
       access_key: '24260861523225000117550010000000041006759001', number: '4', series: '1',
     })
 
@@ -386,5 +393,125 @@ describe('submitNfeHomologacao — segredo nunca aparece no resultado', () => {
 
     const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
     expect(JSON.stringify(result)).not.toContain('token-jamais-deveria-vazar')
+  })
+})
+
+describe('consultAndUpdateFiscalDocument — reconciliação nunca degrada dado local (mesmo hardening aplicado em NFC-e, venda 703)', () => {
+  beforeEach(() => { vi.clearAllMocks() })
+  afterEach(() => { vi.restoreAllMocks() })
+
+  function seedPending(fake: ReturnType<typeof createFakeAdmin>, overrides: Record<string, any> = {}) {
+    return fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao', 'nfe'),
+      status: 'pending', submission_started_at: new Date().toISOString(),
+      number: null, series: null, access_key: null, authorization_protocol: null,
+      xml_path: null, danfe_path: null, authorized_at: null,
+      ...overrides,
+    })
+  }
+
+  it('resposta autorizada sem protocolo (protocolo_nota_fiscal ausente) → status continua authorized, authorization_protocol permanece null, warning estruturado é emitido', async () => {
+    const fake = setupFake()
+    const seeded = seedPending(fake)
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({
+      status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado o uso da NF-e',
+      chave_nfe: '35260861523225000117550010000000041006759001', numero: '4', serie: '1',
+      // protocolo_nota_fiscal: AUSENTE de propósito.
+    } as any)
+
+    const result = await consultAndUpdateFiscalDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.status).toBe('authorized')
+    const persisted = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(persisted.authorization_protocol).toBeNull()
+    expect(persisted.authorized_at).toBeTruthy()
+
+    const { logError } = await import('@/lib/errors/log')
+    expect(logError).toHaveBeenCalledWith(expect.objectContaining({
+      route: expect.stringContaining('authorization_protocol ausente'),
+      context: expect.objectContaining({ fiscal_document_id: seeded.id, sale_id: SALE_ID, document_type: 'nfe' }),
+    }))
+  })
+
+  it('authorization_protocol e authorized_at já existentes nunca são degradados por uma reconciliação posterior sem protocolo', async () => {
+    const fake = setupFake()
+    const authorizedAtOriginal = '2026-08-20T10:00:00.000Z'
+    const seeded = seedPending(fake, {
+      status: 'authorized', authorization_protocol: '151260029467289', authorized_at: authorizedAtOriginal,
+      number: '4', series: '1', access_key: '35260861523225000117550010000000041006759001',
+    })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({
+      status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado o uso da NF-e',
+      chave_nfe: '35260861523225000117550010000000041006759001', numero: '4', serie: '1',
+    } as any)
+
+    const result = await consultAndUpdateFiscalDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(true)
+    const persisted = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(persisted.authorization_protocol).toBe('151260029467289')
+    expect(persisted.authorized_at).toBe(authorizedAtOriginal)
+
+    const { logError } = await import('@/lib/errors/log')
+    expect(logError).not.toHaveBeenCalledWith(expect.objectContaining({ route: expect.stringContaining('authorization_protocol ausente') }))
+  })
+
+  it('reconciliação enriquece authorization_protocol ausente sem tocar authorized_at já existente', async () => {
+    const fake = setupFake()
+    const authorizedAtOriginal = '2026-08-20T10:00:00.000Z'
+    const seeded = seedPending(fake, {
+      status: 'authorized', authorization_protocol: null, authorized_at: authorizedAtOriginal,
+      number: '4', series: '1', access_key: '35260861523225000117550010000000041006759001',
+    })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({
+      status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado o uso da NF-e',
+      chave_nfe: '35260861523225000117550010000000041006759001', numero: '4', serie: '1',
+      protocolo_nota_fiscal: { numero_protocolo: '151260029467289', status: '100' },
+    } as any)
+
+    const result = await consultAndUpdateFiscalDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(true)
+    const persisted = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(persisted.authorization_protocol).toBe('151260029467289')
+    expect(persisted.authorized_at).toBe(authorizedAtOriginal)
+  })
+
+  it('Focus confirma autorizado, mas a escrita no banco falha → resultado é FALHA (nunca status=authorized), linha no banco continua como estava antes (mesmo padrão já coberto em NFC-e, item 7 da auditoria)', async () => {
+    const fake = setupFake()
+    const seeded = seedPending(fake)
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 'tok', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({
+      status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado o uso da NF-e',
+      chave_nfe: '4'.repeat(44), numero: '1', serie: '1',
+    } as any)
+    // Simula a MESMA falha real (CHAR(44) overflow, ou qualquer outra
+    // falha de escrita) — antes da correção, isso era engolido em
+    // silêncio e a função devolvia 'authorized' mesmo assim.
+    fake.forceNextUpdateError('fiscal_documents', 'value too long for type character(44)')
+
+    const result = await consultAndUpdateFiscalDocument(seeded.id, (seeded as any).provider_ref, COMPANY_ID)
+
+    expect(result.ok).toBe(false) // NUNCA um success com status='authorized' sem persistência real
+    if (!result.ok) expect(result.error).toContain('value too long for type character(44)')
+    const rowNoBanco = fake.tables.fiscal_documents.find((r: any) => r.id === seeded.id)
+    expect(rowNoBanco.status).toBe('pending') // continua exatamente como estava — nada foi gravado
   })
 })
