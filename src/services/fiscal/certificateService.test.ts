@@ -201,7 +201,7 @@ describe('saveCsc / getCscMasked', () => {
     ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
     ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
 
-    const result = await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000001', cscToken: 'meu-token-secreto' })
+    const result = await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, environment: 'homologacao', cscId: '000001', cscToken: 'meu-token-secreto' })
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.data.local.cscId).toBe('000001')
@@ -210,30 +210,44 @@ describe('saveCsc / getCscMasked', () => {
     expect(secrets.setIntegrationSecret).toHaveBeenCalledWith(INTEGRATION_ID, COMPANY_ID, 'csc_token', 'meu-token-secreto')
   })
 
-  it('saveCsc sincroniza o par de ambiente correto — lê settings.environment da integração focus_nfe, não do cofre fiscal_certificate', async () => {
-    ;(companyIntegrations.getCompanyIntegration as any).mockImplementation((_companyId: number, provider: string) => {
-      if (provider === 'focus_nfe') return Promise.resolve({ ok: true, data: { id: 999, settings: { environment: 'producao' } } })
-      return Promise.resolve({ ok: true, data: { id: INTEGRATION_ID } }) // fiscal_certificate
-    })
+  it('saveCsc sincroniza EXATAMENTE o environment que o chamador passou — nunca infere de company_integrations.settings.environment', async () => {
+    ;(companyIntegrations.getCompanyIntegration as any).mockResolvedValue({ ok: true, data: { id: INTEGRATION_ID } })
     ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
     ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
 
-    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000002', cscToken: 'token-producao' })
+    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, environment: 'producao', cscId: '000002', cscToken: 'token-producao' })
 
     expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, {
       csc: { environment: 'producao', cscId: '000002', cscToken: 'token-producao' },
     })
   })
 
-  it('saveCsc sem environment configurado (ou fiscal_nfe ausente) → sincroniza como homologacao (default seguro)', async () => {
+  it('REGRESSÃO DO INCIDENTE REAL: environment=producao explícito sincroniza como produção MESMO quando company_integrations.settings.environment (focus_nfe) ainda está em homologacao (campo nunca atualizado, não deve mais influenciar nada aqui)', async () => {
     ;(companyIntegrations.getCompanyIntegration as any).mockImplementation((_companyId: number, provider: string) => {
-      if (provider === 'focus_nfe') return Promise.resolve({ ok: true, data: null })
-      return Promise.resolve({ ok: true, data: { id: INTEGRATION_ID } })
+      if (provider === 'focus_nfe') return Promise.resolve({ ok: true, data: { id: 999, settings: { environment: 'homologacao' } } })
+      return Promise.resolve({ ok: true, data: { id: INTEGRATION_ID } }) // fiscal_certificate
     })
     ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
     ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
 
-    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, cscId: '000003', cscToken: 'token-homolog' })
+    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, environment: 'producao', cscId: '000004', cscToken: 'token-producao-real' })
+
+    // Antes da correção, isto teria virado 'homologacao' (achado real:
+    // CSC de produção sincronizado como se fosse homologação na Focus).
+    expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, {
+      csc: { environment: 'producao', cscId: '000004', cscToken: 'token-producao-real' },
+    })
+    // Nunca consulta a integração focus_nfe pra decidir ambiente — só o
+    // parâmetro explícito importa agora.
+    expect(companyIntegrations.getCompanyIntegration).not.toHaveBeenCalledWith(COMPANY_ID, 'focus_nfe')
+  })
+
+  it('saveCsc com environment=homologacao explícito sincroniza como homologação, independente de qualquer config', async () => {
+    ;(companyIntegrations.getCompanyIntegration as any).mockResolvedValue({ ok: true, data: { id: INTEGRATION_ID } })
+    ;(secrets.setIntegrationSecret as any).mockResolvedValue({ ok: true, data: undefined })
+    ;(createAdminClient as any).mockReturnValue(buildFakeAdmin({ cnpj: null }))
+
+    await saveCsc({ companyId: COMPANY_ID, userId: USER_ID, environment: 'homologacao', cscId: '000003', cscToken: 'token-homolog' })
 
     expect(focusEmpresaModule.syncFocusEmpresa).toHaveBeenCalledWith(COMPANY_ID, {
       csc: { environment: 'homologacao', cscId: '000003', cscToken: 'token-homolog' },

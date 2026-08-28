@@ -243,13 +243,27 @@ export async function validateStoredCertificate(companyId: number): Promise<Serv
  * cofre do certificado (`integration_secrets`, key='csc_token') — nunca
  * retornado integralmente depois de salvo (a rota GET só devolve os
  * últimos 4 caracteres mascarados, ver `getCscMasked`).
+ *
+ * `environment` é OBRIGATÓRIO, sem default e vem SEMPRE explicitamente de
+ * quem chama (a UI exige a escolha) — ACHADO REAL (incidente de produção):
+ * a versão anterior desta função INFERIA o ambiente de
+ * `company_integrations.settings.environment` (provider='focus_nfe'), um
+ * campo que representa o ambiente de EMISSÃO ATIVO, nunca atualizado
+ * depois da criação da integração (confirmado em
+ * `focusCredentials.service.ts`: fica em 'homologacao' pra sempre, a
+ * menos que a linha seja recriada). Um admin cadastrou o CSC de PRODUÇÃO
+ * pela UI, mas como esse campo nunca tinha sido virado pra 'producao', a
+ * função sincronizou como se fosse HOMOLOGAÇÃO — sobrescrevendo o par de
+ * homologação real da empresa na Focus com os valores de produção. Nunca
+ * mais infere: o ambiente sincronizado é exatamente o que o admin
+ * escolheu nesta chamada, ponto.
  */
 export interface SaveCscResult {
   local: { cscId: string }
   focus: FocusSyncOutcome
 }
 
-export async function saveCsc(params: { companyId: number; userId: string; cscId: string; cscToken: string }): Promise<ServiceOutcome<SaveCscResult>> {
+export async function saveCsc(params: { companyId: number; userId: string; environment: 'homologacao' | 'producao'; cscId: string; cscToken: string }): Promise<ServiceOutcome<SaveCscResult>> {
   const vault = await getOrCreateCertificateVault(params.companyId, params.userId)
   if (!vault.ok) return failure(vault.error, vault.status)
 
@@ -265,15 +279,10 @@ export async function saveCsc(params: { companyId: number; userId: string; cscId
   if (error) return failure(error.message)
 
   // O CSC é POR AMBIENTE na Focus (dois pares simultâneos na mesma
-  // empresa) — o ambiente sincronizado é sempre o de EMISSÃO configurado
-  // hoje (`company_integrations` provider='focus_nfe'), nunca o vault
-  // 'fiscal_certificate' usado só pra guardar o segredo localmente.
-  const focusIntegration = await getCompanyIntegration(params.companyId, 'focus_nfe')
-  const environment: 'homologacao' | 'producao' =
-    focusIntegration.ok && focusIntegration.data?.settings?.environment === 'producao' ? 'producao' : 'homologacao'
-
+  // empresa) — `params.environment` decide qual par recebe o valor, nunca
+  // os dois, nunca uma suposição.
   const focusResult = await syncFocusEmpresa(params.companyId, {
-    csc: { environment, cscId: params.cscId, cscToken: params.cscToken },
+    csc: { environment: params.environment, cscId: params.cscId, cscToken: params.cscToken },
   })
 
   return success({ local: { cscId: params.cscId }, focus: toFocusSyncOutcome(focusResult) })

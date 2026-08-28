@@ -3,6 +3,14 @@
 /**
  * CSC (Código de Segurança do Contribuinte) — seção 28/54 do pedido.
  * Token nunca reaparece completo depois de salvo — só mascarado.
+ *
+ * `formEnvironment` — ACHADO REAL (incidente de produção): antes desta
+ * revisão não existia nenhuma escolha de ambiente aqui — o backend
+ * inferia (errado) de um campo de config não relacionado, e um CSC de
+ * PRODUÇÃO acabou sincronizado como homologação na Focus. Agora é
+ * obrigatório escolher explicitamente ANTES de salvar — começa vazio de
+ * propósito, nunca pré-selecionado em 'homologacao' (nunca um default
+ * silencioso pro ambiente errado).
  */
 
 import { useEffect, useState } from 'react'
@@ -11,11 +19,14 @@ import { Loader2 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
+type CscEnvironment = 'homologacao' | 'producao'
+
 export function CscManager() {
   const [cscId, setCscId] = useState<string | null>(null)
   const [tokenMasked, setTokenMasked] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
+  const [formEnvironment, setFormEnvironment] = useState<CscEnvironment | ''>('')
   const [formCscId, setFormCscId] = useState('')
   const [formToken, setFormToken] = useState('')
   const [saving, setSaving] = useState(false)
@@ -33,13 +44,14 @@ export function CscManager() {
 
   async function save(e: React.FormEvent) {
     e.preventDefault()
+    if (!formEnvironment) { toast.error('Selecione o ambiente (homologação ou produção) antes de salvar.'); return }
     if (!formCscId.trim() || !formToken.trim()) { toast.error('Informe CSC ID e CSC Token.'); return }
     setSaving(true)
     try {
       const res = await fetch('/api/configuracoes/fiscal/csc', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ csc_id: formCscId.trim(), csc_token: formToken.trim() }),
+        body: JSON.stringify({ environment: formEnvironment, csc_id: formCscId.trim(), csc_token: formToken.trim() }),
       })
       const json = await res.json()
       if (!res.ok) {
@@ -48,13 +60,14 @@ export function CscManager() {
       }
       // Local e Focus são reportados SEPARADAMENTE — salvar localmente
       // nunca implica "sincronizado e pronto para emitir NFC-e".
+      const envLabel = formEnvironment === 'producao' ? 'produção' : 'homologação'
       toast.success('CSC salvo localmente.')
       if (json.focus?.status === 'success') {
-        toast.success('CSC sincronizado com a Focus.')
+        toast.success(`CSC (${envLabel}) sincronizado com a Focus.`)
       } else {
-        toast.error('Falha ao sincronizar CSC com a Focus', { description: json.focus?.lastError ?? undefined })
+        toast.error(`Falha ao sincronizar CSC (${envLabel}) com a Focus`, { description: json.focus?.lastError ?? undefined })
       }
-      setFormCscId(''); setFormToken(''); setShowForm(false)
+      setFormEnvironment(''); setFormCscId(''); setFormToken(''); setShowForm(false)
       load()
     } catch {
       toast.error('Erro inesperado ao salvar CSC.')
@@ -83,6 +96,20 @@ export function CscManager() {
 
       {showForm && (
         <form onSubmit={save} className="space-y-2 pt-2 border-t border-border">
+          <div>
+            <label className="text-xs text-text-secondary block mb-1">Ambiente</label>
+            {/* Sem opção pré-selecionada de propósito — o admin precisa
+                escolher explicitamente. Nunca assuma homologação. */}
+            <select
+              value={formEnvironment}
+              onChange={(e) => setFormEnvironment(e.target.value as CscEnvironment | '')}
+              className="text-xs w-full px-2 py-1.5 rounded-md border border-border bg-bg-card"
+            >
+              <option value="" disabled>Selecione...</option>
+              <option value="homologacao">Homologação</option>
+              <option value="producao">Produção</option>
+            </select>
+          </div>
           <div>
             <label className="text-xs text-text-secondary block mb-1">CSC ID</label>
             <input
