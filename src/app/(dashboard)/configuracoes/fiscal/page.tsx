@@ -1,6 +1,6 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import Link from 'next/link'
-import { ArrowLeft, Receipt, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Receipt, CheckCircle2, XCircle, AlertTriangle, Info } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { TestFocusConnectionButton } from '@/components/fiscal/TestFocusConnectionButton'
@@ -25,10 +25,20 @@ function syncDetail(entry: { status: 'success' | 'error'; lastSyncAt: string; la
   return `Falha ao sincronizar (${new Date(entry.lastSyncAt).toLocaleString('pt-BR')}): ${entry.lastError ?? 'erro desconhecido'}`
 }
 
-function StatusRow({ ok, label, detail }: { ok: boolean; label: string; detail?: string }) {
+/**
+ * `ok: null` — estado NEUTRO/informativo (nem positivo nem erro). Usado
+ * quando "não configurado localmente" não significa "não pronto pra
+ * emitir" (ex.: certificado/CSC — a Focus pode já ter essas credenciais
+ * no cadastro remoto do emitente; ver certificate/csc abaixo). Nunca usar
+ * `false` só porque um recurso OPCIONAL está ausente — `false` continua
+ * reservado pra erro real (ex.: certificado expirado).
+ */
+function StatusRow({ ok, label, detail }: { ok: boolean | null; label: string; detail?: string }) {
   return (
     <div className="flex items-start gap-3 py-2">
-      {ok ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />}
+      {ok === true ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+        : ok === false ? <XCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+        : <Info className="w-4 h-4 text-text-muted shrink-0 mt-0.5" />}
       <div>
         <p className="text-sm text-text-primary">{label}</p>
         {detail && <p className="text-xs text-text-muted mt-0.5">{detail}</p>}
@@ -100,19 +110,19 @@ export default async function ConfigFiscalPage() {
               label="Emissão de NFC-e habilitada"
             />
             <StatusRow
-              ok={result.data.certificate.configured}
+              ok={result.data.certificate.configured ? true : null}
               label="Certificado digital configurado"
               detail={
                 result.data.certificate.status === 'expired' ? 'Certificado expirado — envie um novo.'
                 : result.data.certificate.expiringSoon ? `Expira em ${result.data.certificate.daysUntilExpiry} dia(s) — providencie a renovação.`
-                : !result.data.certificate.configured ? 'Nenhum certificado enviado ainda (ver seção abaixo).'
+                : !result.data.certificate.configured ? 'Não configurado localmente. Isso não impede a emissão via Focus se o certificado já estiver cadastrado no emitente remoto. Configure aqui apenas para armazenar/sincronizar pelo Qarvon.'
                 : undefined
               }
             />
             <StatusRow
-              ok={result.data.csc.configured}
+              ok={result.data.csc.configured ? true : null}
               label="CSC configurado"
-              detail={result.data.csc.configured ? undefined : 'Necessário para NFC-e (ver seção abaixo).'}
+              detail={result.data.csc.configured ? undefined : 'Não configurado localmente. Isso não impede a emissão via Focus se o CSC e o ID Token já estiverem cadastrados no emitente remoto. Configure aqui apenas para armazenar/sincronizar pelo Qarvon.'}
             />
           </Card>
 
