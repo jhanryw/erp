@@ -64,7 +64,7 @@ export default async function ConfigFiscalPage() {
           <Receipt className="w-5 h-5 text-brand" />
           <div>
             <h2 className="text-lg font-semibold text-text-primary">Fiscal</h2>
-            <p className="text-sm text-text-muted">Fundação da emissão de NF-e via Focus NFe (homologação)</p>
+            <p className="text-sm text-text-muted">Emissão de NF-e/NFC-e via Focus NFe</p>
           </div>
         </div>
       </div>
@@ -80,8 +80,20 @@ export default async function ConfigFiscalPage() {
               <AlertTriangle className="w-4 h-4 text-amber-500" />
               <p className="text-sm font-semibold text-text-primary">Ambiente: {result.data.environment}</p>
             </div>
+            {/* Ambiente-aware (achado real, auditoria go-live 2026-08-28):
+                este texto dizia incondicionalmente "nesta fase, apenas
+                homologação é suportada — nenhuma nota é emitida em
+                produção", residual de antes dos gates de produção serem
+                abertos (NFC-e/NF-e) — desde então, `result.data.environment`
+                já podia ser 'producao' de verdade e o card mostrava as duas
+                afirmações lado a lado se contradizendo. `nfe_environment`
+                (fonte de `result.data.environment`, ver health.service.ts)
+                é o mesmo valor real que os serviços de emissão usam —
+                nunca um literal fixo aqui. */}
             <p className="text-xs text-text-muted">
-              Nesta fase, apenas homologação é suportada — nenhuma nota é emitida em produção por esta fundação.
+              {result.data.environment === 'producao'
+                ? 'Ambiente configurado é produção — notas emitidas por esta fundação têm validade fiscal real.'
+                : 'Ambiente configurado é homologação — notas emitidas por esta fundação são só de teste, sem validade fiscal.'}
             </p>
           </Card>
 
