@@ -4,7 +4,7 @@ import { getUserProfile } from '@/lib/auth/getProfile'
 import { logQueryError } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Package, Truck, Printer, Pencil } from 'lucide-react'
+import { ArrowLeft, Package, Truck, Printer, Pencil, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { SaleStatusBadge } from '@/components/ui/badge'
@@ -16,7 +16,7 @@ import { formatDate } from '@/lib/utils/date'
 import { cn } from '@/lib/utils/cn'
 import { ReturnButton } from './_components/return-button'
 import { CancelSaleButton } from './_components/cancel-sale-button'
-import { DocumentoFiscalCard, type InitialFiscalDocument } from './_components/documento-fiscal-card'
+import { DocumentoFiscalCard, EnvironmentBadge, type InitialFiscalDocument } from './_components/documento-fiscal-card'
 import { resolveFiscalDocumentType, describeFiscalDocumentTypeBlockReason } from '@/lib/fiscal/resolveFiscalDocumentType'
 import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { validateCPF, maskCPF } from '@/lib/utils/cpf'
@@ -329,22 +329,40 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   const nfeEnvironment: 'homologacao' | 'producao' = fiscalSettingsRow?.nfe_environment === 'producao' ? 'producao' : 'homologacao'
   const nfceEnvironment: 'homologacao' | 'producao' = fiscalSettingsRow?.nfce_environment === 'producao' ? 'producao' : 'homologacao'
 
-  // Regra definitiva de impressão/QR Code: o botão principal de impressão
-  // reflete o estado REAL do documento fiscal, nunca um "Imprimir
-  // Comprovante" genérico quando já existe NF-e/NFC-e autorizada — MAS só
-  // quando autorizada EM PRODUÇÃO (mesma regra de
-  // findAuthorizedFiscalDocument/comprovante/page.tsx). Homologação é só
-  // teste, sem valor fiscal — nunca troca o botão nem esconde o
-  // comprovante. `status === 'authorized'` sozinho nunca basta.
-  const authorizedNfce = sale.fiscalDocuments?.nfce?.status === 'authorized' && sale.fiscalDocuments.nfce?.environment === 'producao' ? sale.fiscalDocuments.nfce : null
-  const authorizedNfe = sale.fiscalDocuments?.nfe?.status === 'authorized' && sale.fiscalDocuments.nfe?.environment === 'producao' ? sale.fiscalDocuments.nfe : null
-  const nfeDanfeUrl = authorizedNfe ? resolveFocusResourceUrl({ path: authorizedNfe.danfe_path, environment: authorizedNfe.environment }) : null
+  // Simplificação da arquitetura de impressão (decisão pós-testes reais de
+  // emissão): o botão principal de impressão SEMPRE abre o DANFE OFICIAL
+  // da Focus (`danfe_path`, resolvido exclusivamente por
+  // resolveFocusResourceUrl) pra qualquer documento AUTORIZADO — NFC-e ou
+  // NF-e, homologação OU produção (a Focus já emite um DANFE válido em
+  // homologação, só sem valor fiscal — por isso o badge de ambiente ao
+  // lado do botão). `/vendas/[id]/nfce` (DANFE local) NUNCA é mais o
+  // destino padrão daqui — continua existindo só como fallback/debug (ver
+  // documento-fiscal-card.tsx). Autorizado sem `danfe_path` válido → erro
+  // explícito, nunca cai silenciosamente pro comprovante.
+  //
+  // IMPORTANTE — este é um botão OPERACIONAL (equipe da loja decide o que
+  // imprimir/conferir), diferente da regra de `comprovante/page.tsx` (que
+  // decide se o QR interno do CLIENTE desaparece — essa, sim, continua
+  // scoped a `environment === 'producao'`, ver findAuthorizedFiscalDocument
+  // e o comentário completo naquele arquivo). As duas regras NÃO precisam
+  // concordar: o operador pode querer abrir/conferir um DANFE de teste
+  // aqui, sem que isso mude o que o cliente recebe como comprovante oficial.
+  const authorizedNfce = sale.fiscalDocuments?.nfce?.status === 'authorized' ? sale.fiscalDocuments.nfce : null
+  const authorizedNfe = sale.fiscalDocuments?.nfe?.status === 'authorized' ? sale.fiscalDocuments.nfe : null
+  const authorizedDoc = authorizedNfce ?? authorizedNfe
+  const authorizedDocLabel = authorizedNfce ? 'NFC-e' : 'NF-e'
+  const focusDanfeUrl = authorizedDoc ? resolveFocusResourceUrl({ path: authorizedDoc.danfe_path, environment: authorizedDoc.environment }) : null
 
-  const printAction = authorizedNfce
-    ? { label: 'Imprimir DANFE NFC-e', href: `/vendas/${sale.id}/nfce?environment=producao`, external: false }
-    : authorizedNfe && nfeDanfeUrl
-      ? { label: 'Abrir DANFE NF-e', href: nfeDanfeUrl, external: true }
-      : { label: 'Imprimir Comprovante', href: `/vendas/${sale.id}/comprovante`, external: false }
+  type PrintAction =
+    | { kind: 'comprovante' }
+    | { kind: 'focus_danfe'; href: string; label: string; environment: 'homologacao' | 'producao' }
+    | { kind: 'missing_danfe'; label: string }
+
+  const printAction: PrintAction = !authorizedDoc
+    ? { kind: 'comprovante' }
+    : focusDanfeUrl
+      ? { kind: 'focus_danfe', href: focusDanfeUrl, label: authorizedDocLabel, environment: authorizedDoc.environment }
+      : { kind: 'missing_danfe', label: authorizedDocLabel }
 
   return (
     <div className="space-y-5 max-w-4xl">
@@ -413,20 +431,33 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
               o documento fiscal AUTORIZADO mais recente desta venda, se
               houver — nunca "Imprimir Comprovante" quando já existe NF-e/
               NFC-e pronta pra ser o documento oficial (ver printAction acima). */}
-          {printAction.external ? (
-            <a href={printAction.href} target="_blank" rel="noopener noreferrer">
+          {printAction.kind === 'comprovante' && (
+            <Link href={`/vendas/${sale.id}/comprovante`} target="_blank">
               <Button variant="outline" size="sm">
                 <Printer className="w-3.5 h-3.5 mr-1.5" />
-                {printAction.label}
-              </Button>
-            </a>
-          ) : (
-            <Link href={printAction.href} target="_blank">
-              <Button variant="outline" size="sm">
-                <Printer className="w-3.5 h-3.5 mr-1.5" />
-                {printAction.label}
+                Imprimir Comprovante
               </Button>
             </Link>
+          )}
+          {printAction.kind === 'focus_danfe' && (
+            <div className="flex items-center gap-1.5">
+              <a href={printAction.href} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm">
+                  <Printer className="w-3.5 h-3.5 mr-1.5" />
+                  Abrir DANFE {printAction.label} (Focus)
+                </Button>
+              </a>
+              {printAction.environment !== 'producao' && <EnvironmentBadge environment={printAction.environment} />}
+            </div>
+          )}
+          {printAction.kind === 'missing_danfe' && (
+            <span
+              className="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400 border border-red-500/30 rounded-md px-3 py-1.5"
+              title="Documento fiscal autorizado, mas o link do DANFE da Focus ainda não foi salvo localmente."
+            >
+              <AlertTriangle className="w-3.5 h-3.5" />
+              DANFE {printAction.label} indisponível
+            </span>
           )}
           {canExchange && (
             <Link href={`/vendas/${sale.id}/troca`}>

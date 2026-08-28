@@ -16,6 +16,7 @@ import { useDebounce } from '@/hooks/useDebounce'
 import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
 import { createAutoPrintController } from '@/lib/sales/autoPrintTab'
 import { resolvePostSalePrintTarget } from '@/lib/sales/resolvePostSalePrintTarget'
+import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
 import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
 import { resolveFiscalDocumentType } from '@/lib/fiscal/resolveFiscalDocumentType'
@@ -601,13 +602,24 @@ export default function NovaVendaPage() {
       // Motor Fiscal Configurável — resultado da emissão (se alguma foi
       // tentada). Sempre INFORMATIVO, nunca bloqueia a navegação — a venda
       // já foi criada com sucesso independente do resultado fiscal.
-      const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null } | undefined
+      const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null; danfe_path?: string | null; environment?: 'homologacao' | 'producao' | null } | undefined
       const fiscalPrint = json.fiscalPrint as { autoPrint: boolean; printNonFiscalReceipt: boolean } | undefined
       // Regra definitiva de impressão/QR Code — precedência (documento
       // fiscal recém-autorizado sempre vence sobre o comprovante não
       // fiscal) extraída pra função pura testável, ver resolvePostSalePrintTarget.ts.
-      const printTarget = resolvePostSalePrintTarget({ saleId: sale.id, fiscal, fiscalPrint })
+      // Simplificação da arquitetura de impressão (pós-testes reais): o
+      // destino agora é sempre o DANFE OFICIAL da Focus (nunca mais
+      // /vendas/[id]/nfce) — ver resolvePostSalePrintTarget.ts. `environment`
+      // é o ambiente REAL do documento (`fiscal.environment`, vindo de
+      // `fiscal_documents.environment` via executeFiscalPolicy) — nunca um
+      // literal fixo aqui.
+      const printTarget = resolvePostSalePrintTarget({
+        saleId: sale.id,
+        fiscal: fiscal ? { status: fiscal.status, requested: fiscal.requested, danfePath: fiscal.danfe_path ?? null, environment: fiscal.environment ?? null } : undefined,
+        fiscalPrint,
+      })
       const autoPrintedFiscal = printTarget.reason === 'fiscal_authorized'
+      const missingDanfe = printTarget.reason === 'fiscal_authorized_missing_danfe'
       if (fiscal) {
         const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
         if (fiscal.status === 'authorized') {
@@ -622,12 +634,30 @@ export default function NovaVendaPage() {
           // mesmo tempo. Se a política não mandar imprimir automaticamente,
           // o botão de ação no toast cobre o caso (1 clique, GET puro,
           // nunca reemite — ver getNfceDanfeData.ts).
-          toast.success(
-            autoPrintedFiscal ? `${label} autorizada! Imprimindo DANFE...` : `${label} autorizada!`,
-            !autoPrintedFiscal && fiscal.requested === 'nfce' ? {
-              action: { label: 'Imprimir DANFE', onClick: () => window.open(`/vendas/${sale.id}/nfce`, '_blank') },
-            } : undefined,
-          )
+          //
+          // `fiscal.environment` é o ambiente REAL do documento
+          // (`fiscal_documents.environment`) — nunca um literal fixo. Sem
+          // ambiente real conhecido (não deveria acontecer pra um
+          // documento autorizado), nunca assume 'homologacao' — só não
+          // oferece o botão de ação (mesmo tratamento de danfe_path ausente).
+          const focusDanfeUrl = fiscal.environment
+            ? resolveFocusResourceUrl({ path: fiscal.danfe_path ?? null, environment: fiscal.environment })
+            : null
+          if (missingDanfe) {
+            // Nunca finge que está tudo certo nem oferece um botão que
+            // levaria a lugar nenhum — autorizado é fato (SEFAZ confirmou),
+            // só o link local do DANFE ainda não chegou.
+            toast.warning(`${label} autorizada — DANFE da Focus ainda não disponível`, {
+              description: 'Consulte a tela da venda em alguns instantes ou use "Verificar status".',
+            })
+          } else {
+            toast.success(
+              autoPrintedFiscal ? `${label} autorizada! Abrindo DANFE...` : `${label} autorizada!`,
+              !autoPrintedFiscal && focusDanfeUrl ? {
+                action: { label: 'Abrir DANFE', onClick: () => window.open(focusDanfeUrl, '_blank') },
+              } : undefined,
+            )
+          }
         } else if (fiscal.status === 'pending') {
           toast.info(`${label} enviada — processando na SEFAZ`, { description: 'Acompanhe o status na tela da venda.' })
         } else {

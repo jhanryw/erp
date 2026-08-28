@@ -428,6 +428,7 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'validation_failed',
       fiscalContextSnapshot: context,
       submissionErrorCode: 'local_validation_failed',
@@ -450,6 +451,7 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'validation_failed',
       fiscalContextSnapshot: context,
       submissionErrorCode: 'local_build_failed',
@@ -496,6 +498,7 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status,
       providerPayload: response,
       statusSefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
@@ -580,6 +583,7 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
       const updated = await completeFiscalEmission(admin, {
         fiscalDocumentId,
         claimToken,
+        environment: configuredEnvironment,
         status: 'submission_error',
         submissionErrorCode: err.codigo ?? String(err.httpStatus),
         submissionErrorMessage: err.mensagem ?? err.message,
@@ -592,6 +596,7 @@ export async function submitNfceHomologacao(saleId: number, companyId: number): 
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'pending',
       statusMessage: `Resultado desconhecido após falha de transmissão: ${message}`,
     })

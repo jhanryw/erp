@@ -20,6 +20,7 @@ import { upsertSaleRecipient } from './upsertSaleRecipient'
 import { submitNfeHomologacao } from './submitNfeHomologacao'
 import { submitNfceHomologacao } from './submitNfceHomologacao'
 import type { FiscalOperationDecision } from '@/lib/fiscal/resolveFiscalOperationDecision'
+import type { FocusEnvironment } from '@/lib/integrations/focus/types'
 
 export interface FiscalEmissionResult {
   requested: 'nfce' | 'nfe'
@@ -27,6 +28,17 @@ export interface FiscalEmissionResult {
   reason: string | null
   fiscal_document_id: number | null
   validation_errors: { code: string; message: string }[]
+  /** Caminho RELATIVO do DANFE da Focus (`emission.data.danfePath`) — só presente quando `status === 'authorized'` e a Focus já persistiu o link. Usado por resolvePostSalePrintTarget pra abrir o DANFE oficial em vez do comprovante. */
+  danfe_path: string | null
+  /**
+   * Ambiente REAL do documento (`emission.data.environment` —
+   * `fiscal_documents.environment`, nunca um literal fixo). `null` só nos
+   * ramos onde a emissão nem chegou a rodar de fato (falha de API antes
+   * de `emission.data` existir, ou bloqueio de elegibilidade/config) —
+   * nesses casos `status` nunca é `'authorized'`, então
+   * `resolvePostSalePrintTarget` nunca precisa deste campo ali.
+   */
+  environment: FocusEnvironment | null
 }
 
 export interface ExecuteFiscalPolicyResult {
@@ -60,13 +72,13 @@ export async function executeFiscalPolicy(params: {
 
       return {
         fiscalResult: emission.ok
-          ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors }
-          : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [] },
+          ? { requested, status: emission.data.status, reason: null, fiscal_document_id: emission.data.fiscalDocumentId, validation_errors: emission.data.validationErrors, danfe_path: emission.data.danfePath, environment: emission.data.environment }
+          : { requested, status: 'error', reason: emission.error, fiscal_document_id: null, validation_errors: [], danfe_path: null, environment: null },
       }
     } catch (fiscalErr) {
       logError({ route: 'executeFiscalPolicy (fiscal emission)', err: fiscalErr, context: { sale_id: saleId, requested } })
       return {
-        fiscalResult: { requested, status: 'error', reason: 'Erro inesperado ao tentar emitir — tente novamente na tela da venda.', fiscal_document_id: null, validation_errors: [] },
+        fiscalResult: { requested, status: 'error', reason: 'Erro inesperado ao tentar emitir — tente novamente na tela da venda.', fiscal_document_id: null, validation_errors: [], danfe_path: null, environment: null },
       }
     }
   }
@@ -79,7 +91,7 @@ export async function executeFiscalPolicy(params: {
     return {
       fiscalResult: {
         requested: 'nfce', status: decision.status, reason: decision.reason,
-        fiscal_document_id: null, validation_errors: [],
+        fiscal_document_id: null, validation_errors: [], danfe_path: null, environment: null,
       },
     }
   }

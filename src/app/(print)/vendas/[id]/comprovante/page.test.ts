@@ -127,14 +127,15 @@ describe('comprovante (impressão interna) — regra definitiva de impressão/QR
     expect(SOURCE).toMatch(/findAuthorizedFiscalDocument\(\{\s*saleId,\s*companyId:\s*profile\.company_id,\s*environment:\s*'producao'\s*\}\)/)
   })
 
-  it('NFC-e autorizada EM PRODUÇÃO redireciona pra /vendas/[id]/nfce, nunca renderiza o comprovante', () => {
-    expect(SOURCE).toMatch(/officialDoc\?\.documentType === 'nfce'/)
-    expect(SOURCE).toMatch(/redirect\(`\/vendas\/\$\{saleId\}\/nfce`\)/)
+  it('NFC-e OU NF-e autorizada EM PRODUÇÃO usa resolveFocusResourceUrl (nunca aceita danfe_path bruto/arbitrário, nunca mais redireciona pro DANFE local)', () => {
+    expect(SOURCE).toMatch(/officialDoc\?\.documentType === 'nfce' \|\| officialDoc\?\.documentType === 'nfe'/)
+    expect(SOURCE).toMatch(/resolveFocusResourceUrl\(\{ path: officialDoc\.danfePath, environment: officialDoc\.environment \}\)/)
+    expect(SOURCE).not.toMatch(/redirect\(`\/vendas\/\$\{saleId\}\/nfce`\)/)
   })
 
-  it('NF-e autorizada EM PRODUÇÃO usa resolveFocusResourceUrl (nunca aceita danfe_path bruto/arbitrário)', () => {
-    expect(SOURCE).toMatch(/officialDoc\?\.documentType === 'nfe'/)
-    expect(SOURCE).toMatch(/resolveFocusResourceUrl\(\{ path: officialDoc\.danfePath, environment: officialDoc\.environment \}\)/)
+  it('autorizado (qualquer tipo) sem danfe_path válido → estado de erro explícito, nunca cai pro comprovante silenciosamente', () => {
+    expect(SOURCE).toMatch(/DANFE ainda não disponível/)
+    expect(SOURCE).toMatch(/const label = officialDoc\.documentType === 'nfce' \? 'NFC-e' : 'NF-e'/)
   })
 
   it('nunca redireciona pra uma URL vinda direto do request/cliente — só pro que resolveFocusResourceUrl devolveu', () => {

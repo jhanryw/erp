@@ -13,16 +13,20 @@
 // pra essa checagem — nunca pra montar o comprovante em si (o corpo
 // continua vindo 100% de `getReceiptForSalePrint`, que nunca lê
 // fiscal_documents/Focus/resolveFiscalDocumentType) — e:
-//   - NFC-e autorizada EM PRODUÇÃO → redireciona pra /vendas/[id]/nfce
-//     (DANFE local; a própria página mostra o badge de ambiente).
-//   - NF-e autorizada EM PRODUÇÃO  → redireciona pro danfe_path oficial da
-//     Focus (`resolveFocusResourceUrl` — nunca aceita URL arbitrária, só o
-//     caminho já persistido em fiscal_documents pelo nosso próprio
-//     serviço de emissão).
+//   - NFC-e OU NF-e autorizada EM PRODUÇÃO → redireciona pro danfe_path
+//     OFICIAL da Focus (`resolveFocusResourceUrl` — nunca aceita URL
+//     arbitrária, só o caminho já persistido em fiscal_documents pelo
+//     nosso próprio serviço de emissão). Simplificação da arquitetura de
+//     impressão (pós-testes reais de emissão, decisão do usuário): a
+//     Focus já gera um DANFE fiscal adequado — `/vendas/[id]/nfce` (DANFE
+//     local) NUNCA é mais o destino aqui, nem pra NFC-e.
+//   - Autorizado (qualquer tipo) mas sem danfe_path válido ainda → estado
+//     de erro explícito, nunca cai silenciosamente pro comprovante.
 //   - Só homologação autorizada (ou nenhum documento) → comprovante não
 //     fiscal normal, com QR interno Qarvon. O DANFE de homologação
-//     continua acessível explicitamente via /vendas/[id]/nfce pra
-//     debug/teste — só não é usado como substituto automático aqui.
+//     continua acessível explicitamente via /vendas/[id]/nfce (fallback/
+//     debug) ou pelo botão "Abrir DANFE (Focus)" na tela da venda — só não
+//     é usado como substituto automático aqui.
 //
 // Não existe hoje nenhuma configuração de "política de troca" armazenada no
 // ERP (grep confirma — nenhuma tabela/coluna do tipo politica_troca/
@@ -94,24 +98,25 @@ export default async function ComprovantePage({ params }: { params: { id: string
   // quando já existe documento oficial.
   const officialDoc = await findAuthorizedFiscalDocument({ saleId, companyId: profile.company_id, environment: 'producao' })
 
-  if (officialDoc?.documentType === 'nfce') {
-    redirect(`/vendas/${saleId}/nfce`)
-  }
-
-  if (officialDoc?.documentType === 'nfe') {
+  if (officialDoc?.documentType === 'nfce' || officialDoc?.documentType === 'nfe') {
+    // Simplificação da arquitetura de impressão (pós-testes reais de
+    // emissão): o DANFE OFICIAL da Focus é o destino pra QUALQUER
+    // documento autorizado em produção — NFC-e e NF-e, mesma regra,
+    // nunca mais `/vendas/[id]/nfce` (DANFE local) aqui.
     const danfeUrl = resolveFocusResourceUrl({ path: officialDoc.danfePath, environment: officialDoc.environment })
     if (danfeUrl) redirect(danfeUrl)
 
-    // NF-e autorizada mas sem danfe_path válido ainda persistido — nunca
-    // cai de volta pro comprovante não fiscal (mostraria o QR interno
-    // indevidamente); comunica o operador em vez disso, mesmo padrão de
-    // "nunca renderiza algo que pareça válido sem sê-lo" já usado em
-    // /vendas/[id]/nfce/page.tsx.
+    // Autorizado mas sem danfe_path válido ainda persistido — nunca cai
+    // de volta pro comprovante não fiscal (mostraria o QR interno
+    // indevidamente, como se a venda não tivesse documento oficial);
+    // comunica o operador em vez disso, mesmo padrão de "nunca renderiza
+    // algo que pareça válido sem sê-lo" já usado em /vendas/[id]/nfce/page.tsx.
+    const label = officialDoc.documentType === 'nfce' ? 'NFC-e' : 'NF-e'
     return (
       <div style={{ fontFamily: 'sans-serif', padding: 24, maxWidth: 480, margin: '0 auto' }}>
-        <h1 style={{ fontSize: 16, fontWeight: 700, color: '#b91c1c' }}>NF-e autorizada — DANFE ainda não disponível</h1>
+        <h1 style={{ fontSize: 16, fontWeight: 700, color: '#b91c1c' }}>{label} autorizada — DANFE ainda não disponível</h1>
         <p style={{ fontSize: 13, color: '#555', marginTop: 8 }}>
-          Esta venda já tem NF-e autorizada pela SEFAZ, mas o link do DANFE ainda não foi salvo localmente. Consulte a
+          Esta venda já tem {label} autorizada pela SEFAZ, mas o link do DANFE ainda não foi salvo localmente. Consulte a
           tela da venda em alguns instantes.
         </p>
         <Link href={`/vendas/${saleId}`} style={{ fontSize: 13, color: '#2563eb', display: 'inline-block', marginTop: 12 }}>

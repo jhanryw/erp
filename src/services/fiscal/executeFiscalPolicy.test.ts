@@ -21,11 +21,20 @@ beforeEach(() => vi.clearAllMocks())
 
 describe('executeFiscalPolicy — decision.attempt define QUAL emissão chamar', () => {
   it('attempt=nfce → chama submitNfceHomologacao, nunca submitNfeHomologacao', async () => {
-    ;(submitNfceHomologacao as any).mockResolvedValue({ ok: true, data: { status: 'authorized', fiscalDocumentId: 501, validationErrors: [] } })
+    ;(submitNfceHomologacao as any).mockResolvedValue({ ok: true, data: { status: 'authorized', fiscalDocumentId: 501, validationErrors: [], danfePath: '/notas_fiscais_consumidor/NFe123.html', environment: 'homologacao' } })
     const result = await executeFiscalPolicy({ saleId: 1, companyId: 1, decision: decision({ attempt: 'nfce', status: 'emission_pending' }) })
     expect(submitNfceHomologacao).toHaveBeenCalledWith(1, 1)
     expect(submitNfeHomologacao).not.toHaveBeenCalled()
-    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'authorized', reason: null, fiscal_document_id: 501, validation_errors: [] })
+    // danfe_path/environment propagados do resultado da emissão — usados
+    // por resolvePostSalePrintTarget pra abrir o DANFE oficial da Focus
+    // no host correto, sem nenhum literal fixo.
+    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'authorized', reason: null, fiscal_document_id: 501, validation_errors: [], danfe_path: '/notas_fiscais_consumidor/NFe123.html', environment: 'homologacao' })
+  })
+
+  it('environment propagado é o REAL do documento (emission.data.environment) — nunca um literal fixo, funciona igual pra homologação e produção', async () => {
+    ;(submitNfceHomologacao as any).mockResolvedValue({ ok: true, data: { status: 'authorized', fiscalDocumentId: 999, validationErrors: [], danfePath: '/notas_fiscais_consumidor/NFe999.html', environment: 'producao' } })
+    const result = await executeFiscalPolicy({ saleId: 9, companyId: 1, decision: decision({ attempt: 'nfce', status: 'emission_pending' }) })
+    expect(result.fiscalResult?.environment).toBe('producao')
   })
 
   it('attempt=nfe → chama submitNfeHomologacao, nunca submitNfceHomologacao', async () => {
@@ -39,7 +48,7 @@ describe('executeFiscalPolicy — decision.attempt define QUAL emissão chamar',
   it('emissão falha (ok:false) → status error com o motivo da Focus, nunca lança', async () => {
     ;(submitNfceHomologacao as any).mockResolvedValue({ ok: false, error: 'Focus indisponível' })
     const result = await executeFiscalPolicy({ saleId: 3, companyId: 1, decision: decision({ attempt: 'nfce', status: 'emission_pending' }) })
-    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'error', reason: 'Focus indisponível', fiscal_document_id: null, validation_errors: [] })
+    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'error', reason: 'Focus indisponível', fiscal_document_id: null, validation_errors: [], danfe_path: null, environment: null })
   })
 
   it('emissão lança exceção → capturada, status error, nunca propaga (venda já foi criada)', async () => {
@@ -57,7 +66,7 @@ describe('executeFiscalPolicy — attempt=null (nada a emitir)', () => {
     })
     expect(submitNfceHomologacao).not.toHaveBeenCalled()
     expect(submitNfeHomologacao).not.toHaveBeenCalled()
-    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'eligibility_blocked', reason: 'Esta venda não é elegível para NFC-e.', fiscal_document_id: null, validation_errors: [] })
+    expect(result.fiscalResult).toEqual({ requested: 'nfce', status: 'eligibility_blocked', reason: 'Esta venda não é elegível para NFC-e.', fiscal_document_id: null, validation_errors: [], danfe_path: null, environment: null })
   })
 
   it('sem reason (fiscal_disabled ou skipped_by_operator) → fiscalResult null, silêncio total', async () => {

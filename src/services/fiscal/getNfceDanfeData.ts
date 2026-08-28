@@ -1,8 +1,18 @@
-// DANFE NFC-e real — leitura consolidada de uma NFC-e JÁ AUTORIZADA pra
+// DANFE NFC-e LOCAL — leitura consolidada de uma NFC-e JÁ AUTORIZADA pra
 // impressão térmica (Fase Fiscal 7). Puro GET/leitura: nunca chama Focus,
 // nunca cria/altera fiscal_documents (ver regra "GET nunca emite", item 60
 // do pedido). Sempre escopado por companyId da sessão — nunca por
 // parâmetro de URL sozinho (item 59).
+//
+// STATUS (simplificação da arquitetura de impressão, pós-testes reais de
+// emissão): este DANFE local deixou de ser o destino padrão pra qualquer
+// documento autorizado — o padrão agora é o DANFE OFICIAL da Focus
+// (`fiscal_documents.danfe_path`, via `resolveFocusResourceUrl`). Esta
+// função/`/vendas/[id]/nfce` continuam existindo só como fallback/debug
+// (nunca removidos ainda) — nenhuma mudança de comportamento foi feita
+// aqui, só o roteamento em volta dele (ver `resolvePostSalePrintTarget.ts`,
+// `documento-fiscal-card.tsx`, `vendas/[id]/page.tsx`,
+// `comprovante/page.tsx`).
 //
 // ─── Fontes por campo (auditoria dirigida, correção de bug real) ───────────
 //

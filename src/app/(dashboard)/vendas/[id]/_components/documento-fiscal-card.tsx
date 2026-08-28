@@ -49,6 +49,8 @@ interface EmissionResult {
   validationErrors: { code: string; message: string }[]
   xmlPath?: string | null
   danfePath?: string | null
+  /** Ambiente REAL devolvido pela API (`SubmitNfeResult.environment`) — presente em toda resposta de emissão/consulta, nunca um literal fixo. */
+  environment?: FocusEnvironment
 }
 
 export interface InitialFiscalDocument {
@@ -69,8 +71,8 @@ export interface InitialFiscalDocument {
   danfe_path: string | null
 }
 
-/** Badge discreto — mesmo padrão visual de badge já usado no restante do card (texto pequeno, cor de fundo suave). Nunca "Autorizada" sozinho: o operador precisa distinguir teste de documento oficial imediatamente. */
-function EnvironmentBadge({ environment }: { environment: FocusEnvironment }) {
+/** Badge discreto — mesmo padrão visual de badge já usado no restante do card (texto pequeno, cor de fundo suave). Nunca "Autorizada" sozinho: o operador precisa distinguir teste de documento oficial imediatamente. Exportado pra reaproveitar em vendas/[id]/page.tsx (botão principal de impressão). */
+export function EnvironmentBadge({ environment }: { environment: FocusEnvironment }) {
   const isProducao = environment === 'producao'
   return (
     <span
@@ -145,15 +147,17 @@ function DocumentTypeSection({
 }) {
   const [busy, setBusy] = useState<'emitir' | 'consultar' | null>(null)
   const [result, setResult] = useState<EmissionResult | null>(toResult(initial))
-  // Ambiente do `result` atual — herdado do documento carregado do
-  // servidor (`initial.environment`) até a primeira emissão/consulta
-  // bem-sucedida DESTA sessão de página, quando passa a ser o ambiente
-  // configurado no momento da chamada (é o que o backend usou de fato).
-  // Nunca inferido do resultado da API em si — SubmitNfeResult/
-  // rpc_claim_fiscal_emission deliberadamente não carregam `environment`
-  // no retorno (mudar isso exigiria alterar o RETURNS TABLE da RPC, fora
-  // do escopo desta fundação — ver auditoria).
-  const [resultEnvironment, setResultEnvironment] = useState<FocusEnvironment | null>(initial?.environment ?? null)
+  // Ambiente do `result` atual — SEMPRE um valor real, nunca um literal
+  // fixo (achado real, pré-produção: `SubmitNfeResult.environment` agora
+  // é propagado ponta a ponta desde `fiscal_documents.environment` — ver
+  // `submitNfceHomologacao.ts`/`submitNfeHomologacao.ts`, `rowToResult`).
+  // Estado inicial: `initial.environment` (documento já carregado do
+  // servidor) ou `currentEnvironment` (config atual da empresa) quando
+  // ainda não existe documento nenhum. Depois de qualquer emissão/consulta
+  // bem-sucedida, `call()` abaixo atualiza pro `environment` REAL que
+  // veio na resposta da API — nunca `currentEnvironment` como suposição
+  // quando o dado real já está disponível.
+  const [resultEnvironment, setResultEnvironment] = useState<FocusEnvironment>(initial?.environment ?? currentEnvironment)
   const [error, setError] = useState<string | null>(null)
   const [showRecipientForm, setShowRecipientForm] = useState(false)
   const [recipientValue, setRecipientValue] = useState<FiscalRecipientValue>(EMPTY_FISCAL_RECIPIENT)
@@ -181,12 +185,13 @@ function DocumentTypeSection({
         setError(data.reason)
         return
       }
-      setResult(data.emission ?? data.status)
-      // O resultado que ACABOU de chegar foi necessariamente emitido no
-      // ambiente configurado agora (o backend nunca emite em outro) —
-      // atualiza o ambiente exibido junto com o resultado, mesmo sem
-      // `environment` vir na resposta da API.
-      setResultEnvironment(currentEnvironment)
+      const freshResult = data.emission ?? data.status
+      setResult(freshResult)
+      // `environment` REAL vem na própria resposta da API
+      // (`SubmitNfeResult.environment`) — `currentEnvironment` (config
+      // atual da empresa) só entra como último recurso, nunca um literal
+      // fixo, pro caso (não esperado) de a resposta vir sem o campo.
+      setResultEnvironment(freshResult?.environment ?? currentEnvironment)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Erro desconhecido.')
     } finally {
@@ -261,8 +266,8 @@ function DocumentTypeSection({
   // Resolvidos uma vez só — nunca concatenação espalhada no JSX (achado
   // real, venda 703: href={result.danfePath} cru resolvia contra a
   // origem da PÁGINA, nunca contra a Focus, e devolvia 404).
-  const danfeFocusUrl = resolveFocusResourceUrl({ path: result?.danfePath, environment: resultEnvironment ?? 'homologacao' })
-  const xmlFocusUrl = resolveFocusResourceUrl({ path: result?.xmlPath, environment: resultEnvironment ?? 'homologacao' })
+  const danfeFocusUrl = resolveFocusResourceUrl({ path: result?.danfePath, environment: resultEnvironment })
+  const xmlFocusUrl = resolveFocusResourceUrl({ path: result?.xmlPath, environment: resultEnvironment })
 
   return (
     <div className="rounded-lg border border-border p-3 space-y-2">
@@ -365,25 +370,38 @@ function DocumentTypeSection({
         <div className="space-y-1 border-t border-border pt-2 text-xs text-text-secondary">
           {result.accessKey && <p><span className="text-text-muted">Chave de acesso:</span> <code className="font-mono">{result.accessKey}</code></p>}
           {result.number && <p><span className="text-text-muted">Número/Série:</span> {result.number}/{result.series}</p>}
-          <div className="flex gap-3 pt-1">
-            {type === 'nfce' && (
-              <a href={`/vendas/${saleId}/nfce?environment=${resultEnvironment ?? 'homologacao'}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
-                <FileText className="w-3.5 h-3.5" /> Imprimir DANFE NFC-e (térmica)
+          {/* Simplificação da arquitetura de impressão (pós-testes reais de
+              emissão): o DANFE da FOCUS é o destino PRINCIPAL pra qualquer
+              documento autorizado — NFC-e e NF-e. danfe_path/xml_path da
+              Focus são caminhos RELATIVOS (caminho_danfe/
+              caminho_xml_nota_fiscal) — resolveFocusResourceUrl é o único
+              ponto que combina isso com o host certo do ambiente; nunca
+              usar result.danfePath/xmlPath direto como href (resolveria
+              contra a URL desta página, não da Focus). Autorizado sem
+              danfe_path válido → erro explícito, nunca fica em silêncio. */}
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            {danfeFocusUrl ? (
+              <a href={danfeFocusUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-brand hover:underline">
+                <FileText className="w-3.5 h-3.5" /> Abrir DANFE (Focus)
               </a>
-            )}
-            {/* danfe_path/xml_path da Focus são caminhos RELATIVOS
-                (caminho_danfe/caminho_xml_nota_fiscal) — resolveFocusResourceUrl
-                é o único ponto que combina isso com o host correto do
-                ambiente; nunca usar result.danfePath/xmlPath direto como
-                href (resolveria contra a URL desta página, não da Focus). */}
-            {danfeFocusUrl && (
-              <a href={danfeFocusUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
-                <FileText className="w-3.5 h-3.5" /> DANFE (Focus)
-              </a>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-red-500">
+                <AlertTriangle className="w-3.5 h-3.5" /> DANFE da Focus indisponível (danfe_path ausente/inválido)
+              </span>
             )}
             {xmlFocusUrl && (
               <a href={xmlFocusUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">
                 <FileDown className="w-3.5 h-3.5" /> XML
+              </a>
+            )}
+            {/* DANFE NFC-e LOCAL — não é mais o destino padrão (decisão
+                pós-testes reais: a Focus já gera um DANFE fiscal adequado).
+                Mantido temporariamente SÓ como fallback/debug, nunca como
+                botão principal — removido/simplificado numa etapa
+                separada, depois de validar impressão física Windows/Epson. */}
+            {type === 'nfce' && (
+              <a href={`/vendas/${saleId}/nfce?environment=${resultEnvironment}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-text-muted hover:underline text-[11px]">
+                <FileText className="w-3 h-3" /> DANFE local (fallback/debug)
               </a>
             )}
           </div>

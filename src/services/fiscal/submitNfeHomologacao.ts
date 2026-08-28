@@ -123,6 +123,8 @@ export interface SubmitNfeResult {
   danfePath: string | null
   /** Conteúdo real do QR Code fiscal (só NFC-e — Focus não retorna pra NF-e, fica `null`). */
   qrcodeUrl: string | null
+  /** Ambiente REAL do documento (`fiscal_documents.environment`) — nunca inferido do host do danfe_path/token/config atual. Ver comentário completo em `FiscalDocumentRow.environment`. */
+  environment: FocusEnvironment
   validationErrors: FiscalValidationError[]
 }
 
@@ -146,6 +148,22 @@ export interface FiscalDocumentRow {
   xml_path: string | null
   danfe_path: string | null
   qrcode_url: string | null
+  /**
+   * Ambiente REAL do documento (`fiscal_documents.environment`) — a
+   * identidade do próprio documento, nunca uma suposição/config atual.
+   * `rpc_claim_fiscal_emission`/`rpc_complete_fiscal_emission` não
+   * devolvem essa coluna no `RETURNS TABLE` (auditado — ver
+   * `claimFiscalEmission`/`completeFiscalEmission` abaixo pra como cada
+   * um preenche isto sem precisar de migration): o wrapper de claim já
+   * RECEBE `environment` como parâmetro (usado no INSERT) e o injeta
+   * de volta aqui; o wrapper de complete recebe via
+   * `CompleteFiscalEmissionInput.environment` (o chamador já sabe esse
+   * valor — é o mesmo usado pra montar `provider_ref`/claim) e injeta no
+   * retorno da RPC. Leituras diretas (`fetchCurrentFiscalDocumentRow`,
+   * `FISCAL_DOCUMENT_SELECT`) pegam o valor real persistido, sem
+   * intermediário nenhum.
+   */
+  environment: FocusEnvironment
 }
 
 /** Lease do claim de transmissão — generosa o bastante pra cobrir carregar contexto + montar payload + o timeout HTTP da Focus (15s, ver httpClient.ts) com folga, curta o bastante pra um crash se autorrecuperar em ~1 minuto. */
@@ -211,11 +229,12 @@ export function rowToResult(row: FiscalDocumentRow, validationErrors: FiscalVali
     xmlPath: row.xml_path,
     danfePath: row.danfe_path,
     qrcodeUrl: row.qrcode_url,
+    environment: row.environment,
     validationErrors,
   }
 }
 
-export const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, qrcode_url'
+export const FISCAL_DOCUMENT_SELECT = 'id, status, provider_ref, number, series, access_key, authorization_protocol, status_sefaz, status_message, submission_error_code, submission_error_message, xml_path, danfe_path, qrcode_url, environment'
 
 /**
  * Wrapper de `rpc_claim_fiscal_emission` — claim atômico curto, comita
@@ -227,7 +246,7 @@ export async function claimFiscalEmission(
   companyId: number,
   saleId: number,
   providerRef: string,
-  environment: string,
+  environment: FocusEnvironment,
   documentType: 'nfe' | 'nfce' = 'nfe',
 ): Promise<FiscalClaimResult> {
   const { data, error } = await (admin as any).rpc('rpc_claim_fiscal_emission', {
@@ -263,6 +282,12 @@ export async function claimFiscalEmission(
       // — qrcode_url só existe depois de autorizada, nunca neste ponto do
       // fluxo. RPC não precisa devolver a coluna; `null` aqui é sempre correto.
       qrcode_url: row.qrcode_url ?? null,
+      // `rpc_claim_fiscal_emission` não devolve `environment` no
+      // RETURNS TABLE (auditado) — mas o PARÂMETRO `environment` desta
+      // função É a identidade real do documento (o mesmo valor gravado no
+      // INSERT da RPC, `p_environment`), nunca uma suposição. Sem
+      // migration: menor superfície correta.
+      environment,
     },
     claimToken: row.submission_claim_token ?? null,
     leaseUntil: row.submission_lease_until ?? null,
@@ -272,6 +297,16 @@ export async function claimFiscalEmission(
 export interface CompleteFiscalEmissionInput {
   fiscalDocumentId: number
   claimToken: string
+  /**
+   * Ambiente REAL deste documento — o MESMO valor já usado pelo chamador
+   * pra montar `provider_ref`/o claim (`configuredEnvironment`/
+   * `environment` de `resolveFocusIntegration`), nunca um literal novo.
+   * Obrigatório, sem default: `rpc_complete_fiscal_emission` não devolve
+   * `environment` no `RETURNS TABLE` (auditado), então este wrapper
+   * precisa injetar o valor de volta no resultado — só pode fazer isso
+   * corretamente se o chamador entregar o valor real que já tinha em mãos.
+   */
+  environment: FocusEnvironment
   status: FiscalDocumentDomainStatus
   statusSefaz?: string | null
   statusMessage?: string | null
@@ -323,7 +358,10 @@ export async function completeFiscalEmission(
 
   if (error) throw new Error(`Falha ao concluir emissão fiscal (documento ${input.fiscalDocumentId}): ${error.message}`)
   const rows = (data as any[]) ?? []
-  return rows[0] ? (rows[0] as FiscalDocumentRow) : null
+  // `rpc_complete_fiscal_emission` não devolve `environment` (auditado) —
+  // injeta o valor real que o CHAMADOR já tinha (`input.environment`),
+  // nunca um literal/suposição. Sem migration: menor superfície correta.
+  return rows[0] ? ({ ...rows[0], environment: input.environment } as FiscalDocumentRow) : null
 }
 
 export interface BeginFiscalTransmissionInput {
@@ -621,6 +659,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'validation_failed',
       fiscalContextSnapshot: context,
       submissionErrorCode: 'local_validation_failed',
@@ -647,6 +686,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'validation_failed',
       fiscalContextSnapshot: context,
       submissionErrorCode: 'local_build_failed',
@@ -697,6 +737,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status,
       providerPayload: response,
       statusSefaz: response.status_sefaz != null ? String(response.status_sefaz) : null,
@@ -720,6 +761,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
       const updated = await completeFiscalEmission(admin, {
         fiscalDocumentId,
         claimToken,
+        environment: configuredEnvironment,
         status: 'submission_error',
         submissionErrorCode: err.codigo ?? String(err.httpStatus),
         submissionErrorMessage: err.mensagem ?? err.message,
@@ -736,6 +778,7 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     const updated = await completeFiscalEmission(admin, {
       fiscalDocumentId,
       claimToken,
+      environment: configuredEnvironment,
       status: 'pending',
       statusMessage: `Resultado desconhecido após falha de transmissão: ${message}`,
     })
