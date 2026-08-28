@@ -3,11 +3,16 @@
  * concorrência).
  *
  * `submitNfeHomologacao(saleId, companyId)` é o ÚNICO ponto do projeto que
- * chama `POST /v2/nfe` (emissão real). Só em homologação — bloqueia
- * produção explicitamente antes de qualquer outra coisa. Nunca chamado
- * automaticamente (sem outbox/sale.completed nesta fase) — só via
- * `POST /api/fiscal/nfe/emitir-homologacao`, acionado manualmente por um
- * admin.
+ * chama `POST /v2/nfe` (emissão real). O NOME é histórico (Fase 2B, quando
+ * só homologação existia) — mantido de propósito pra não quebrar imports;
+ * o comportamento real, desde a abertura do gate de produção (decisão
+ * definitiva do usuário, mesma arquitetura já aberta e testada em NFC-e —
+ * ver `submitNfceHomologacao.ts`), aceita QUALQUER
+ * `company_fiscal_settings.nfe_environment` válido ('homologacao' OU
+ * 'producao'), sempre o valor real configurado, nunca um literal fixo.
+ * Nunca chamado automaticamente (sem outbox/sale.completed nesta fase) —
+ * só via `POST /api/fiscal/nfe/emitir-homologacao`, acionado manualmente
+ * por um admin.
  *
  * ─── Concorrência (Fase Fiscal 3B) ───────────────────────────────────────
  *
@@ -592,18 +597,17 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
 
   if (!settings) return failure('Configuração fiscal da empresa não encontrada (company_fiscal_settings).', 422)
   if (!settings.nfe_enabled) return failure('Emissão de NF-e não habilitada (company_fiscal_settings.nfe_enabled=false).', 422)
-  if (settings.nfe_environment !== 'homologacao') {
-    return failure('Bloqueado: esta rota só emite em homologação. company_fiscal_settings.nfe_environment não é "homologacao".', 403)
+  // GATE DE PRODUÇÃO NF-e ABERTO (decisão definitiva do usuário — mesma
+  // arquitetura já aberta e testada em NFC-e, ver submitNfceHomologacao.ts)
+  // — NF-e agora aceita tanto 'homologacao' quanto 'producao', sempre o
+  // valor REAL de `company_fiscal_settings.nfe_environment`, nunca um
+  // literal fixo. A checagem abaixo é só defensiva (a CHECK constraint da
+  // coluna já garante isto) — nunca prossegue com um valor fora do enum
+  // conhecido.
+  if (settings.nfe_environment !== 'homologacao' && settings.nfe_environment !== 'producao') {
+    return failure(`Bloqueado: company_fiscal_settings.nfe_environment tem valor inesperado ("${settings.nfe_environment}").`, 403)
   }
 
-  // `settings.nfe_environment` (não um literal 'homologacao' hardcoded) —
-  // já confirmado === 'homologacao' pelo gate acima nesta fase, mas usar a
-  // variável real (em vez do literal) significa que este call site não
-  // precisa de outra edição no dia em que o gate acima for removido numa
-  // fase futura de produção. Nome `configuredEnvironment` (não
-  // `environment`) pra não colidir com o `environment` resolvido mais
-  // abaixo a partir de `resolveFocusIntegration` (mesmo valor esperado
-  // hoje, fontes conceitualmente distintas).
   const configuredEnvironment = settings.nfe_environment as FocusEnvironment
   const providerRef = buildProviderRef(companyId, saleId, configuredEnvironment, 'nfe')
 
@@ -641,14 +645,20 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
     return failure(`Integração Focus NFe não disponível (${integrationResult.data.reason}).`, 422)
   }
   const { token, environment } = integrationResult.data.integration
-  if (environment !== 'homologacao') {
-    return failure('Bloqueado: a integração Focus NFe resolvida não está configurada para homologação.', 403)
+  // Cross-check: o ambiente da INTEGRAÇÃO resolvida (token/host que serão
+  // realmente usados) precisa ser EXATAMENTE o mesmo configurado em
+  // `company_fiscal_settings.nfe_environment` — nunca emitir com os dois
+  // divergentes. Mesmo padrão já aplicado em NFC-e.
+  if (environment !== configuredEnvironment) {
+    return failure(`Bloqueado: ambiente da integração Focus resolvida ("${environment}") não corresponde ao configurado em company_fiscal_settings.nfe_environment ("${configuredEnvironment}").`, 403)
   }
 
   // ─── Carrega contexto + valida ───────────────────────────────────────────
   let context
   try {
-    context = await loadSaleFiscalContext({ saleId, companyId, providerRef, environment: 'homologacao' })
+    // `configuredEnvironment` (não mais o literal 'homologacao') — o
+    // snapshot fiscal precisa registrar o ambiente REAL da emissão.
+    context = await loadSaleFiscalContext({ saleId, companyId, providerRef, environment: configuredEnvironment })
   } catch (err) {
     if (err instanceof FiscalContextError) return failure(err.message, 404)
     throw err

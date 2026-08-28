@@ -157,11 +157,22 @@ describe('rpc_claim_fiscal_emission (fake) — environment na identidade da linh
   })
 })
 
-describe('gate de produção — NF-e continua recusando; NFC-e foi aberta (auditoria de readiness, CSC de produção confirmado sincronizado com a Focus)', () => {
-  it('submitNfeHomologacao.ts (NF-e) ainda bloqueia environment != homologacao antes de qualquer claim/provider_ref — NÃO tocado nesta abertura', () => {
+describe('gate de produção — NF-e e NFC-e ambas abertas (decisão definitiva do usuário — mesma arquitetura nos dois)', () => {
+  it('submitNfeHomologacao.ts (NF-e) aceita homologacao OU producao — nunca mais bloqueia só por ser produção', () => {
     const source = readFileSync(join(__dirname, 'submitNfeHomologacao.ts'), 'utf-8')
-    expect(source).toMatch(/if \(settings\.nfe_environment !== 'homologacao'\) \{/)
-    expect(source).toMatch(/Bloqueado: esta rota só emite em homologação/)
+    expect(source).not.toMatch(/if \(settings\.nfe_environment !== 'homologacao'\) \{/)
+    expect(source).toMatch(/if \(settings\.nfe_environment !== 'homologacao' && settings\.nfe_environment !== 'producao'\) \{/)
+  })
+
+  it('submitNfeHomologacao.ts nunca emite com o ambiente configurado divergente do ambiente da integração resolvida (cross-check real, nunca dois literais independentes)', () => {
+    const source = readFileSync(join(__dirname, 'submitNfeHomologacao.ts'), 'utf-8')
+    expect(source).toMatch(/if \(environment !== configuredEnvironment\) \{/)
+    expect(source).not.toMatch(/if \(environment !== 'homologacao'\) \{/)
+  })
+
+  it('submitNfeHomologacao.ts propaga configuredEnvironment real pro snapshot fiscal (loadSaleFiscalContext) — nunca mais o literal "homologacao" fixo', () => {
+    const source = readFileSync(join(__dirname, 'submitNfeHomologacao.ts'), 'utf-8')
+    expect(source).toMatch(/saleId, companyId, providerRef, environment: configuredEnvironment \}\)/)
   })
 
   it('submitNfceHomologacao.ts (NFC-e) aceita homologacao OU producao — nunca mais bloqueia só por ser produção', () => {
