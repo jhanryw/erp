@@ -1,7 +1,4 @@
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
-import { getUserProfile } from '@/lib/auth/getProfile'
-import { isExemptFromExchangeAuthorization } from '@/lib/auth/exchangeAuthorizationExemptions'
 import { logQueryError, type PgErrorLike } from '@/lib/errors/pgResult'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
@@ -139,11 +136,6 @@ export default async function TrocaPage({ params }: { params: { id: string } }) 
 
   const customer = Array.isArray(sale.customers) ? sale.customers[0] : sale.customers
 
-  const serverClient = createClient()
-  const { data: { user: authUser } } = await serverClient.auth.getUser()
-  const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
-  const requiresAuth = profile?.role === 'usuario' && !isExemptFromExchangeAuthorization(profile.id)
-
   return (
     <div className="max-w-2xl space-y-5">
       {/* Header */}
@@ -186,7 +178,6 @@ export default async function TrocaPage({ params }: { params: { id: string } }) 
           customerId={customer?.id ?? sale.customer_id}
           customerName={customer?.name ?? ''}
           items={items}
-          requiresAuth={requiresAuth}
           saleType={(sale.sale_type as SaleType) ?? 'retail'}
         />
       )}

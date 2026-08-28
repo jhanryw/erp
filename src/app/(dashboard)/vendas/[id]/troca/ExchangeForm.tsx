@@ -9,7 +9,6 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils/currency'
 import { ProductSearchInput } from '@/components/vendas/ProductSearchInput'
 import type { ProductSearchItem } from '@/components/vendas/ProductSearchInput'
-import { AuthorizationModal } from '@/components/auth/AuthorizationModal'
 import type { SaleType } from '@/lib/pricing/resolveSalePrice'
 
 // ── Tipos ────────────────────────────────────────────────────────────────────
@@ -53,7 +52,6 @@ interface Props {
   customerId:    number
   customerName:  string
   items:         ExchangeItem[]
-  requiresAuth?: boolean
   /**
    * PDV atacado/varejo (2026-09-02) — modalidade da venda ORIGINAL, herdada
    * pela troca (Fase 1 já garante isso no backend). Usada aqui só pra
@@ -65,7 +63,7 @@ interface Props {
 
 // ── Componente ───────────────────────────────────────────────────────────────
 
-export function ExchangeForm({ saleId, customerId, customerName, items, requiresAuth, saleType }: Props) {
+export function ExchangeForm({ saleId, customerId, customerName, items, saleType }: Props) {
   const router = useRouter()
 
   // Seção 1: Devolvendo
@@ -82,9 +80,6 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
   // Observações
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(false)
-
-  // Autorização inline para usuario
-  const [showAuthModal, setShowAuthModal] = useState(false)
 
   const availableItems = items.filter(i => i.available_to_return > 0)
 
@@ -162,7 +157,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
   }
 
   // ── Submeter ─────────────────────────────────────────────────────────────
-  async function doSubmit(authorizationTokenId?: string) {
+  async function doSubmit() {
     const selectedItems = availableItems
       .filter(i => (quantities[i.id] ?? 0) > 0)
       .map(i => ({ sale_item_id: i.id, quantity_returned: quantities[i.id] }))
@@ -182,10 +177,6 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
       if (toPay > 0.009) {
         payload.payment_method = paymentMethod
       }
-    }
-
-    if (authorizationTokenId) {
-      payload.authorization_token_id = authorizationTokenId
     }
 
     setLoading(true)
@@ -228,11 +219,7 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
       toast.error('Selecione ao menos uma peça para devolver.')
       return
     }
-    if (requiresAuth) {
-      setShowAuthModal(true)
-    } else {
-      doSubmit()
-    }
+    doSubmit()
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -457,21 +444,6 @@ export function ExchangeForm({ saleId, customerId, customerName, items, requires
           </Button>
         </Card>
       )}
-
-      <AuthorizationModal
-        open={showAuthModal}
-        action="exchange_sale"
-        title="Autorizar troca"
-        description="Esta ação requer aprovação de gerente. Informe as credenciais de um gerente ou administrador."
-        resourceType="sale"
-        resourceId={String(saleId)}
-        reasonRequired={true}
-        onAuthorized={(tokenId) => {
-          setShowAuthModal(false)
-          doSubmit(tokenId)
-        }}
-        onCancel={() => setShowAuthModal(false)}
-      />
     </div>
   )
 }
