@@ -140,6 +140,29 @@ export async function syncFocusEmpresa(
   const integrationRow = integrationRowResult.data
   if (!integrationRow) return failure('Integração Focus NFe não encontrada para esta empresa.', 404)
 
+  // ACHADO REAL (certificado nunca marcado como sincronizado apesar de um
+  // upload real ter acontecido): toda falha ANTES deste ponto (token
+  // mestre indisponível, integração ausente) e as 5 validações abaixo
+  // (settingsError/settings/cnpj/razao_social/crt) retornavam `failure(...)`
+  // direto, SEM NUNCA chamar `recordFocusManagementSync` — só o `catch`
+  // do bloco HTTP mais abaixo registrava falha. Resultado: um erro real
+  // (ex.: coluna ausente por migration pulada) aparecia no toast da
+  // requisição que disparou a chamada, mas NUNCA ficava registrado pra a
+  // tela de configurações mostrar depois — o card ficava mostrando
+  // "nunca sincronizado" (texto de `undefined`) em vez de "falhou em
+  // <data>: <erro>", escondendo que uma tentativa real (e sua causa) já
+  // tinha acontecido. `recordFailure` cobre esse buraco: TODA saída de
+  // falha desta função agora registra, nunca só a do bloco HTTP.
+  async function recordFailure(message: string): Promise<void> {
+    await recordFocusManagementSync(companyId, integrationRow!, {
+      company: makeSyncEntry('error', message),
+      ...(options?.certificate ? { certificate: makeSyncEntry('error', message) } : {}),
+      ...(options?.csc ? { csc: { environment: options.csc.environment, entry: makeSyncEntry('error', message) } } : {}),
+    }).catch(() => {
+      // Falha ao REGISTRAR o erro nunca deve mascarar o erro real.
+    })
+  }
+
   const admin = createAdminClient()
   const { data: settings, error: settingsError } = await (admin as any)
     .from('company_fiscal_settings')
@@ -147,11 +170,15 @@ export async function syncFocusEmpresa(
     .eq('company_id', companyId)
     .maybeSingle() as { data: FiscalSettingsRow | null; error: { message: string } | null }
 
-  if (settingsError) return failure(settingsError.message)
-  if (!settings) return failure('company_fiscal_settings não cadastrado para esta empresa — cadastre CNPJ/razão social/endereço/CRT antes de sincronizar com a Focus.', 422)
-  if (!settings.cnpj) return failure('CNPJ ausente em company_fiscal_settings.', 422)
-  if (!settings.razao_social) return failure('Razão social ausente em company_fiscal_settings.', 422)
-  if (!settings.crt) return failure('Regime tributário (CRT) ausente em company_fiscal_settings.', 422)
+  if (settingsError) { await recordFailure(settingsError.message); return failure(settingsError.message) }
+  if (!settings) {
+    const message = 'company_fiscal_settings não cadastrado para esta empresa — cadastre CNPJ/razão social/endereço/CRT antes de sincronizar com a Focus.'
+    await recordFailure(message)
+    return failure(message, 422)
+  }
+  if (!settings.cnpj) { await recordFailure('CNPJ ausente em company_fiscal_settings.'); return failure('CNPJ ausente em company_fiscal_settings.', 422) }
+  if (!settings.razao_social) { await recordFailure('Razão social ausente em company_fiscal_settings.'); return failure('Razão social ausente em company_fiscal_settings.', 422) }
+  if (!settings.crt) { await recordFailure('Regime tributário (CRT) ausente em company_fiscal_settings.'); return failure('Regime tributário (CRT) ausente em company_fiscal_settings.', 422) }
 
   const input: FocusEmpresaInput = {
     nome: settings.razao_social,
@@ -207,15 +234,7 @@ export async function syncFocusEmpresa(
     // poderia conter base64/senha/CSC Token se a Focus ecoasse o payload
     // de volta em erro de validação.
     const message = err instanceof Error ? err.message : 'Erro desconhecido ao sincronizar empresa com a Focus.'
-
-    await recordFocusManagementSync(companyId, integrationRow, {
-      company: makeSyncEntry('error', message),
-      ...(options?.certificate ? { certificate: makeSyncEntry('error', message) } : {}),
-      ...(options?.csc ? { csc: { environment: options.csc.environment, entry: makeSyncEntry('error', message) } } : {}),
-    }).catch(() => {
-      // Falha ao REGISTRAR o erro nunca deve mascarar o erro real — segue pro `return failure` abaixo de qualquer forma.
-    })
-
+    await recordFailure(message)
     return failure(`Falha ao sincronizar empresa com a Focus NFe: ${message}`)
   }
 }

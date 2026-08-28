@@ -112,6 +112,57 @@ describe('syncFocusEmpresa', () => {
     if (!result.ok) expect(result.error).toMatch(/regime tributário/i)
   })
 
+  it('REGRESSÃO DO INCIDENTE REAL (certificado nunca marcado como sincronizado): erro ao LER company_fiscal_settings (ex.: coluna ausente por migration pulada) REGISTRA falha em focusManagementSync — antes desta correção, essas 5 saídas early-return nunca chamavam recordFocusManagementSync', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: null, error: { message: 'column company_fiscal_settings.telefone does not exist' } }),
+          }),
+        }),
+      }),
+    })
+
+    const result = await syncFocusEmpresa(1, { certificate: { arquivoBase64: 'b64', senha: 'x' } })
+    expect(result.ok).toBe(false)
+
+    const syncCall = (companyIntegrations.updateCompanyIntegration as any).mock.calls.find((call: unknown[]) => (call[2] as any)?.settings)
+    expect(syncCall).toBeTruthy() // antes da correção: nenhuma chamada, syncCall seria undefined
+    const syncState = (syncCall![2] as any).settings.focusManagementSync
+    expect(syncState.company.status).toBe('error')
+    expect(syncState.company.lastError).toMatch(/telefone/)
+    // certificate também precisa registrar erro (não ficar undefined) —
+    // é exatamente isso que fazia a UI mostrar "nunca sincronizado" em
+    // vez de "falhou em <data>: <erro>".
+    expect(syncState.certificate.status).toBe('error')
+  })
+
+  it('company_fiscal_settings ausente (linha não existe) também registra falha em focusManagementSync', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow(null)
+
+    await syncFocusEmpresa(1)
+
+    const syncCall = (companyIntegrations.updateCompanyIntegration as any).mock.calls.find((call: unknown[]) => (call[2] as any)?.settings)
+    expect(syncCall).toBeTruthy()
+    expect((syncCall![2] as any).settings.focusManagementSync.company.status).toBe('error')
+  })
+
+  it('CRT ausente também registra falha em focusManagementSync (mesma correção, cobre as 3 outras validações — CNPJ/razão social/CRT — pelo mesmo código)', async () => {
+    mockAvailableManagementToken()
+    mockIntegrationRow()
+    mockSettingsRow({ ...COMPLETE_SETTINGS, crt: null })
+
+    await syncFocusEmpresa(1)
+
+    const syncCall = (companyIntegrations.updateCompanyIntegration as any).mock.calls.find((call: unknown[]) => (call[2] as any)?.settings)
+    expect(syncCall).toBeTruthy()
+    expect((syncCall![2] as any).settings.focusManagementSync.company.status).toBe('error')
+  })
+
   it('sem external_account_id cacheado e CNPJ não encontrado na Focus → cria (POST), nunca duplicata', async () => {
     mockAvailableManagementToken()
     mockIntegrationRow({ external_account_id: null })
