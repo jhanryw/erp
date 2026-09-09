@@ -16,58 +16,6 @@ import { validateCNPJ } from '@/lib/utils/cnpj'
 import { resolveFiscalOperation } from '@/services/fiscal/resolveFiscalOperation'
 import { executeFiscalPolicy } from '@/services/fiscal/executeFiscalPolicy'
 
-// ─── Webhook v2 (pós-venda N8N v2) ──────────────────────────────────────────
-// Fire-and-forget, paralelo ao v1. Não altera webhook_log nem sendSaleWebhook.
-async function sendSaleWebhookV2(
-  admin: SupabaseClient,
-  saleId: number,
-  companyId: number,
-): Promise<void> {
-  const v2Url = process.env.N8N_WEBHOOK_URL_V2
-  if (!v2Url) return
-
-  // Idempotência via post_sale_automation_events
-  const { data: existing } = await (admin as any)
-    .from('post_sale_automation_events')
-    .select('id')
-    .eq('sale_id', saleId)
-    .eq('event_type', 'webhook_received')
-    .maybeSingle() as { data: { id: number } | null }
-
-  if (existing) return
-
-  const { data: customer } = await (admin as any)
-    .from('sales')
-    .select('customer_id, sale_date, customers:customer_id(phone, is_anonymous)')
-    .eq('id', saleId)
-    .maybeSingle() as { data: { customer_id: number; sale_date: string; customers: { phone: string | null; is_anonymous: boolean } | null } | null }
-
-  const payload = {
-    sale_id:        saleId,
-    customer_phone: customer?.customers?.phone      ?? null,
-    is_anonymous:   customer?.customers?.is_anonymous ?? true,
-    sale_date:      customer?.sale_date             ?? null,
-  }
-
-  // Registra o evento independente do status HTTP do N8N
-  await (admin as any)
-    .from('post_sale_automation_events')
-    .insert({
-      sale_id: saleId,
-      customer_id: customer?.customer_id ?? null,
-      company_id:  companyId,
-      event_type:  'webhook_received',
-    })
-    .throwOnError()
-    .catch((err: unknown) => console.error('[sendSaleWebhookV2] Erro ao inserir evento:', err))
-
-  fetch(v2Url, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(payload),
-  }).catch((err) => console.error('[sendSaleWebhookV2] Erro ao disparar webhook:', err))
-}
-
 // ─── Push notification — nova venda para admins ───────────────────────────────
 async function sendNewSalePushNotification(
   admin: SupabaseClient,
@@ -98,7 +46,12 @@ async function sendNewSalePushNotification(
   })
 }
 
-// ─── Webhook v1 (legado) ─────────────────────────────────────────────────────
+// ─── Webhook n8n pós-venda ──────────────────────────────────────────────────
+// Payload estável desde 07/06 — mantém exatamente os campos que o workflow
+// n8n "[SANTTORINI] Pós venda" espera (Code in JavaScript1 lê data.customer_name,
+// data.total etc.). Sem gate de is_anonymous aqui — o próprio If1 do fluxo n8n
+// decide isso (payload já leva is_anonymous pra essa checagem), evitando a
+// regra duplicada ERP+n8n que existia antes.
 async function sendSaleWebhook(
   admin: SupabaseClient,
   saleId: number,
@@ -431,25 +384,13 @@ export async function POST(request: Request) {
 
     const admin = createAdminClient()
 
-    // Webhook n8n pós-venda — pula para clientes avulsos (is_anonymous = true)
+    // Webhook n8n pós-venda (não-fatal, fire-and-forget)
     const n8nUrl = process.env.N8N_WEBHOOK_URL
     if (n8nUrl) {
-      const { data: custRow } = await (admin as any)
-        .from('customers')
-        .select('is_anonymous')
-        .eq('id', saleData.customer_id)
-        .maybeSingle() as { data: { is_anonymous: boolean } | null }
-      if (!custRow?.is_anonymous) {
-        sendSaleWebhook(admin, sale.id, saleData.customer_id, user.company_id, n8nUrl).catch(
-          (err) => console.error('[POST /api/vendas] Webhook n8n error', err)
-        )
-      }
+      sendSaleWebhook(admin, sale.id, saleData.customer_id, user.company_id, n8nUrl).catch(
+        (err) => console.error('[POST /api/vendas] Webhook n8n error', err)
+      )
     }
-
-    // Webhook n8n pós-venda v2 (paralelo ao v1, fire-and-forget)
-    sendSaleWebhookV2(admin, sale.id, user.company_id).catch(
-      (err) => console.error('[POST /api/vendas] Webhook n8n v2 error', err)
-    )
 
     // Push notification para admins da empresa (fire-and-forget — não bloqueia resposta)
     sendNewSalePushNotification(
