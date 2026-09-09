@@ -6,7 +6,6 @@ import { getUserProfile } from '@/lib/auth/getProfile'
 import { UserRoleProvider } from '@/components/layout/user-context'
 import { Sidebar } from '@/components/layout/sidebar'
 import { Topbar } from '@/components/layout/topbar'
-import { BottomTabBar } from '@/components/layout/mobile-nav'
 
 export default async function DashboardLayout({
   children,
@@ -34,15 +33,15 @@ export default async function DashboardLayout({
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <Topbar />
 
-          <main className="flex-1 overflow-y-auto pb-20 lg:pb-0">
-            <div className="p-4 lg:p-6 max-w-[1600px] mx-auto animate-fade-in">
+          <main className="flex-1 overflow-y-auto">
+            <div
+              className="p-4 lg:p-6 max-w-[1600px] mx-auto animate-fade-in"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+            >
               {children}
             </div>
           </main>
         </div>
-
-        {/* Bottom tab bar — apenas mobile */}
-        <BottomTabBar />
       </div>
     </UserRoleProvider>
   )

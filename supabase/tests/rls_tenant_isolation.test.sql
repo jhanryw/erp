@@ -57,15 +57,13 @@ BEGIN
   SELECT id INTO v_company_a FROM public.companies WHERE slug = 'teste-rls-empresa-a-apagar';
   SELECT id INTO v_company_b FROM public.companies WHERE slug = 'teste-rls-empresa-b-apagar';
 
-  -- role é o enum user_role do banco: ('admin', 'seller', 'gerente') —
-  -- confirmado por consulta live nesta sessão. 'usuario' NÃO é um valor
-  -- válido do enum, só existe como nome de papel no TypeScript (AppRole),
-  -- mapeado a partir de 'seller' por normalizeRole() (src/types/roles.ts).
   INSERT INTO public.users (id, name, role, active, company_id)
   VALUES
-    ('00000000-0000-0000-0000-0000000000a1', 'Teste A — seller', 'seller', true, v_company_a),
-    ('00000000-0000-0000-0000-0000000000a2', 'Teste A — admin',  'admin',  true, v_company_a),
-    ('00000000-0000-0000-0000-0000000000b1', 'Teste B — seller', 'seller', true, v_company_b);
+    INSERT INTO public.users (id, name, role, active, company_id)
+VALUES
+  ('00000000-0000-0000-0000-0000000000a1', 'Teste A — seller', 'seller', true, v_company_a),
+  ('00000000-0000-0000-0000-0000000000a2', 'Teste A — admin',  'admin',  true, v_company_a),
+  ('00000000-0000-0000-0000-0000000000b1', 'Teste B — seller', 'seller', true, v_company_b);
 END $$;
 
 -- Um customer e um product por empresa, para testar SELECT/UPDATE/DELETE cross-tenant.
@@ -244,13 +242,7 @@ BEGIN
 END $$;
 
 
--- RAISE NOTICE é comando PL/pgSQL, não SQL padrão — precisa estar dentro
--- de um bloco DO, nunca solto no nível do script (isso causaria
--- "ERROR: syntax error at or near RAISE" antes de chegar ao ROLLBACK).
-DO $$
-BEGIN
-  RAISE NOTICE '=== TODOS OS CENÁRIOS PASSARAM ===';
-END $$;
+RAISE NOTICE '=== TODOS OS CENÁRIOS PASSARAM ===';
 
 ROLLBACK;
 -- =============================================================================

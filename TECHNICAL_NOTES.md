@@ -317,13 +317,14 @@ CRON_SECRET=                    # token para proteger /api/jobs/*
 ```
 
 ### Cron Jobs no EasyPanel
-Configurar via EasyPanel Cron ou container separado com crontab:
+Configurar via EasyPanel Cron ou container separado com crontab (rota real é `/api/jobs/refresh-views?schedule=...`, não `refresh-views-hourly`/`rfm-recalc` como constava aqui antes):
 ```
-*/60 * * * *  curl -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/refresh-views-hourly
-0 */6 * * *   curl -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/refresh-views-6h
-0 2  * * *    curl -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-release
-0 3  * * *    curl -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-expire
-0 4  * * *    curl -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/rfm-recalc
+*/60 * * * *  curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://santtorini.qarvon.com/api/jobs/refresh-views?schedule=hourly"
+0 */6 * * *   curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://santtorini.qarvon.com/api/jobs/refresh-views?schedule=6h"
+0 4  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://santtorini.qarvon.com/api/jobs/refresh-views?schedule=daily"
+0 2  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-release
+0 3  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-expire
+0 20 * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/daily-sales-summary   # 17h America/Fortaleza (UTC-3, sem horário de verão)
 ```
 
 ---

@@ -3,6 +3,7 @@
   "short_name": "Santtorini",
   "description": "Sistema de gestão Santtorini",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0a0a0a",

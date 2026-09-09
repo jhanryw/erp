@@ -2,73 +2,22 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  LayoutDashboard, ShoppingCart, Users, Package, Warehouse,
-  Truck, TrendingUp, DollarSign, BarChart3, Brain,
-  Settings, Gift, LogOut, ChevronRight, Gem, SendHorizonal, Globe, Wallet, MapPin, MessageSquare,
-} from 'lucide-react'
+import { LogOut, ChevronRight, Gem, X } from 'lucide-react'
 import { cn } from '@/lib/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
 import { useUserContext } from '@/components/layout/user-context'
 import { hasMinRole, ROLE_LABELS } from '@/types/roles'
-import type { AppRole } from '@/types/roles'
+import { NAV_GROUPS } from '@/components/layout/nav-config'
 
-interface NavItem {
-  label: string
-  href: string
-  icon: React.ElementType
-  /** Role mínimo para ver este item. Ausente = visível para todos. */
-  minRole?: AppRole
-  badge?: string
+interface SidebarProps {
+  /** Chamado ao clicar em um item de navegação (usado pelo drawer mobile para fechar). */
+  onNavigate?: () => void
+  /** Quando definido, exibe um botão de fechar no cabeçalho (uso em drawer mobile). */
+  onClose?: () => void
+  className?: string
 }
 
-const NAV_GROUPS: { title: string; items: NavItem[] }[] = [
-  {
-    title: 'Geral',
-    items: [
-      { label: 'Dashboard', href: '/', icon: LayoutDashboard },
-    ],
-  },
-  {
-    title: 'Operação',
-    items: [
-      { label: 'Vendas', href: '/vendas', icon: ShoppingCart },
-      { label: 'Caixa',  href: '/caixa',  icon: Wallet },
-      { label: 'CRM',    href: '/crm/conversas', icon: MessageSquare },
-      { label: 'Envios',   href: '/envios',          icon: SendHorizonal },
-      { label: 'Repasses', href: '/envios/repasses', icon: Wallet },
-      { label: 'Clientes', href: '/clientes', icon: Users },
-      { label: 'Produtos', href: '/produtos', icon: Package },
-      { label: 'Estoque',       href: '/estoque',              icon: Warehouse },
-      { label: 'Localizações',  href: '/estoque/localizacoes', icon: MapPin },
-      { label: 'Fornecedores', href: '/fornecedores', icon: Truck },
-      { label: 'Marketing',    href: '/marketing',    icon: TrendingUp },
-      { label: 'Cashback',     href: '/cashback',     icon: Gift },
-    ],
-  },
-  {
-    title: 'Gestão',
-    items: [
-      { label: 'Financeiro',   href: '/financeiro',   icon: DollarSign, minRole: 'gerente' },
-    ],
-  },
-  {
-    title: 'Análise',
-    items: [
-      { label: 'Relatórios',  href: '/relatorios',  icon: BarChart3, minRole: 'gerente' },
-      { label: 'Inteligência', href: '/inteligencia', icon: Brain,    minRole: 'gerente' },
-    ],
-  },
-  {
-    title: 'Sistema',
-    items: [
-      { label: 'Configurações', href: '/configuracoes', icon: Settings, minRole: 'admin' },
-      { label: 'Nuvemshop',    href: '/configuracoes/nuvemshop', icon: Globe, minRole: 'admin' },
-    ],
-  },
-]
-
-export function Sidebar() {
+export function Sidebar({ onNavigate, onClose, className }: SidebarProps = {}) {
   const pathname = usePathname()
   const { signOut } = useAuth()
   const { userName, userRole } = useUserContext()
@@ -77,16 +26,27 @@ export function Sidebar() {
     href === '/' ? pathname === '/' : pathname.startsWith(href)
 
   return (
-    <aside className="flex flex-col h-full w-60 bg-bg-elevated border-r border-border">
+    <aside className={cn('flex flex-col h-full w-60 bg-bg-elevated border-r border-border', className)}>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-border">
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand">
-          <Gem className="w-4 h-4 text-white" />
+      <div className="flex items-center justify-between gap-3 px-5 py-5 border-b border-border">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-brand">
+            <Gem className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <span className="text-sm font-bold text-text-primary tracking-wide">Santtorini</span>
+            <p className="text-[10px] text-text-muted uppercase tracking-widest">ERP</p>
+          </div>
         </div>
-        <div>
-          <span className="text-sm font-bold text-text-primary tracking-wide">Santtorini</span>
-          <p className="text-[10px] text-text-muted uppercase tracking-widest">ERP</p>
-        </div>
+        {onClose && (
+          <button
+            onClick={onClose}
+            aria-label="Fechar menu"
+            className="flex items-center justify-center w-9 h-9 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Nav */}
@@ -109,6 +69,7 @@ export function Sidebar() {
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={onNavigate}
                     className={cn(
                       'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors group',
                       active

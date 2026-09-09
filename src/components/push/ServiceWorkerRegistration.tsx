@@ -11,6 +11,7 @@ export function ServiceWorkerRegistration() {
 
     navigator.serviceWorker
       .register('/sw.js', { scope: '/' })
+      .then((reg) => reg.update().catch(() => {}))
       .catch((err) => console.error('[SW] Falha ao registrar service worker:', err))
   }, [])
 
