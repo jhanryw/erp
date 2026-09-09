@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { brazilDate } from '@/lib/utils/date'
+import { getTodayRevenue } from '@/lib/analytics/todayRevenue'
 import { sendPushNotification } from '@/lib/push/send'
 
 const currency = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -30,19 +31,20 @@ export async function POST(request: Request) {
   const results: { companyId: number; revenue: number; orders: number }[] = []
 
   for (const companyId of companyIds) {
-    // Mesma regra de negócio EXATA do card "Faturamento Hoje" do Dashboard
-    // (src/services/dashboard.ts) — não duplicar critério diferente aqui.
-    const { data: rows } = await (admin as any)
-      .from('sales')
-      .select('id, total')
-      .eq('company_id', companyId)
-      .eq('sale_date', today)
-      .not('status', 'in', '("cancelled","returned")') as { data: { id: number; total: number }[] | null }
+    // Claim atômico ANTES de enviar — garante no máximo 1 resumo por empresa
+    // por dia, mesmo que este endpoint seja chamado mais de uma vez (pg_cron
+    // disparando em duplicidade, sobreposição com o cron externo durante a
+    // migração, retry manual). ignoreDuplicates: já existe linha → pula envio.
+    const { data: claimed } = await (admin as any)
+      .from('daily_summary_notifications')
+      .upsert({ company_id: companyId, summary_date: today }, { onConflict: 'company_id,summary_date', ignoreDuplicates: true })
+      .select('company_id')
 
-    const salesRows = rows ?? []
-    const revenue = salesRows.reduce((sum, r) => sum + Number(r.total ?? 0), 0)
-    const orders = salesRows.length
-    const avgTicket = orders > 0 ? revenue / orders : 0
+    if (!claimed?.length) continue
+
+    // Mesma regra de negócio EXATA do card "Faturamento Hoje" do Dashboard —
+    // fonte única em src/lib/analytics/todayRevenue.ts.
+    const { revenue, orders, avgTicket } = await getTodayRevenue(companyId)
 
     await sendPushNotification({
       companyId,

@@ -23,10 +23,17 @@ function formatDateTime(iso: string | null): string {
 type PermissionState = NotificationPermission | 'unsupported'
 
 interface ServerStatus {
-  vapidConfigured:  boolean
-  lastRegisteredAt: string | null
-  lastPushAt:       string | null
-  lastStatus:       string | number | null
+  vapidBackendConfigured: boolean
+  lastRegisteredAt:       string | null
+  lastPushAt:             string | null
+  lastStatus:             string | number | null
+  lastError:              string | null
+}
+
+const TEST_FAILURE_MESSAGES: Record<string, string> = {
+  VAPID_NOT_CONFIGURED:   'VAPID não configurada no servidor (faltam VAPID_SUBJECT/NEXT_PUBLIC_VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY em runtime).',
+  NO_ACTIVE_SUBSCRIPTION: 'Nenhuma assinatura ativa encontrada para este usuário — clique em "Ativar notificações" primeiro.',
+  WEB_PUSH_FAILED:        'O provedor de push recusou o envio',
 }
 
 interface Row {
@@ -181,8 +188,14 @@ export function PushDiagnosticsPanel() {
     try {
       const res = await fetch('/api/push/test', { method: 'POST' })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Falha ao enviar notificação de teste.')
-      setMessage({ type: 'ok', text: `Notificação de teste enviada (${data.sent}/${data.total} dispositivo(s)).` })
+
+      if (!data.ok) {
+        const base = TEST_FAILURE_MESSAGES[data.reason] ?? 'Falha ao enviar notificação de teste.'
+        const text = data.reason === 'WEB_PUSH_FAILED' && data.statusCode ? `${base} (status ${data.statusCode}).` : base
+        throw new Error(text)
+      }
+
+      setMessage({ type: 'ok', text: `Notificação de teste enviada (${data.sent}/${data.subscriptionsFound} dispositivo(s)).` })
     } catch (err) {
       setMessage({ type: 'error', text: err instanceof Error ? err.message : 'Falha ao enviar notificação de teste.' })
     } finally {
@@ -201,6 +214,11 @@ export function PushDiagnosticsPanel() {
 
   const isSubscribed = permission === 'granted' && !!subscription
   const unsupported = permission === 'unsupported' || !pushManagerAvailable
+  // Lido diretamente aqui (não via API): reflete literalmente o que foi
+  // inlinado no bundle do cliente no momento do `next build` — é isso que
+  // decide se PushManager.subscribe() consegue montar a applicationServerKey,
+  // não o que o servidor tem em runtime (isso é vapidBackendConfigured).
+  const vapidFrontendConfigured = Boolean(process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY)
 
   return (
     <div className="card p-5 space-y-4">
@@ -234,9 +252,14 @@ export function PushDiagnosticsPanel() {
             <StatusRow label="Subscription" value={subscription ? 'Ativa' : 'Inativa'} tone={subscription ? 'ok' : 'muted'} />
             <StatusRow label="Endpoint" value={subscription ? truncateEndpoint(subscription.endpoint) : '—'} />
             <StatusRow
-              label="VAPID"
-              value={serverStatus?.vapidConfigured ? 'Configurada' : 'Não configurada'}
-              tone={serverStatus?.vapidConfigured ? 'ok' : 'warn'}
+              label="VAPID frontend"
+              value={vapidFrontendConfigured ? 'Configurada' : 'Não configurada'}
+              tone={vapidFrontendConfigured ? 'ok' : 'warn'}
+            />
+            <StatusRow
+              label="VAPID backend"
+              value={serverStatus?.vapidBackendConfigured ? 'Configurada' : 'Não configurada'}
+              tone={serverStatus?.vapidBackendConfigured ? 'ok' : 'warn'}
             />
             <StatusRow label="Último registro" value={formatDateTime(serverStatus?.lastRegisteredAt ?? null)} />
             <StatusRow label="Último push enviado" value={formatDateTime(serverStatus?.lastPushAt ?? null)} />
@@ -245,6 +268,9 @@ export function PushDiagnosticsPanel() {
               value={serverStatus?.lastStatus != null ? String(serverStatus.lastStatus) : '—'}
               tone={serverStatus?.lastStatus === 201 ? 'ok' : serverStatus?.lastStatus ? 'warn' : 'muted'}
             />
+            {serverStatus?.lastError && (
+              <StatusRow label="Último erro" value={serverStatus.lastError} tone="warn" />
+            )}
           </div>
 
           {message && (

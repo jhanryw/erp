@@ -324,8 +324,9 @@ Configurar via EasyPanel Cron ou container separado com crontab (rota real é `/
 0 4  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" "https://santtorini.qarvon.com/api/jobs/refresh-views?schedule=daily"
 0 2  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-release
 0 3  * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/cashback-expire
-0 20 * * *    curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://santtorini.qarvon.com/api/jobs/daily-sales-summary   # 17h America/Fortaleza (UTC-3, sem horário de verão)
 ```
+
+`/api/jobs/daily-sales-summary` (resumo diário às 17h America/Fortaleza) **não está nesta lista** — é agendado direto no Postgres via `pg_cron` + `pg_net` (job `daily-sales-summary-17h`, ver `supabase/migrations/202609091204_cron_daily_sales_summary.sql`), sem depender de cron externo nem de n8n. O `CRON_SECRET` usado nessa chamada fica em `vault.secrets` (nome `cron_secret`), não em env var de container — ao rotacionar o `CRON_SECRET` do EasyPanel, rotacionar também lá via `select vault.update_secret(id, novo_valor)`.
 
 ---
 

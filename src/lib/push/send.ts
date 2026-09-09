@@ -17,6 +17,7 @@ function getWebPush() {
   return webpush
 }
 
+/** VAPID do lado do SERVIDOR (runtime) — não confundir com a pública do build-time do cliente. */
 export function isVapidConfigured(): boolean {
   return Boolean(process.env.VAPID_SUBJECT && process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY)
 }
@@ -37,18 +38,23 @@ interface PushPayload {
   icon:  string
 }
 
+export interface DeliveryResult {
+  subscriptionId: number
+  success:        boolean
+  statusCode:     number | null
+  errorMessage?:  string
+}
+
 /** Envia para um conjunto de assinaturas já resolvidas, registrando cada tentativa em push_send_logs. */
-async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload): Promise<number> {
+async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload): Promise<DeliveryResult[]> {
   const wp = getWebPush()
-  if (!wp) return 0
-  if (!subs.length) return 0
+  if (!wp || !subs.length) return []
 
   const admin = createAdminClient()
   const body = JSON.stringify(payload)
-  let delivered = 0
 
-  await Promise.allSettled(
-    subs.map(async (sub) => {
+  const results = await Promise.allSettled(
+    subs.map(async (sub): Promise<DeliveryResult> => {
       const logBase = {
         subscription_id: sub.id,
         company_id:      sub.company_id,
@@ -61,7 +67,6 @@ async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload
           { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
           body,
         )
-        delivered++
 
         await (admin as any).from('push_subscriptions')
           .update({ last_seen_at: new Date().toISOString() })
@@ -72,6 +77,8 @@ async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload
           success:     true,
           status_code: 201,
         })
+
+        return { subscriptionId: sub.id, success: true, statusCode: 201 }
       } catch (err: unknown) {
         const status = (err as { statusCode?: number }).statusCode ?? null
         const message = (err as { body?: string; message?: string }).body
@@ -80,7 +87,9 @@ async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload
 
         console.error(`[Push] Falha ao enviar para subscription ${sub.id} (status ${status}):`, message)
 
-        // 404/410 = browser removeu a assinatura — desativa para não tentar de novo
+        // 404/410 = browser removeu a assinatura — desativa para não tentar de novo.
+        // 400/401/403 NÃO desativam — são erro de configuração/payload do lado
+        // do servidor (ex: VAPID errada), não do dispositivo do usuário.
         if (status === 410 || status === 404) {
           await (admin as any).from('push_subscriptions')
             .update({ active: false })
@@ -93,11 +102,15 @@ async function deliverToSubscriptions(subs: Subscription[], payload: PushPayload
           status_code:   status,
           error_message: String(message).slice(0, 500),
         })
+
+        return { subscriptionId: sub.id, success: false, statusCode: status, errorMessage: String(message) }
       }
     })
   )
 
-  return delivered
+  return results.map((r) =>
+    r.status === 'fulfilled' ? r.value : { subscriptionId: -1, success: false, statusCode: null, errorMessage: 'Falha inesperada' }
+  )
 }
 
 export interface SendPushOptions {
@@ -137,6 +150,12 @@ export interface SendTestPushOptions {
   icon?:  string
 }
 
+export interface SendTestPushResult {
+  subscriptionsFound: number
+  sent:               number
+  statuses:           (number | null)[]
+}
+
 /** Envia um push de teste real (pela infraestrutura completa) só para as assinaturas ativas do próprio usuário. */
 export async function sendTestPush({
   userId,
@@ -144,7 +163,7 @@ export async function sendTestPush({
   body,
   url,
   icon = '/icons/icon-192.png',
-}: SendTestPushOptions): Promise<{ sent: number; total: number }> {
+}: SendTestPushOptions): Promise<SendTestPushResult> {
   const admin = createAdminClient()
 
   const { data: subs } = await (admin as any)
@@ -153,7 +172,12 @@ export async function sendTestPush({
     .eq('user_id', userId)
     .eq('active', true) as { data: Subscription[] | null }
 
-  const total = subs?.length ?? 0
-  const sent = await deliverToSubscriptions(subs ?? [], { title, body, url, icon })
-  return { sent, total }
+  const subscriptionsFound = subs?.length ?? 0
+  const results = await deliverToSubscriptions(subs ?? [], { title, body, url, icon })
+
+  return {
+    subscriptionsFound,
+    sent:     results.filter((r) => r.success).length,
+    statuses: results.map((r) => r.statusCode),
+  }
 }

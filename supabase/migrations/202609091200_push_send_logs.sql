@@ -1,5 +1,5 @@
 -- =============================================================================
--- 20260909_push_send_logs.sql
+-- 202609091200_push_send_logs.sql
 --
 -- Log de cada tentativa de envio de Web Push (sucesso ou erro), por assinatura.
 -- Resolve o gap encontrado na auditoria: send.ts descartava silenciosamente

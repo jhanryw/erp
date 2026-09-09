@@ -7,7 +7,6 @@ import { logError } from '@/lib/errors/log'
 import { validateStockForSale, validateProductsActive, checkSalePrices, createSale, resolveAuthoritativeItemCosts, assertResponsibleSellerAllowed } from '@/services/vendas.service'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
-import { sendPushNotification } from '@/lib/push/send'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -15,36 +14,6 @@ import { validateCPF } from '@/lib/utils/cpf'
 import { validateCNPJ } from '@/lib/utils/cnpj'
 import { resolveFiscalOperation } from '@/services/fiscal/resolveFiscalOperation'
 import { executeFiscalPolicy } from '@/services/fiscal/executeFiscalPolicy'
-
-// ─── Push notification — nova venda para admins ───────────────────────────────
-async function sendNewSalePushNotification(
-  admin: SupabaseClient,
-  saleId: number,
-  total: number,
-  sellerId: number | null | undefined,
-  companyId: number,
-): Promise<void> {
-  // Busca nome do vendedor responsável
-  let sellerName = 'vendedor(a)'
-  if (sellerId) {
-    const { data: seller } = await (admin as any)
-      .from('sellers')
-      .select('name')
-      .eq('id', sellerId)
-      .maybeSingle() as { data: { name: string } | null }
-    if (seller?.name) sellerName = seller.name
-  }
-
-  const formatted = total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-
-  await sendPushNotification({
-    companyId,
-    roles:  ['admin'],
-    title:  'Nova venda na Santtorini',
-    body:   `Venda de ${formatted} realizada por ${sellerName}`,
-    url:    `/vendas/${saleId}`,
-  })
-}
 
 // ─── Webhook n8n pós-venda ──────────────────────────────────────────────────
 // Payload estável desde 07/06 — mantém exatamente os campos que o workflow
@@ -392,14 +361,9 @@ export async function POST(request: Request) {
       )
     }
 
-    // Push notification para admins da empresa (fire-and-forget — não bloqueia resposta)
-    sendNewSalePushNotification(
-      admin,
-      sale.id,
-      Number((sale as any).total ?? 0),
-      saleData.responsible_seller_id ?? null,
-      user.company_id,
-    ).catch((err) => console.error('[POST /api/vendas] Push notification error', err))
+    // Push de nova venda: disparado dentro de createSale() (vendas.service.ts),
+    // não aqui — cobre PDV, troca e Atacado num único ponto, com idempotência
+    // por sale_id (public.sale_push_notifications).
 
     // Criar envio automaticamente após a venda. Nota (Fase Fiscal 5C):
     // ainda não-atômico em relação à venda — diferente do snapshot de

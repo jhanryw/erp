@@ -1,5 +1,6 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { brazilDate, brazilSubDays } from '@/lib/utils/date'
+import { getTodayRevenue } from '@/lib/analytics/todayRevenue'
 import { ORIGIN_LABELS } from '@/lib/constants/origins'
 import { computeModalityComparison, type ModalityComparison } from '@/lib/analytics/modalityMetrics'
 export { ORIGIN_LABELS, ORIGIN_COLORS, ALL_ORIGINS } from '@/lib/constants/origins'
@@ -91,7 +92,7 @@ export async function getDashboardData(
 
   // ── Consultas em paralelo ─────────────────────────────────────────────────
   const [
-    todaySalesRes,
+    todayRevenueRes,
     periodSalesRes,
     dailySeriesRes,
     originSeriesRes,
@@ -101,14 +102,9 @@ export async function getDashboardData(
     sellersRes,
   ] = await Promise.all([
 
-    // Vendas de hoje (sempre hoje, independente do range)
-    supabase
-      .from('sales')
-      .select('id, total')
-      .eq('company_id', companyId)
-      .eq('sale_date', today)
-      .not('status', 'in', '("cancelled","returned")')
-    ,
+    // Vendas de hoje (sempre hoje, independente do range) — mesma regra
+    // reutilizada pelo cron de resumo diário e pelo push de nova venda.
+    getTodayRevenue(companyId),
 
     // Vendas do período selecionado com lucro (via sale_items).
     // sale_type/quantity adicionados nesta fase (Analytics Varejo/Atacado)
@@ -197,9 +193,8 @@ export async function getDashboardData(
   ])
 
   // ── Hoje ─────────────────────────────────────────────────────────────────
-  const todayRows    = (todaySalesRes.data ?? []) as { id: number; total: number }[]
-  const todayRevenue = todayRows.reduce((s, r) => s + Number(r.total ?? 0), 0)
-  const todayOrders  = todayRows.length
+  const todayRevenue = todayRevenueRes.revenue
+  const todayOrders  = todayRevenueRes.orders
 
   // ── Período ───────────────────────────────────────────────────────────────
   type SaleRow = {

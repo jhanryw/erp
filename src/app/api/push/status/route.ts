@@ -22,16 +22,19 @@ export async function GET() {
 
   const { data: lastLog } = await (admin as any)
     .from('push_send_logs')
-    .select('sent_at, success, status_code')
+    .select('sent_at, success, status_code, error_message')
     .eq('user_id', user.id)
     .order('sent_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 
   return NextResponse.json({
-    vapidConfigured:  isVapidConfigured(),
-    lastRegisteredAt: lastSub?.created_at ?? null,
-    lastPushAt:       lastLog?.sent_at ?? null,
-    lastStatus:       lastLog ? (lastLog.success ? (lastLog.status_code ?? 201) : `Erro ${lastLog.status_code ?? ''}`.trim()) : null,
+    // VAPID backend/runtime: as 3 envs lidas pelo servidor (send.ts) — não
+    // diz nada sobre o que foi inlinado no bundle do cliente no build.
+    vapidBackendConfigured: isVapidConfigured(),
+    lastRegisteredAt:       lastSub?.created_at ?? null,
+    lastPushAt:             lastLog?.sent_at ?? null,
+    lastStatus:             lastLog ? (lastLog.success ? (lastLog.status_code ?? 201) : `Erro ${lastLog.status_code ?? ''}`.trim()) : null,
+    lastError:              lastLog && !lastLog.success ? (lastLog.error_message ?? null) : null,
   })
 }

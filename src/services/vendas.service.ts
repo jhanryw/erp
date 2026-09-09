@@ -6,6 +6,7 @@
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
+import { notifyNewSale } from '@/lib/push/newSale'
 import type { ServiceOutcome } from './produtos.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -106,6 +107,7 @@ export interface CreateSaleInput {
 export interface SaleResult {
   id: number
   sale_number: string
+  total: number
 }
 
 // ─── Helpers internos ─────────────────────────────────────────────────────────
@@ -435,7 +437,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
 
   const { data: sale, error } = await (admin as any)
     .rpc('rpc_create_sale', rpcParams) as unknown as {
-      data: { id: number; sale_number: string } | null
+      data: { id: number; sale_number: string; total: number } | null
       error: { code: string; message: string } | null
     }
 
@@ -445,6 +447,25 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
     // sofre ROLLBACK junto, nunca fica órfã).
     const status = error.code === 'P0001' ? 400 : 500
     return failure(error.message, status)
+  }
+
+  // Push para admins da empresa — fire-and-forget, não atrasa nem quebra a
+  // resposta da venda. Único ponto de disparo para PDV, troca (venda nova
+  // por itens substituídos) e Atacado, que passam todos por createSale().
+  // company_id é resolvido aqui (mesma fonte que a RPC usa internamente:
+  // users.company_id via systemUserId) porque o RPC não devolve company_id.
+  const { data: actingUser } = await (admin as any)
+    .from('users')
+    .select('company_id')
+    .eq('id', input.systemUserId)
+    .maybeSingle() as { data: { company_id: number } | null }
+
+  if (actingUser?.company_id) {
+    notifyNewSale({
+      saleId:    sale!.id,
+      companyId: actingUser.company_id,
+      total:     Number(sale!.total ?? 0),
+    }).catch((err) => console.error(`[Push] Falha ao notificar venda ${sale!.id}:`, err))
   }
 
   return success(sale!)

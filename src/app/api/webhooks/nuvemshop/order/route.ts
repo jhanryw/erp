@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { cancelSale } from '@/services/vendas.service'
+import { notifyNewSale } from '@/lib/push/newSale'
 import { normalizeE164BR } from '@/lib/utils/phone'
 import { resolveFiscalOperation } from '@/services/fiscal/resolveFiscalOperation'
 import { executeFiscalPolicy } from '@/services/fiscal/executeFiscalPolicy'
@@ -546,7 +547,7 @@ export async function POST(request: Request) {
         // (ambíguo — venda manual também pode usar esse valor).
         p_sale_type:           'retail',
         p_sales_channel:       'nuvemshop',
-      }) as unknown as { data: { id: number; sale_number: string } | null; error: { message: string } | null }
+      }) as unknown as { data: { id: number; sale_number: string; total: number } | null; error: { message: string } | null }
 
     if (saleError || !sale) {
       console.error('[webhook/order] Erro ao criar venda', saleError?.message, { externalId })
@@ -556,6 +557,15 @@ export async function POST(request: Request) {
         .eq('id', pedidoId)
       return NextResponse.json({ error: 'Erro ao criar venda no ERP.' }, { status: 500 })
     }
+
+    // Push de nova venda para admins — este webhook chama rpc_create_sale
+    // direto (não passa por createSale()/vendas.service.ts), então precisa
+    // do próprio disparo. Idempotente por sale_id (public.sale_push_notifications).
+    notifyNewSale({
+      saleId:    sale.id,
+      companyId,
+      total:     Number(sale.total ?? 0),
+    }).catch((err) => console.error(`[webhook/order] Falha ao notificar venda ${sale.id}:`, err))
 
     // ── 14. Confirmar estoque final na Nuvemshop ─────────────────────────────────
     for (const item of mappedItens) {
