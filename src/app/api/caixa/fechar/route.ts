@@ -1,16 +1,24 @@
 export const dynamic = 'force-dynamic'
 
 import { requireRole } from '@/lib/supabase/session'
-import { closeCashSession } from '@/services/caixa.service'
+import { closeCashSession, type CloseSessionResult } from '@/services/caixa.service'
 import { auditLog } from '@/lib/audit/log'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
-// GET /api/caixa/fechar?session_id=X — prévia do expected_cash antes de fechar
+// Conferência cega: mensagem única e neutra pra qualquer divergência —
+// nunca varia com a distância do valor correto (não é oráculo de "perto"/
+// "longe", só de "bateu"/"não bateu", que é inerente a qualquer conferência
+// às cegas — ver auditoria, seção 15).
+const BLIND_MISMATCH_MESSAGE = 'O valor informado não corresponde ao caixa. Faça uma nova contagem e tente novamente.'
+
+// GET /api/caixa/fechar?session_id=X — prévia do expected_cash antes de fechar.
+// Restrito a gerente/admin: essa prévia é uma ferramenta de conferência
+// gerencial, não faz parte do fluxo do seller (que fecha às cegas, sem ver
+// o valor esperado em momento algum — nem antes, nem depois de errar).
 export async function GET(request: Request) {
-  // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
-  const { user, response: unauth } = await requireRole('usuario')
+  const { user, response: unauth } = await requireRole('gerente')
   if (unauth) return unauth
 
   const { searchParams } = new URL(request.url)
@@ -94,7 +102,28 @@ const schema = z.object({
   notes:        z.preprocess((v) => (v === '' || v == null ? null : v), z.string().nullable().optional()),
 })
 
-// POST /api/caixa/fechar — restrito a gerente/admin
+/**
+ * Remove os campos sensíveis da conferência cega antes de a resposta sair
+ * pro browser. Feito aqui (camada HTTP), não no service nem na RPC, porque
+ * é aqui que o role do chamador (`user.role`) é conhecido — a RPC roda via
+ * service_role e não tem esse contexto, e não deveria precisar dele: ela
+ * sempre calcula e retorna tudo pra quem a chama (server-side, nunca
+ * exposta ao browser), e esta função decide o que atravessa a fronteira
+ * HTTP de acordo com quem está do outro lado.
+ */
+function summaryForRole(result: CloseSessionResult, role: string): Record<string, unknown> {
+  const rest: Record<string, unknown> = { ...result }
+  if (role !== 'gerente' && role !== 'admin') {
+    delete rest.expected_cash
+    delete rest.cash_difference
+  }
+  return rest
+}
+
+// POST /api/caixa/fechar — seller (usuario) fecha o próprio caixa sem senha
+// administrativa. A decisão de fechar ou não é tomada dentro da RPC
+// (rpc_close_cash_session), nunca no frontend nem nesta rota — aqui só se
+// filtra o que a resposta pode conter.
 export async function POST(request: Request) {
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   const { user, response: unauth } = await requireRole('usuario')
@@ -113,17 +142,32 @@ export async function POST(request: Request) {
   const result = await closeCashSession(parsed.data.session_id, user.id, parsed.data.counted_cash, parsed.data.notes)
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
 
+  if (result.data.status === 'mismatch') {
+    // Auditado sem nenhum valor sensível — só o fato de que uma tentativa
+    // divergente ocorreu. A sessão continua aberta; nenhuma venda,
+    // movimento ou dado contábil foi tocado.
+    auditLog({
+      userId: user.id, userRole: user.role,
+      action: 'close_cash_mismatch', resource: 'cash_session',
+      resourceId: parsed.data.session_id,
+      detail: 'Tentativa de fechamento com valor contado divergente — sessão permanece aberta.',
+    })
+    return NextResponse.json({ mismatch: true, message: BLIND_MISMATCH_MESSAGE })
+  }
+
+  const closed = result.data.result
+
   auditLog({
     userId: user.id, userRole: user.role,
     action: 'close_cash', resource: 'cash_session',
     resourceId: parsed.data.session_id,
     after: {
-      counted_cash:    result.data.counted_cash,
-      expected_cash:   result.data.expected_cash,
-      cash_difference: result.data.cash_difference,
-      total_sales:     result.data.total_sales,
+      counted_cash:    closed.counted_cash,
+      expected_cash:   closed.expected_cash,
+      cash_difference: closed.cash_difference,
+      total_sales:     closed.total_sales,
     },
   })
 
-  return NextResponse.json({ summary: result.data })
+  return NextResponse.json({ summary: summaryForRole(closed, user.role) })
 }

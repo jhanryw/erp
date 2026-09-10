@@ -20,7 +20,7 @@ export type AuditAction =
   | 'cancel' | 'return' | 'exchange' | 'adjust' | 'transfer'
   | 'sku_manual_override'
   | 'inventory_count'
-  | 'open_cash' | 'close_cash' | 'reopen_cash'
+  | 'open_cash' | 'close_cash' | 'close_cash_mismatch' | 'reopen_cash'
   | 'add_movement' | 'cancel_movement'
 
 export type AuditResource =

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
+import { hasMinRole } from '@/types/roles'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet, ChevronRight } from 'lucide-react'
@@ -32,29 +33,45 @@ type Session = {
   cash_difference: number | null
 }
 
-async function getSessions(companyId: number): Promise<Session[]> {
+// Conferência cega (auditoria 2026-09-10): usuario/seller não pode ver
+// esperado nem diferença no histórico — do contrário poderia fechar às
+// cegas e, no segundo seguinte, abrir aqui e descobrir os dois números.
+// `canSeeExpected` também decide QUAIS colunas são pedidas ao banco (não só
+// o que é renderizado) — defesa em profundidade, mesmo esta página sendo
+// Server Component (o que não é enviado ao client não vaza no HTML/RSC
+// payload de qualquer forma, mas assim o dado nem chega a existir aqui).
+async function getSessions(companyId: number, canSeeExpected: boolean): Promise<Session[]> {
   const admin = createAdminClient()
+  const baseFields = `
+    id, status, opened_at, closed_at, opening_amount_cash,
+    counted_cash,
+    total_sales, total_cash, total_pix, total_credit_card, total_debit_card,
+    total_sangria, total_suprimento, total_expenses
+  `
+  const fields = canSeeExpected ? `${baseFields}, expected_cash, cash_difference` : baseFields
   const { data } = await admin
     .from('cash_register_sessions')
-    .select(`
-      id, status, opened_at, closed_at, opening_amount_cash,
-      counted_cash, expected_cash,
-      total_sales, total_cash, total_pix, total_credit_card, total_debit_card,
-      total_sangria, total_suprimento, total_expenses, cash_difference
-    `)
+    .select(fields)
     .eq('company_id', companyId)
     .order('opened_at', { ascending: false })
-    .limit(60) as unknown as { data: Session[] | null }
-  return data ?? []
+    .limit(60) as unknown as { data: Record<string, unknown>[] | null }
+  return (data ?? []).map((s) => ({
+    ...s,
+    expected_cash:   (s.expected_cash as number | undefined)   ?? null,
+    cash_difference: (s.cash_difference as number | undefined) ?? null,
+  })) as Session[]
 }
 
 export default async function HistoricoCaixaPage() {
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   // Caixa não está bloqueado: histórico liberado para todos os roles.
+  // O que muda por role é só a visibilidade de esperado/diferença (ver
+  // canSeeExpected abaixo).
   const supabase = createClient()
   const { data: { user: authUser } } = await supabase.auth.getUser()
   const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
-  const sessions = profile?.company_id ? await getSessions(profile.company_id) : []
+  const canSeeExpected = profile ? hasMinRole(profile.role, 'gerente') : false
+  const sessions = profile?.company_id ? await getSessions(profile.company_id, canSeeExpected) : []
   const closed   = sessions.filter((s) => s.status === 'closed')
 
   return (
@@ -92,7 +109,7 @@ export default async function HistoricoCaixaPage() {
                   <TableHead align="right">Dinheiro</TableHead>
                   <TableHead align="right">PIX</TableHead>
                   <TableHead align="right">Cartão</TableHead>
-                  <TableHead align="right">Diferença</TableHead>
+                  {canSeeExpected && <TableHead align="right">Diferença</TableHead>}
                   <TableHead align="center">Detalhe</TableHead>
                 </TableRow>
               </TableHeader>
@@ -101,7 +118,11 @@ export default async function HistoricoCaixaPage() {
                   const diff = s.cash_difference ?? 0
                   // counted_cash = dinheiro físico contado ao fechar (o que estava na gaveta)
                   // total_cash   = soma das vendas pagas em dinheiro (detalhe na página interna)
-                  const dinheiroFisico = s.counted_cash ?? s.expected_cash ?? 0
+                  // Sem fallback pra expected_cash aqui: pra usuario/seller
+                  // esse campo nem chega preenchido (getSessions não o
+                  // busca), e usar 0 é mais seguro que herdar um valor que
+                  // não deveria existir neste contexto.
+                  const dinheiroFisico = s.counted_cash ?? 0
                   return (
                     <TableRow key={s.id}>
                       <TableCell muted>{formatDate(s.opened_at)}</TableCell>
@@ -119,6 +140,7 @@ export default async function HistoricoCaixaPage() {
                       <TableCell align="right" className="tabular-nums text-text-secondary">
                         {formatCurrency((s.total_credit_card ?? 0) + (s.total_debit_card ?? 0))}
                       </TableCell>
+                      {canSeeExpected && (
                       <TableCell align="right">
                         <Badge
                           variant={diff === 0 ? 'default' : diff > 0 ? 'success' : 'error'}
@@ -127,6 +149,7 @@ export default async function HistoricoCaixaPage() {
                           {diff > 0 ? '+' : ''}{formatCurrency(diff)}
                         </Badge>
                       </TableCell>
+                      )}
                       <TableCell align="center">
                         <Link href={`/caixa/historico/${s.id}`}>
                           <Button variant="ghost" size="sm" className="text-xs px-2">

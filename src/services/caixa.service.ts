@@ -34,6 +34,19 @@ export interface CloseSessionResult {
   cash_difference: number
 }
 
+/**
+ * Resultado da tentativa de fechamento — conferência cega.
+ * 'mismatch' significa que a RPC NÃO fechou a sessão (nenhum dado
+ * persistido, closed_at intacto): o valor contado não bateu com o
+ * esperado, calculado e comparado inteiramente dentro de
+ * rpc_close_cash_session. Nenhum campo numérico acompanha esse status —
+ * a decisão de esconder expected_cash/cash_difference é tomada no banco,
+ * não só na camada de API.
+ */
+export type CloseSessionOutcome =
+  | { status: 'closed'; result: CloseSessionResult }
+  | { status: 'mismatch' }
+
 type Ok<T> = { ok: true; data: T; error?: never }
 type Err = { ok: false; error: string; status: number; data?: never }
 type Outcome<T = undefined> = Ok<T> | Err
@@ -167,7 +180,7 @@ export async function closeCashSession(
   userId: string,
   countedCash: number,
   notes?: string | null
-): Promise<Outcome<CloseSessionResult>> {
+): Promise<Outcome<CloseSessionOutcome>> {
   const admin = createAdminClient()
 
   const { data, error } = await (admin as any)
@@ -176,10 +189,18 @@ export async function closeCashSession(
       p_user_id:      userId,
       p_counted_cash: countedCash,
       p_notes:        notes ?? null,
-    }) as unknown as { data: CloseSessionResult | null; error: { code: string; message: string } | null }
+    }) as unknown as {
+      data: (CloseSessionResult & { status: string }) | { status: 'mismatch'; id: number } | null
+      error: { code: string; message: string } | null
+    }
 
   if (error) {
     return failure(error.message, error.code === 'P0001' ? 400 : 500)
   }
-  return success(data!)
+
+  if (data!.status === 'mismatch') {
+    return success({ status: 'mismatch' })
+  }
+
+  return success({ status: 'closed', result: data as unknown as CloseSessionResult })
 }

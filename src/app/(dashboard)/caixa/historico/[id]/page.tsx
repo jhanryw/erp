@@ -5,17 +5,30 @@ import { notFound } from 'next/navigation'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
 import { getUserProfile } from '@/lib/auth/getProfile'
+import { hasMinRole } from '@/types/roles'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate } from '@/lib/utils/date'
 import { Wallet } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ReabrirCaixaButton } from './_components/reabrir-button'
 
-async function getSession(id: number, companyId: number) {
+// Conferência cega (auditoria 2026-09-10): expected_cash/cash_difference só
+// são buscados quando quem está vendo é gerente/admin — usuario/seller não
+// pode descobrir esses dois números nem no detalhe de um fechamento
+// passado (próprio ou de terceiros). `select('*')` foi trocado por uma
+// lista explícita de campos por causa disso.
+async function getSession(id: number, companyId: number, canSeeExpected: boolean) {
   const admin = createAdminClient()
+  const baseFields = `
+    id, company_id, status, opened_at, closed_at, opening_amount_cash,
+    counted_cash, notes_close,
+    total_sales, total_cash, total_pix, total_credit_card, total_debit_card,
+    total_card_fees, total_sangria, total_suprimento, total_expenses
+  `
+  const fields = canSeeExpected ? `${baseFields}, expected_cash, cash_difference` : baseFields
   const { data } = await admin
     .from('cash_register_sessions')
-    .select('*')
+    .select(fields)
     .eq('id', id)
     .eq('company_id', companyId)
     .eq('status', 'closed')
@@ -63,12 +76,17 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   // Caixa não está bloqueado: detalhe e reabertura liberados para todos os
   // roles (autorização real é o backend — POST /api/caixa/reabrir).
+  // Esperado/diferença, porém, seguem a conferência cega: só gerente/admin.
   const supabase = createClient()
   const { data: { user: authUser } } = await supabase.auth.getUser()
   const profile = authUser ? await getUserProfile(authUser.id, authUser.email) : null
   if (!profile?.company_id) notFound()
 
-  const [session, movements] = await Promise.all([getSession(id, profile.company_id), getMovements(id)])
+  const canSeeExpected = hasMinRole(profile.role, 'gerente')
+  const [session, movements] = await Promise.all([
+    getSession(id, profile.company_id, canSeeExpected),
+    getMovements(id),
+  ])
   if (!session) notFound()
 
   const diff = session.cash_difference ?? 0
@@ -111,16 +129,22 @@ export default async function DetalheCaixaPage({ params }: { params: { id: strin
         <Row label="Despesas"       value={`- ${formatCurrency(session.total_expenses ?? 0)}`} />
       </div>
 
-      {/* Conferência */}
+      {/* Conferência — esperado/diferença só pra gerente/admin (conferência
+          cega: usuario/seller nunca vê esses dois números, nem em tempo
+          real nem depois, no histórico do próprio fechamento). */}
       <div className="card p-5 space-y-1">
         <p className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3">Conferência</p>
-        <Row label="Esperado em caixa" value={formatCurrency(session.expected_cash ?? 0)} />
-        <Row label="Contado"           value={formatCurrency(session.counted_cash ?? 0)} />
-        <Row
-          label="Diferença"
-          value={`${diff > 0 ? '+' : ''}${formatCurrency(diff)}`}
-          highlight={diff === 0 ? 'default' : diff > 0 ? 'success' : 'error'}
-        />
+        {canSeeExpected && (
+          <Row label="Esperado em caixa" value={formatCurrency(session.expected_cash ?? 0)} />
+        )}
+        <Row label="Contado" value={formatCurrency(session.counted_cash ?? 0)} />
+        {canSeeExpected && (
+          <Row
+            label="Diferença"
+            value={`${diff > 0 ? '+' : ''}${formatCurrency(diff)}`}
+            highlight={diff === 0 ? 'default' : diff > 0 ? 'success' : 'error'}
+          />
+        )}
       </div>
 
       {/* Log de movimentos */}

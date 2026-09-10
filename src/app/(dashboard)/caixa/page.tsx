@@ -7,6 +7,10 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { formatCurrency } from '@/lib/utils/currency'
+import { useUserContext } from '@/components/layout/user-context'
+import { hasMinRole } from '@/types/roles'
+
+const BLIND_MISMATCH_FALLBACK = 'O valor informado não corresponde ao caixa. Faça uma nova contagem e tente novamente.'
 
 type CashSession = {
   id: number
@@ -22,6 +26,12 @@ const MOVEMENT_LABELS: Record<MovementType, string> = {
 }
 
 export default function CaixaPage() {
+  const { userRole } = useUserContext()
+  // gerente/admin veem a prévia do valor esperado ao fechar (ferramenta de
+  // conferência gerencial); usuario/seller fecha às cegas — nunca recebe
+  // esse valor, nem antes nem depois de uma tentativa divergente.
+  const isManager = hasMinRole(userRole, 'gerente')
+
   // undefined = carregando, null = fechado, objeto = aberto
   const [session, setSession]   = useState<CashSession | null | undefined>(undefined)
   const [loading, setLoading]   = useState(false)
@@ -36,11 +46,16 @@ export default function CaixaPage() {
   const [movDesc,   setMovDesc]   = useState('')
 
   // Formulário de fechamento
-  const [showClose,       setShowClose]       = useState(false)
-  const [closeCounted,    setCloseCounted]    = useState('')
-  const [closeNotes,      setCloseNotes]      = useState('')
-  const [expectedCash,    setExpectedCash]    = useState<number | null>(null)
-  const [loadingPreview,  setLoadingPreview]  = useState(false)
+  const [showClose,        setShowClose]        = useState(false)
+  const [closeCounted,     setCloseCounted]     = useState('')
+  const [closeNotes,       setCloseNotes]       = useState('')
+  const [loadingPreview,   setLoadingPreview]   = useState(false)
+  // Só usado pra gerente/admin — prévia informativa, não afeta a decisão de
+  // fechar (isso é feito inteiramente no backend/RPC).
+  const [expectedCash,     setExpectedCash]     = useState<number | null>(null)
+  // Mensagem neutra devolvida pelo backend quando o valor contado não bate.
+  // Nunca contém número — nem esperado, nem diferença, nem falta/sobra.
+  const [mismatchMessage,  setMismatchMessage]  = useState<string | null>(null)
 
   async function fetchSession() {
     try {
@@ -108,10 +123,17 @@ export default function CaixaPage() {
 
   async function openCloseForm() {
     if (!session) return
-    setLoadingPreview(true)
     setExpectedCash(null)
+    setMismatchMessage(null)
     setCloseCounted('')
     setCloseNotes('')
+    setShowClose(true)
+
+    // Prévia do valor esperado: só existe pra gerente/admin (a rota GET
+    // recusa usuario/seller com 403). O seller fecha às cegas — não faz
+    // sentido nem tentar buscar aqui.
+    if (!isManager) return
+    setLoadingPreview(true)
     try {
       const r    = await fetch(`/api/caixa/fechar?session_id=${session.id}`)
       const json = await r.json()
@@ -122,13 +144,13 @@ export default function CaixaPage() {
       // preview não-fatal: mostra o form sem o valor esperado
     } finally {
       setLoadingPreview(false)
-      setShowClose(true)
     }
   }
 
   async function handleClose() {
     if (!session) return
     setLoading(true)
+    setMismatchMessage(null)
     try {
       const r    = await fetch('/api/caixa/fechar', {
         method:  'POST',
@@ -141,11 +163,21 @@ export default function CaixaPage() {
       })
       const json = await r.json()
       if (!r.ok) { toast.error(json.error ?? 'Erro ao fechar caixa'); return }
+
+      if (json.mismatch) {
+        // Backend recusou fechar: sessão continua aberta, nada foi
+        // persistido. Mantém o formulário aberto pra recontagem — nenhum
+        // reload, nenhuma marcação de fechado.
+        setMismatchMessage(json.message ?? BLIND_MISMATCH_FALLBACK)
+        return
+      }
+
       toast.success('Caixa fechado!')
       setShowClose(false)
       setCloseCounted('')
       setCloseNotes('')
       setExpectedCash(null)
+      setMismatchMessage(null)
       await fetchSession()
     } catch {
       toast.error('Erro inesperado')
@@ -351,15 +383,18 @@ export default function CaixaPage() {
             <h2 className="text-base font-semibold text-text-primary">Fechar caixa</h2>
             <button
               type="button"
-              onClick={() => { setShowClose(false); setExpectedCash(null) }}
+              onClick={() => { setShowClose(false); setExpectedCash(null); setMismatchMessage(null) }}
               className="w-8 h-8 flex items-center justify-center rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          {/* Valor esperado calculado pelo sistema */}
-          {expectedCash !== null && (
+          {/* Valor esperado — só visível pra gerente/admin. O seller conta
+              o dinheiro físico e informa, sem ver quanto o sistema espera:
+              é essa conferência às cegas que impede que a contagem seja
+              "ajustada" pra bater em vez de refletir o dinheiro real. */}
+          {isManager && expectedCash !== null && (
             <div className="rounded-xl bg-bg-overlay border border-border p-4 space-y-1">
               <p className="text-xs text-text-muted">Dinheiro esperado no caixa</p>
               <p className="text-2xl font-bold tabular-nums text-text-primary">
@@ -372,36 +407,22 @@ export default function CaixaPage() {
           )}
 
           <Input
-            label={
-              expectedCash !== null
-                ? `Dinheiro contado fisicamente (esperado: ${formatCurrency(expectedCash)})`
-                : 'Dinheiro contado em caixa (R$)'
-            }
+            label="Dinheiro contado fisicamente (R$)"
             type="number"
             step="0.01"
             min="0"
             inputMode="decimal"
             placeholder="0,00"
             value={closeCounted}
-            onChange={(e) => setCloseCounted(e.target.value)}
+            onChange={(e) => { setCloseCounted(e.target.value); setMismatchMessage(null) }}
           />
 
-          {/* Diferença em tempo real */}
-          {expectedCash !== null && closeCounted !== '' && (
-            (() => {
-              const counted = parseFloat(closeCounted) || 0
-              const diff    = Math.round((counted - expectedCash) * 100) / 100
-              const ok      = Math.abs(diff) < 0.01
-              return (
-                <div className={`rounded-lg p-3 text-sm font-medium ${
-                  ok ? 'bg-success/10 text-success' : 'bg-error/10 text-error'
-                }`}>
-                  {ok
-                    ? '✓ Valores conferem — caixa pode ser fechado'
-                    : 'Atenção: valor contado não confere com o esperado pelo sistema'}
-                </div>
-              )
-            })()
+          {/* Resposta neutra do backend em caso de divergência — nunca
+              mostra esperado, diferença, falta ou sobra. */}
+          {mismatchMessage && (
+            <div className="rounded-lg p-3 text-sm font-medium bg-error/10 text-error">
+              {mismatchMessage}
+            </div>
           )}
 
           <Input
