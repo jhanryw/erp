@@ -254,6 +254,18 @@ async function getSale(id: string, companyId: number) {
 
   const hasExchanges = exchangesEnriched.length > 0
 
+  // Prioridade 2 (2026-09-15) — mesma condição de "troca total" que
+  // rpc_process_exchange usava pra marcar status='returned' antes da
+  // correção, recalculada aqui a partir de dados já carregados (nenhuma
+  // query nova) — alimenta o bloqueio de emissão fiscal em
+  // DocumentoFiscalCard, já que status sozinho não carrega mais esse sinal.
+  const totalOrigQty = (saleItems ?? []).reduce((sum: number, i: any) => sum + Number(i.quantity ?? 0), 0)
+  const totalExchQty = exchangesEnriched.reduce(
+    (sum: number, ex: any) => sum + ex.exchange_items.reduce((s: number, ei: any) => s + Number(ei.quantity_returned ?? 0), 0),
+    0,
+  )
+  const hasCompletedTotalExchange = totalOrigQty > 0 && totalExchQty >= totalOrigQty
+
   return {
     ...sale,
     customers:         customer ?? null,
@@ -264,6 +276,7 @@ async function getSale(id: string, companyId: number) {
     salePayments:      salePayments ?? [],
     exchanges:         exchangesEnriched,
     hasExchanges,
+    hasCompletedTotalExchange,
     fiscalDocuments:   latestFiscalDocByType,
   }
 }
@@ -387,7 +400,7 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg font-semibold text-text-primary font-mono">{sale.sale_number}</h2>
-              <SaleStatusBadge status={sale.status as SaleStatus} />
+              <SaleStatusBadge status={sale.status as SaleStatus} hasExchange={sale.hasExchanges} />
               {/* PDV atacado/varejo (2026-09-02) — sale.sale_type já vem do
                   select('*') em getSale(), sempre a modalidade PERSISTIDA
                   (nunca assumida como retail por default na tela). */}
@@ -744,6 +757,7 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
         maskedCpf={maskedCustomerCpf}
         initialDocuments={sale.fiscalDocuments as Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>}
         currentEnvironment={{ nfe: nfeEnvironment, nfce: nfceEnvironment }}
+        hasCompletedTotalExchange={sale.hasCompletedTotalExchange}
       />
     </div>
   )

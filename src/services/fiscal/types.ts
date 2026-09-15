@@ -141,6 +141,23 @@ export interface FiscalDocumentContext {
   environment: FocusEnvironment
   /** sales.status no momento da carga — usado por validateFiscalReadiness pra bloquear emissão de venda cancelled/returned (Fase Fiscal 3A). */
   saleStatus: string
+  /**
+   * Prioridade 2 (2026-09-15) — true quando existe troca(s) completed
+   * cujo total de `exchange_items.quantity_returned` cobre 100% da
+   * quantidade original desta venda (mesma condição que definia "troca
+   * total" em rpc_process_exchange antes da correção de status). Desde
+   * que troca deixou de marcar `sales.status='returned'`
+   * (20260915_fix_rpc_process_exchange_no_returned_status.sql), essa
+   * venda pode permanecer com status emitível mesmo sem nenhuma
+   * mercadoria original restando com o cliente — usado por
+   * validateFiscalReadiness pra bloquear emissão NOVA nesse caso
+   * específico. Troca PARCIAL não bloqueia: a nota documenta o que foi
+   * vendido originalmente, e isso continua válido mesmo com parte
+   * devolvida depois (mesma lógica de negócio de emitir a NF-e original
+   * e tratar a devolução parcial como operação fiscal separada, fora de
+   * escopo aqui).
+   */
+  hasCompletedTotalExchange: boolean
   /** sales.total — usado pra validar que a soma dos pagamentos bate com o total da venda (Fase Fiscal 3A). */
   saleTotal: number
   /**

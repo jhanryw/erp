@@ -25,6 +25,33 @@ describe('validateNfeReadiness — estado da venda (Fase Fiscal 3A)', () => {
   })
 })
 
+// Prioridade 2 (2026-09-15) — troca total deixou de marcar saleStatus como
+// 'returned' (20260915_fix_rpc_process_exchange_no_returned_status.sql),
+// então precisa de um bloqueio próprio de emissão, independente de status.
+describe('validateNfeReadiness — troca total (Prioridade 2, 2026-09-15)', () => {
+  it('venda com status ativo (paid) mas hasCompletedTotalExchange=true → sale_fully_exchanged_not_emittable', () => {
+    const ctx = baseFiscalContext({ saleStatus: 'paid', hasCompletedTotalExchange: true })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).toContain('sale_fully_exchanged_not_emittable')
+  })
+
+  it('venda com troca PARCIAL (hasCompletedTotalExchange=false) → NÃO bloqueia — a nota documenta o que foi vendido originalmente', () => {
+    const ctx = baseFiscalContext({ saleStatus: 'paid', hasCompletedTotalExchange: false })
+    expect(validateNfeReadiness(ctx).map((e) => e.code)).not.toContain('sale_fully_exchanged_not_emittable')
+  })
+
+  it('venda cancelled/returned E hasCompletedTotalExchange=true → os dois erros aparecem juntos, nenhum mascara o outro', () => {
+    const ctx = baseFiscalContext({ saleStatus: 'returned', hasCompletedTotalExchange: true })
+    const codes = validateNfeReadiness(ctx).map((e) => e.code)
+    expect(codes).toContain('sale_status_not_emittable')
+    expect(codes).toContain('sale_fully_exchanged_not_emittable')
+  })
+
+  it('NFC-e (validateNfceReadiness) tem a mesma proteção — regra é compartilhada (validateCommonFiscalReadiness)', () => {
+    const ctx = baseFiscalContext({ saleStatus: 'paid', hasCompletedTotalExchange: true })
+    expect(validateNfceReadiness(ctx).map((e) => e.code)).toContain('sale_fully_exchanged_not_emittable')
+  })
+})
+
 describe('validateNfeReadiness — pagamentos (Fase Fiscal 3A)', () => {
   it('sem nenhum pagamento → payments_missing', () => {
     const ctx = baseFiscalContext({ payments: [] })

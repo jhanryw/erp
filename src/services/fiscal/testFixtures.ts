@@ -20,6 +20,7 @@ export function baseFiscalContext(overrides: Partial<FiscalDocumentContext> = {}
     providerRef: 'teste-preview-ref-0001',
     environment: 'homologacao',
     saleStatus: 'paid',
+    hasCompletedTotalExchange: false,
     saleTotal: 79.8, // 2 × 39.90 (item único do fixture) — bate com o pagamento abaixo
     saleDiscountAmount: 0,
     saleSurchargeAmount: 0,

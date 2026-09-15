@@ -52,7 +52,15 @@ export function Badge({
   )
 }
 
-export function SaleStatusBadge({ status }: { status: SaleStatus }) {
+/**
+ * `hasExchange` (2026-09-15) — vem de `EXISTS(exchanges WHERE
+ * original_sale_id=sale.id)`, NUNCA de `status`. Troca (parcial ou
+ * total) não altera mais `sales.status` — "Trocado" é um selo
+ * independente do status comercial real da venda (ex.: "Pago" +
+ * "Trocado" ao mesmo tempo), nunca um substituto de "Devolvido", que
+ * continua reservado para devolução financeira real via rpc_return_sale.
+ */
+export function SaleStatusBadge({ status, hasExchange }: { status: SaleStatus; hasExchange?: boolean }) {
   const config: Record<
     SaleStatus,
     { label: string; variant: BadgeProps['variant'] }
@@ -66,7 +74,12 @@ export function SaleStatusBadge({ status }: { status: SaleStatus }) {
   }
 
   const { label, variant } = config[status]
-  return <Badge variant={variant}>{label}</Badge>
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <Badge variant={variant}>{label}</Badge>
+      {hasExchange && <Badge variant="info">Trocado</Badge>}
+    </span>
+  )
 }
 
 export function RfmBadge({ segment }: { segment: RfmSegment }) {

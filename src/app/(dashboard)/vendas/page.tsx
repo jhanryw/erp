@@ -53,6 +53,7 @@ type SaleRow = {
   created_at:      string
   customers:       SaleCustomer | SaleCustomer[] | null
   sellers:         SaleUser | SaleUser[] | null
+  has_exchange:    boolean
 }
 
 async function getSales(companyId: number, search?: string, page = 1) {
@@ -108,8 +109,23 @@ async function getSales(companyId: number, search?: string, page = 1) {
     return { sales: [] as SaleRow[], total: 0, error: error.message as string }
   }
 
+  const rows = (data ?? []) as SaleRow[]
+
+  // "Trocado" (2026-09-15) — troca não altera mais sales.status, então o
+  // selo vem de EXISTS(exchanges), nunca do status. Uma única query extra
+  // por página (nunca por linha), escopada aos ids já carregados.
+  const saleIds = rows.map((s) => s.id)
+  let exchangedIds = new Set<number>()
+  if (saleIds.length > 0) {
+    const { data: exchangeRows } = await supabase
+      .from('exchanges')
+      .select('original_sale_id')
+      .in('original_sale_id', saleIds) as unknown as { data: { original_sale_id: number }[] | null }
+    exchangedIds = new Set((exchangeRows ?? []).map((e) => e.original_sale_id))
+  }
+
   return {
-    sales: (data ?? []) as SaleRow[],
+    sales: rows.map((s) => ({ ...s, has_exchange: exchangedIds.has(s.id) })),
     total: (count ?? 0) as number,
     error: null,
   }
@@ -252,7 +268,7 @@ export default async function VendasPage({
                       </TableCell>
 
                       <TableCell>
-                        <SaleStatusBadge status={sale.status} />
+                        <SaleStatusBadge status={sale.status} hasExchange={sale.has_exchange} />
                       </TableCell>
 
                       <TableCell>{seller?.name ?? '—'}</TableCell>

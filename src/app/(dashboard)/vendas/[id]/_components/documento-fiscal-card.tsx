@@ -131,10 +131,18 @@ interface DocumentoFiscalCardProps {
   initialDocuments: Record<'nfe' | 'nfce', InitialFiscalDocument | undefined>
   /** Ambiente CONFIGURADO agora por tipo (company_fiscal_settings.nfe_environment/nfce_environment) — usado pra saber se um "autorizado" já existente ainda corresponde ao ambiente atual, nunca lido de fiscal_documents. */
   currentEnvironment: { nfe: FocusEnvironment; nfce: FocusEnvironment }
+  /**
+   * Prioridade 2 (2026-09-15) — espelha `FiscalDocumentContext.
+   * hasCompletedTotalExchange` (validateFiscalReadiness.ts) na UI: troca
+   * total não altera mais `saleStatus`, então esse bloqueio precisa de um
+   * sinal próprio, calculado a partir de `exchanges`/`sale_items` já
+   * carregados por `getSale()` — nenhuma query nova.
+   */
+  hasCompletedTotalExchange?: boolean
 }
 
 function DocumentTypeSection({
-  saleId, type, label, eligible, ineligibleReason, saleBlocked, initial, currentEnvironment,
+  saleId, type, label, eligible, ineligibleReason, saleBlocked, saleBlockedReason, initial, currentEnvironment,
 }: {
   saleId: number
   type: 'nfe' | 'nfce'
@@ -142,6 +150,8 @@ function DocumentTypeSection({
   eligible: boolean
   ineligibleReason: string | null
   saleBlocked: boolean
+  /** Mensagem exibida quando saleBlocked — diferencia cancelada/devolvida de troca total (Prioridade 2, 2026-09-15). */
+  saleBlockedReason: string
   initial: InitialFiscalDocument | undefined
   currentEnvironment: FocusEnvironment
 }) {
@@ -314,7 +324,7 @@ function DocumentTypeSection({
       )}
 
       {saleBlocked && (
-        <p className="text-xs text-red-500">Venda cancelada/devolvida — emissão bloqueada.</p>
+        <p className="text-xs text-red-500">{saleBlockedReason}</p>
       )}
 
       {(!result || result.status !== 'authorized') && !saleBlocked && (
@@ -438,8 +448,14 @@ function DocumentTypeSection({
   )
 }
 
-export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedReason, maskedCpf, initialDocuments, currentEnvironment }: DocumentoFiscalCardProps) {
-  const saleBlocked = TERMINAL_SALE_STATUSES.has(saleStatus)
+export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedReason, maskedCpf, initialDocuments, currentEnvironment, hasCompletedTotalExchange }: DocumentoFiscalCardProps) {
+  // Prioridade 2 (2026-09-15) — troca total não altera mais saleStatus,
+  // então o bloqueio de emissão precisa considerar os dois sinais
+  // independentemente (nunca um substituindo o outro).
+  const saleBlocked = TERMINAL_SALE_STATUSES.has(saleStatus) || Boolean(hasCompletedTotalExchange)
+  const saleBlockedReason = TERMINAL_SALE_STATUSES.has(saleStatus)
+    ? 'Venda cancelada/devolvida — emissão bloqueada.'
+    : 'Todos os itens desta venda foram trocados — emissão bloqueada (mercadoria não está mais com o cliente).'
 
   return (
     <Card padding="md" className="border-amber-500/30 space-y-3">
@@ -466,6 +482,7 @@ export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedR
         eligible={resolvedType === 'nfce'}
         ineligibleReason={resolvedType !== 'nfce' ? 'Não elegível para esta venda (modalidade de entrega/origem indica NF-e ou está indeterminada).' : null}
         saleBlocked={saleBlocked}
+        saleBlockedReason={saleBlockedReason}
         initial={initialDocuments.nfce}
         currentEnvironment={currentEnvironment.nfce}
       />
@@ -474,6 +491,7 @@ export function DocumentoFiscalCard({ saleId, saleStatus, resolvedType, blockedR
         eligible
         ineligibleReason={null}
         saleBlocked={saleBlocked}
+        saleBlockedReason={saleBlockedReason}
         initial={initialDocuments.nfe}
         currentEnvironment={currentEnvironment.nfe}
       />

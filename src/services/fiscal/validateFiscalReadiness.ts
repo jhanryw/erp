@@ -59,6 +59,17 @@ export function validateCommonFiscalReadiness(ctx: FiscalDocumentContext): Fisca
     errors.push(err('sale_status_not_emittable', `Venda está com status "${ctx.saleStatus}" — não é possível emitir NF-e nova pra uma venda cancelada ou devolvida.`, 'saleStatus'))
   }
 
+  // Prioridade 2 (2026-09-15) — desde que troca deixou de marcar
+  // sales.status='returned' (20260915_fix_rpc_process_exchange_no_returned_
+  // status.sql), uma venda 100%-trocada pode ficar com status emitível
+  // (ex.: 'paid') mesmo sem nenhuma mercadoria original restando com o
+  // cliente. Bloqueia só troca TOTAL — troca PARCIAL não bloqueia: a nota
+  // documenta o que foi vendido originalmente, e isso continua válido
+  // mesmo com parte devolvida depois.
+  if (ctx.hasCompletedTotalExchange) {
+    errors.push(err('sale_fully_exchanged_not_emittable', 'Todos os itens desta venda já foram trocados (troca total) — não é possível emitir documento fiscal novo para mercadoria que não está mais com o cliente.', 'saleStatus'))
+  }
+
   // ─── Integração Focus ────────────────────────────────────────────────────
   if (!ctx.focusIntegration.available) {
     if (ctx.focusIntegration.reason === 'integration_not_found') {

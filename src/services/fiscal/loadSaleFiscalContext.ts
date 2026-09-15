@@ -82,6 +82,27 @@ export async function loadSaleFiscalContext({
   if (saleError) throw new FiscalContextError(`Falha ao carregar venda ${saleId}: ${saleError.message}`)
   if (!sale) throw new FiscalContextError(`Venda ${saleId} não encontrada nesta empresa.`)
 
+  // Prioridade 2 (2026-09-15) — "troca total" pela MESMA condição que
+  // rpc_process_exchange usava pra marcar status='returned' antes da
+  // correção: soma de exchange_items.quantity_returned (trocas
+  // completed) >= soma de sale_items.quantity. Duas queries pequenas em
+  // vez de uma junção complexa — legível, e este loader já faz várias
+  // queries em paralelo por design (ver Promise.all abaixo).
+  const [{ data: origQtyRows }, { data: exchQtyRows }] = await Promise.all([
+    (admin as any).from('sale_items').select('quantity').eq('sale_id', saleId),
+    (admin as any)
+      .from('exchange_items')
+      .select('quantity_returned, exchanges!inner(original_sale_id, status)')
+      .eq('exchanges.original_sale_id', saleId)
+      .eq('exchanges.status', 'completed'),
+  ]) as [
+    { data: { quantity: number }[] | null },
+    { data: { quantity_returned: number }[] | null },
+  ]
+  const totalOrigQty = (origQtyRows ?? []).reduce((sum, r) => sum + Number(r.quantity ?? 0), 0)
+  const totalExchQty = (exchQtyRows ?? []).reduce((sum, r) => sum + Number(r.quantity_returned ?? 0), 0)
+  const hasCompletedTotalExchange = totalOrigQty > 0 && totalExchQty >= totalOrigQty
+
   const [{ data: settings }, { data: customer }, { data: saleItems }, { data: shipment }, { data: salePayments }, { data: recipientSnapshot }, focusIntegrationResult] = await Promise.all([
     (admin as any)
       .from('company_fiscal_settings')
@@ -178,6 +199,7 @@ export async function loadSaleFiscalContext({
     providerRef,
     environment,
     saleStatus: sale.status,
+    hasCompletedTotalExchange,
     saleTotal: Number(sale.total),
     saleDiscountAmount: Number(sale.discount_amount ?? 0),
     saleSurchargeAmount: Number(sale.surcharge_amount ?? 0),

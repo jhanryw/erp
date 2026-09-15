@@ -53,6 +53,7 @@ function goldenSample1(): FiscalDocumentContext {
     providerRef: 'golden-sample-1',
     environment: 'homologacao',
     saleStatus: 'paid',
+    hasCompletedTotalExchange: false,
     saleTotal: 170.98, // vNF real do XML
     saleDiscountAmount: 0,
     saleSurchargeAmount: 0,
@@ -96,6 +97,7 @@ function goldenSample2(): FiscalDocumentContext {
     providerRef: 'golden-sample-2',
     environment: 'homologacao',
     saleStatus: 'paid',
+    hasCompletedTotalExchange: false,
     saleTotal: 156.72, // vNF real do XML
     saleDiscountAmount: 0,
     saleSurchargeAmount: 0,

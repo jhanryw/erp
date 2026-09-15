@@ -9,6 +9,8 @@ import { POST } from './route'
 import * as sessionModule from '@/lib/supabase/session'
 import * as adminModule from '@/lib/supabase/admin'
 import * as authTokenModule from '@/lib/auth/validateAuthorizationToken'
+import * as vendasServiceModule from '@/services/vendas.service'
+import * as exchangePushModule from '@/lib/push/exchange'
 
 vi.mock('@/lib/audit/log', () => ({ auditLog: vi.fn() }))
 vi.mock('@/lib/errors/log', () => ({ logError: vi.fn() }))
@@ -166,5 +168,91 @@ describe('POST /api/vendas/[id]/troca — nenhum perfil autenticado da empresa p
     expect(rpcSpy).toHaveBeenCalledWith('rpc_process_exchange', expect.objectContaining({
       p_user_id: 'seller-uuid',
     }))
+  })
+})
+
+// Correção 2026-09-15 — venda-filha de troca não dispara mais o "Nova
+// venda" genérico (createSale->notifyNewSale); a rota chama notifyExchange
+// diretamente, com skipNewSaleNotification:true passado pro createSale.
+describe('POST /api/vendas/[id]/troca — push dedicado de troca (notifyExchange, não "Nova venda")', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  const NEW_ITEM = { product_variation_id: 99, quantity: 1, unit_price: 29.98 }
+
+  it('troca com peça nova, sem diferença — createSale recebe skipNewSaleNotification:true e notifyExchange é chamado com difference=0', async () => {
+    mockSession('usuario', 'seller-uuid')
+    mockAdminClient({ rpcData: { exchange_id: 12, credit_amount: 29.99 } })
+
+    const createSaleSpy = vi.spyOn(vendasServiceModule, 'createSale').mockResolvedValue({
+      ok: true,
+      data: { id: 822, sale_number: 'SNT-20260914-0009', total: 0 },
+    } as any)
+    const notifyExchangeSpy = vi.spyOn(exchangePushModule, 'notifyExchange').mockResolvedValue(undefined)
+
+    const res = await POST(
+      buildRequest({ ...VALID_BODY, new_items: [NEW_ITEM] }),
+      { params: { id: String(SALE_ID) } },
+    )
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.new_sale_number).toBe('SNT-20260914-0009')
+    expect(createSaleSpy).toHaveBeenCalledWith(expect.objectContaining({ skipNewSaleNotification: true }))
+    // Fire-and-forget — dá um tick pro .then/.catch da promise resolver antes de checar
+    await new Promise((r) => setTimeout(r, 0))
+    expect(notifyExchangeSpy).toHaveBeenCalledWith({ saleId: 822, companyId: COMPANY_ID, difference: 0 })
+  })
+
+  it('troca com peça nova mais cara — notifyExchange recebe a diferença real (total da venda-filha)', async () => {
+    mockSession('usuario', 'seller-uuid')
+    mockAdminClient({ rpcData: { exchange_id: 12, credit_amount: 29.99 } })
+
+    vi.spyOn(vendasServiceModule, 'createSale').mockResolvedValue({
+      ok: true,
+      data: { id: 900, sale_number: 'SNT-20260914-0010', total: 10 },
+    } as any)
+    const notifyExchangeSpy = vi.spyOn(exchangePushModule, 'notifyExchange').mockResolvedValue(undefined)
+
+    await POST(
+      buildRequest({ ...VALID_BODY, new_items: [{ ...NEW_ITEM, unit_price: 39.99 }], payment_method: 'cash' }),
+      { params: { id: String(SALE_ID) } },
+    )
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(notifyExchangeSpy).toHaveBeenCalledWith({ saleId: 900, companyId: COMPANY_ID, difference: 10 })
+  })
+
+  it('troca SEM peça nova (só crédito, sem venda-filha) — notifyExchange nunca é chamado', async () => {
+    mockSession('usuario', 'seller-uuid')
+    mockAdminClient({ rpcData: { exchange_id: 12, credit_amount: 29.99 } })
+
+    const createSaleSpy = vi.spyOn(vendasServiceModule, 'createSale')
+    const notifyExchangeSpy = vi.spyOn(exchangePushModule, 'notifyExchange').mockResolvedValue(undefined)
+
+    const res = await POST(buildRequest(VALID_BODY), { params: { id: String(SALE_ID) } })
+
+    expect(res.status).toBe(200)
+    expect(createSaleSpy).not.toHaveBeenCalled()
+    expect(notifyExchangeSpy).not.toHaveBeenCalled()
+  })
+
+  it('createSale falha ao criar a venda-filha — notifyExchange nunca é chamado, resposta informa new_sale_error', async () => {
+    mockSession('usuario', 'seller-uuid')
+    mockAdminClient({ rpcData: { exchange_id: 12, credit_amount: 29.99 } })
+
+    vi.spyOn(vendasServiceModule, 'createSale').mockResolvedValue({
+      ok: false, error: 'Estoque insuficiente.', status: 400,
+    } as any)
+    const notifyExchangeSpy = vi.spyOn(exchangePushModule, 'notifyExchange').mockResolvedValue(undefined)
+
+    const res = await POST(
+      buildRequest({ ...VALID_BODY, new_items: [NEW_ITEM] }),
+      { params: { id: String(SALE_ID) } },
+    )
+    const json = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(json.new_sale_error).toBeUndefined() // só existe quando createSale lança; ok:false não passa pelo catch
+    expect(notifyExchangeSpy).not.toHaveBeenCalled()
   })
 })

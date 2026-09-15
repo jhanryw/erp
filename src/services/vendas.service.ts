@@ -102,6 +102,15 @@ export interface CreateSaleInput {
    * vez de duplicado.
    */
   stockMode?: 'main_store' | 'online_priority'
+  /**
+   * Correção troca total (2026-09-15) — quando true, `createSale()` não
+   * dispara `notifyNewSale()` (o push genérico "Nova venda"). Usado pela
+   * rota de troca (`/api/vendas/[id]/troca`), que envia sua própria
+   * notificação (`notifyExchange`) depois do sucesso — evita o push
+   * "Nova venda • R$0,00" para uma venda-filha 100% paga com crédito de
+   * troca, e evita notificar duas vezes quando há diferença cobrada.
+   */
+  skipNewSaleNotification?: boolean
 }
 
 export interface SaleResult {
@@ -450,8 +459,12 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
   }
 
   // Push para admins da empresa — fire-and-forget, não atrasa nem quebra a
-  // resposta da venda. Único ponto de disparo para PDV, troca (venda nova
-  // por itens substituídos) e Atacado, que passam todos por createSale().
+  // resposta da venda. Ponto de disparo para PDV e Atacado, que passam por
+  // createSale(). Troca (venda-filha por itens substituídos) passa por
+  // aqui também, mas com `skipNewSaleNotification: true` — o push dela é
+  // `notifyExchange()`, disparado pela própria rota de troca depois do
+  // sucesso (correção 2026-09-15: "Nova venda • R$0,00" era enganoso para
+  // uma venda-filha paga 100% com crédito de troca).
   // company_id é resolvido aqui (mesma fonte que a RPC usa internamente:
   // users.company_id via systemUserId) porque o RPC não devolve company_id.
   const { data: actingUser } = await (admin as any)
@@ -460,7 +473,7 @@ export async function createSale(input: CreateSaleInput): Promise<ServiceOutcome
     .eq('id', input.systemUserId)
     .maybeSingle() as { data: { company_id: number } | null }
 
-  if (actingUser?.company_id) {
+  if (actingUser?.company_id && !input.skipNewSaleNotification) {
     notifyNewSale({
       saleId:    sale!.id,
       companyId: actingUser.company_id,

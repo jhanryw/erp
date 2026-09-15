@@ -5,6 +5,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { createSale } from '@/services/vendas.service'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
+import { notifyExchange } from '@/lib/push/exchange'
 
 const returnedItemSchema = z.object({
   sale_item_id:      z.coerce.number().int().positive(),
@@ -136,11 +137,25 @@ export async function POST(
         responsible_seller_id: originalSale.responsible_seller_id,
         sale_type:      (originalSale.sale_type as 'retail' | 'wholesale' | null) ?? 'retail',
         sales_channel:  originalSale.sales_channel,
+        // Push próprio (notifyExchange abaixo) — nunca o "Nova venda"
+        // genérico, que mostraria "R$0,00" numa troca sem diferença.
+        skipNewSaleNotification: true,
       })
 
       if (saleResult.ok) {
         newSaleId     = saleResult.data!.id
         newSaleNumber = saleResult.data!.sale_number
+
+        // Fire-and-forget, mesmo padrão de createSale() — nunca atrasa nem
+        // quebra a resposta da troca. `difference` é o `total` da
+        // venda-filha, que já é o valor incremental real (bruto - crédito
+        // de troca usado) — nenhum cálculo paralelo de faturamento aqui,
+        // notifyExchange() consulta a mesma getTodayRevenue() de sempre.
+        notifyExchange({
+          saleId:     newSaleId,
+          companyId:  originalSale.company_id,
+          difference: Number(saleResult.data!.total ?? 0),
+        }).catch((err) => console.error(`[Push] Falha ao notificar troca (venda ${newSaleId}):`, err))
       }
     } catch (err) {
       logError({
