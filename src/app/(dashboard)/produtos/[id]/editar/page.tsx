@@ -12,6 +12,9 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { ProductMediaManager } from '../../_components/product-media'
+import { WHOLESALE_STATUS_LABEL, WHOLESALE_VARIATION_STATUS_LABEL } from '@/services/wholesale/adminStatusLabels'
+import type { WholesaleAdminStatus, WholesaleVariationDetail } from '@/services/wholesale/adminStatus'
+import { Badge } from '@/components/ui/badge'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,12 @@ function fmtCurrency(n: number | null) {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
+type WholesaleInfo = {
+  status: WholesaleAdminStatus
+  hasImage: boolean
+  variations: WholesaleVariationDetail[]
+}
+
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function EditarProdutoPage({ params }: { params: { id: string } }) {
@@ -85,6 +94,12 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   const [categories, setCategories] = useState<any[]>([])
   const [suppliers, setSuppliers] = useState<any[]>([])
   const [brands, setBrands] = useState<any[]>([])
+
+  // Canal de atacado — o switch salva NA HORA (PUT parcial só com wholesale_enabled);
+  // o status vem do servidor (mesma regra do catálogo), nunca calculado aqui.
+  const [wholesaleEnabled, setWholesaleEnabled] = useState(false)
+  const [wholesale, setWholesale] = useState<WholesaleInfo | null>(null)
+  const [savingWholesale, setSavingWholesale] = useState(false)
 
   // Variation state
   const [variations, setVariations] = useState<VariationRow[]>([])
@@ -161,6 +176,9 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
         return
       }
 
+      setWholesaleEnabled(Boolean((product as any).wholesale_enabled))
+      setWholesale(prodJson.wholesale ?? null)
+
       const loadedVariations: VariationRow[] = prodJson.variations ?? []
       setVariations(loadedVariations)
 
@@ -197,6 +215,31 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
       setLoading(false)
     })
   }, [params.id, reset, router])
+
+  async function toggleWholesale(next: boolean) {
+    setSavingWholesale(true)
+    try {
+      const res = await fetch(`/api/produtos/${params.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wholesale_enabled: next }),
+      })
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        toast.error('Não foi possível alterar o atacado', { description: typeof json.error === 'string' ? json.error : undefined })
+        return
+      }
+      setWholesaleEnabled(next)
+      toast.success(next ? 'Produto ativado no atacado.' : 'Produto desativado no atacado.')
+      // Recarrega o status real (regra única do backend).
+      const fresh = await fetch(`/api/produtos/${params.id}`).then((r) => r.json()).catch(() => null)
+      if (fresh?.wholesale) setWholesale(fresh.wholesale)
+    } catch {
+      toast.error('Não foi possível alterar o atacado', { description: 'Erro de rede.' })
+    } finally {
+      setSavingWholesale(false)
+    }
+  }
 
   // ── Variation handlers ───────────────────────────────────────────────────────
 
@@ -514,17 +557,90 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
             </div>
           </div>
 
-          {/* Preço de atacado (opcional) */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Input
-              label="Preço de atacado (R$)"
-              type="number"
-              step="0.01"
-              min="0.01"
-              placeholder="Deixe vazio se não vende no atacado"
-              error={errors.wholesale_price?.message}
-              {...register('wholesale_price')}
-            />
+          {/* ── Atacado ── */}
+          <div className="rounded-lg border border-border p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-text-primary">Atacado</h3>
+                <p className="text-xs text-text-muted">Controla se este produto aparece no catálogo público de atacado.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-text-primary">Vender no atacado</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={wholesaleEnabled}
+                  aria-label="Vender no atacado"
+                  disabled={savingWholesale}
+                  onClick={() => toggleWholesale(!wholesaleEnabled)}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${wholesaleEnabled ? 'bg-brand' : 'bg-border'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${wholesaleEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="label-base">Preço de varejo</label>
+                <div className="input-base pointer-events-none">
+                  {basePrice > 0 ? basePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}
+                </div>
+              </div>
+              <Input
+                label="Preço de atacado (R$)"
+                type="number"
+                step="0.01"
+                min="0.01"
+                placeholder="Deixe vazio se não vende no atacado"
+                error={errors.wholesale_price?.message}
+                {...register('wholesale_price')}
+              />
+              <div>
+                <label className="label-base">Status comercial do atacado</label>
+                {wholesale ? (
+                  <div className="space-y-1">
+                    <Badge variant={WHOLESALE_STATUS_LABEL[wholesale.status].variant}>{WHOLESALE_STATUS_LABEL[wholesale.status].label}</Badge>
+                    <p className="text-xs text-text-muted">{WHOLESALE_STATUS_LABEL[wholesale.status].description}</p>
+                    {wholesaleEnabled && !wholesale.hasImage && <p className="text-xs text-warning">Sem imagem — aparece com placeholder no catálogo.</p>}
+                  </div>
+                ) : <p className="text-xs text-text-muted">—</p>}
+              </div>
+            </div>
+            <p className="text-xs text-text-muted">O status considera os dados já salvos (preço, estoque e variações). Ativar o atacado não exige preço nem estoque — o produto só fica vendável quando ambos existirem.</p>
+
+            {wholesale && wholesale.variations.length > 0 && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-text-muted">
+                      <th className="py-1 pr-3 font-medium">SKU</th>
+                      <th className="py-1 pr-3 font-medium">Variação</th>
+                      <th className="py-1 pr-3 font-medium">Estoque</th>
+                      <th className="py-1 pr-3 font-medium">Varejo</th>
+                      <th className="py-1 pr-3 font-medium">Atacado</th>
+                      <th className="py-1 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {wholesale.variations.map((wv) => {
+                      const row = variations.find((v) => v.id === wv.variationId)
+                      const st = WHOLESALE_VARIATION_STATUS_LABEL[wv.status]
+                      return (
+                        <tr key={wv.variationId}>
+                          <td className="py-1.5 pr-3"><code>{wv.sku}</code></td>
+                          <td className="py-1.5 pr-3">{row ? attrLabel(row) : '—'}</td>
+                          <td className="py-1.5 pr-3 tabular-nums">{wv.stock} un.</td>
+                          <td className="py-1.5 pr-3 tabular-nums">{wv.retailPrice != null ? wv.retailPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}</td>
+                          <td className="py-1.5 pr-3 tabular-nums">{wv.wholesalePrice != null ? wv.wholesalePrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '—'}</td>
+                          <td className="py-1.5"><Badge variant={st.variant} size="sm">{st.label}</Badge></td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           {/* Ativo */}

@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, ShoppingCart, Users, Package, Warehouse,
   Truck, TrendingUp, DollarSign, BarChart3, Brain,
-  Settings, Gift, SendHorizonal, Globe, Wallet, MapPin, MessageSquare,
+  Settings, Gift, SendHorizonal, Globe, Wallet, MapPin, MessageSquare, ClipboardList,
 } from 'lucide-react'
 import type { AppRole } from '@/types/roles'
 
@@ -37,6 +37,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: 'Repasses', href: '/envios/repasses', icon: Wallet },
       { label: 'Clientes', href: '/clientes', icon: Users },
       { label: 'Produtos', href: '/produtos', icon: Package },
+      { label: 'Pedidos Atacado', href: '/pedidos-atacado', icon: ClipboardList },
       { label: 'Estoque',       href: '/estoque',              icon: Warehouse },
       { label: 'Localizações',  href: '/estoque/localizacoes', icon: MapPin },
       { label: 'Fornecedores', href: '/fornecedores', icon: Truck },

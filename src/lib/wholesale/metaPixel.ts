@@ -76,9 +76,9 @@ export interface InitiateCheckoutParams {
   numItems: number
 }
 
-// Disparado SÓ ao clicar "Enviar pedido pelo WhatsApp" com carrinho válido
-// — nunca ao adicionar item ao carrinho (seção 16 do pedido: representa o
-// início real da conversão, não uma intenção prematura).
+// Disparado SÓ depois que o servidor registrou o pedido com sucesso (POST
+// /api/wholesale/orders) — nunca ao adicionar item ao carrinho, nunca em
+// falha de validação/estoque/mínimo. Representa a conversão real.
 export function trackInitiateCheckout(params: InitiateCheckoutParams): void {
   if (!isPixelReady()) return
   window.fbq!('track', 'InitiateCheckout', {

@@ -1,15 +1,16 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
-import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
+import { resolveWholesalePublicContext } from '@/lib/wholesale/publicContext'
 import { getWholesaleProductDetail } from '@/services/wholesale/catalog'
 import { ProductDetailClient } from './ProductDetailClient'
 
 export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
 
 export async function generateMetadata({ params }: { params: { id: string } }): Promise<Metadata> {
-  const tenant = await resolveWholesaleSiteTenant()
-  if (!tenant) return { title: 'Produto' }
-  const product = await getWholesaleProductDetail(tenant.companyId, Number(params.id))
+  const ctx = await resolveWholesalePublicContext()
+  if (!ctx.ok) return { title: 'Produto' }
+  const product = await getWholesaleProductDetail(ctx.companyId, Number(params.id))
   if (!product) return { title: 'Produto não encontrado' }
   return {
     title: product.name,
@@ -18,13 +19,13 @@ export async function generateMetadata({ params }: { params: { id: string } }): 
 }
 
 export default async function ProdutoPage({ params }: { params: { id: string } }) {
-  const tenant = await resolveWholesaleSiteTenant()
-  if (!tenant) notFound()
+  const ctx = await resolveWholesalePublicContext()
+  if (!ctx.ok) notFound()
 
   const productId = Number(params.id)
   if (!productId) notFound()
 
-  const product = await getWholesaleProductDetail(tenant.companyId, productId)
+  const product = await getWholesaleProductDetail(ctx.companyId, productId)
   if (!product) notFound()
 
   return <ProductDetailClient product={product} />

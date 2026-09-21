@@ -12,6 +12,7 @@ import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 
 export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
 
 export const metadata: Metadata = {
   title: 'Catálogo',
@@ -33,9 +34,13 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
     )
   }
 
+  // catalog_active é o controle mestre — o layout já esconde o conteúdo, mas
+  // a página também não busca nenhum dado quando o catálogo está desativado.
+  const settings = await getWholesaleSiteSettings(tenant.companyId)
+  if (!settings.catalogActive) return null
+
   const pageNumber = Math.max(1, Number(page ?? '1') || 1)
-  const [settings, result, categories, banners] = await Promise.all([
-    getWholesaleSiteSettings(tenant.companyId),
+  const [result, categories, banners] = await Promise.all([
     getWholesaleCatalogPage(tenant.companyId, { search: q, categorySlug: categoria, page: pageNumber }),
     listWholesaleCategories(tenant.companyId),
     getActiveWholesaleBanners(tenant.companyId),

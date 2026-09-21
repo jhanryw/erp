@@ -11,6 +11,10 @@ import { getWholesaleSiteSettings, getWholesaleCompanyLogoUrl } from '@/services
 import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 
+// Configuração/catálogo nunca vêm do cache de dados do Next.
+export const dynamic = 'force-dynamic'
+export const fetchCache = 'force-no-store'
+
 // Site de Atacado (Fase 8) — canal público, voltado a clientes externos.
 // Diferente do resto do ERP (`noindex, nofollow` no layout raiz), este
 // subtree é o único ponto do projeto que deve ser indexável.

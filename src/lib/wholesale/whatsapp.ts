@@ -1,93 +1,85 @@
 /**
- * Geração da mensagem de pedido do catálogo de atacado (seção 13 do
- * pedido) — módulo puro, sem I/O. Reaproveita `normalizePhoneBR` (já
- * usado pelo CRM/Customer Identity) pro número configurado em
- * `wholesale_site_settings.whatsapp_phone` — nunca uma segunda lógica de
- * normalização de telefone.
+ * Mensagem de WhatsApp do pedido de atacado — módulo puro, sem I/O.
+ *
+ * A mensagem é gerada a partir do PEDIDO PERSISTIDO (snapshot gravado pelo
+ * servidor: nome, SKU, atributos, quantidade, preço, totais, código) —
+ * nunca do carrinho do navegador. `normalizePhoneBR` (mesmo do CRM) valida o
+ * número da EMPRESA (`wholesale_site_settings.whatsapp_phone`); o telefone do
+ * comprador é só dado do pedido, nunca o destino.
  */
 
 import { normalizePhoneBR } from '@/lib/utils/phone'
 import { formatCurrency } from '@/lib/utils/currency'
 
-export interface WhatsAppCartItem {
+export interface WhatsAppOrderItem {
   productName: string
-  /** "" quando o produto não tem variante (seção 9 do pedido) — nunca omitido, só vazio. */
-  attributes: string
+  sku: string
+  attributes: { type: string; value: string }[]
   quantity: number
   unitPrice: number
+  subtotal: number
+}
+
+export interface WhatsAppOrder {
+  code: string
+  customerName: string
+  /** E.164 (ex.: +5584999999999). */
+  customerPhone: string
+  totalItems: number
+  subtotal: number
+  items: WhatsAppOrderItem[]
 }
 
 export interface WhatsAppOrderMessage {
   message: string
   /** Link wa.me pronto, com o texto já URL-encoded. */
   url: string
-  totalUnits: number
-  totalValue: number
 }
 
-/**
- * `null` quando não há itens ou o telefone configurado não é um WhatsApp
- * brasileiro válido — quem chama decide o que mostrar (nunca abre um
- * wa.me quebrado).
- */
-export function buildWhatsAppOrderMessage(
-  items: WhatsAppCartItem[],
-  whatsappPhoneRaw: string | null | undefined,
-  /** `wholesale_site_settings.display_name` — nunca um nome de empresa fixo no código (seção 9 do pedido: tudo isolado por empresa). `null`/vazio cai no texto genérico "no atacado". */
-  displayName?: string | null,
-): WhatsAppOrderMessage | null {
-  if (items.length === 0) return null
+/** `+5584999999999` → `(84) 99999-9999`; formato desconhecido volta como veio. */
+export function formatPhoneBR(e164: string): string {
+  const digits = e164.replace(/\D/g, '').replace(/^55/, '')
+  if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
+  if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`
+  return e164
+}
 
-  const phone = normalizePhoneBR(whatsappPhoneRaw)
-  if (!phone.ok) return null
+// Intl usa espaço não-quebrável (U+00A0) em "R$ 39,90" — no texto do WhatsApp fica um espaço comum.
+const money = (value: number) => formatCurrency(value).replace(/ /g, ' ')
 
-  // Agrupa por produto, preservando a ordem em que apareceram no carrinho.
-  const groups = new Map<string, WhatsAppCartItem[]>()
-  for (const item of items) {
-    const list = groups.get(item.productName) ?? []
-    list.push(item)
-    groups.set(item.productName, list)
-  }
+/** `null` quando o WhatsApp da empresa não é um número brasileiro válido (nunca gera wa.me quebrado). */
+export function buildOrderWhatsAppMessage(order: WhatsAppOrder, companyWhatsappRaw: string | null | undefined): WhatsAppOrderMessage | null {
+  const company = normalizePhoneBR(companyWhatsappRaw)
+  if (!company.ok || order.items.length === 0) return null
 
-  const greeting = displayName
-    ? `Olá! Gostaria de fazer este pedido no atacado da ${displayName}:`
-    : 'Olá! Gostaria de fazer este pedido:'
-  const lines: string[] = [greeting, '']
-  let totalUnits = 0
-  let totalValue = 0
+  const lines: string[] = [
+    `PEDIDO ATACADO — ${order.code}`,
+    `Cliente: ${order.customerName}`,
+    `WhatsApp: ${formatPhoneBR(order.customerPhone)}`,
+    '',
+  ]
 
-  for (const [productName, groupItems] of groups) {
-    lines.push(productName)
-    let subtotal = 0
-    for (const item of groupItems) {
-      const lineTotal = item.quantity * item.unitPrice
-      subtotal += lineTotal
-      totalUnits += item.quantity
-      totalValue += lineTotal
-      const prefix = item.attributes ? `${item.attributes} — ` : ''
-      lines.push(`${prefix}${item.quantity} un. × ${formatCurrency(item.unitPrice)}`)
+  order.items.forEach((item, index) => {
+    lines.push(`${index + 1}. ${item.productName}`)
+    if (item.sku) lines.push(`SKU: ${item.sku}`)
+    for (const attr of item.attributes) {
+      if (!attr.value) continue // nunca mostra campo vazio
+      lines.push(attr.type ? `${attr.type}: ${attr.value}` : attr.value)
     }
-    lines.push(`Subtotal: ${formatCurrency(subtotal)}`)
-    lines.push('')
-  }
+    lines.push(`${item.quantity} un. × ${money(item.unitPrice)}`)
+    lines.push(`Subtotal: ${money(item.subtotal)}`)
+  })
 
-  lines.push(`Total de unidades: ${totalUnits}`)
-  lines.push(`Total do pedido: ${formatCurrency(totalValue)}`)
+  lines.push('', `Total de peças: ${order.totalItems}`, `Total do pedido: ${money(order.subtotal)}`, `Código do pedido: ${order.code}`)
 
-  const message = lines.join('\n').trim()
-
-  return {
-    message,
-    url: buildWhatsAppUrl(phone.e164, message),
-    totalUnits,
-    totalValue,
-  }
+  const message = lines.join('\n')
+  return { message, url: buildWhatsAppUrl(company.e164, message) }
 }
 
 /**
- * Link wa.me genérico (fora do fluxo de pedido) — usado quando o catálogo
- * está desativado (seção 26 do pedido: "botão de WhatsApp, se configurado").
- * `null` quando o telefone configurado não é um WhatsApp brasileiro válido.
+ * Link wa.me genérico (fora do fluxo de pedido) — catálogo desativado
+ * (botão "Falar pelo WhatsApp") e contato da equipe com o cliente.
+ * `null` quando o telefone não é um WhatsApp brasileiro válido.
  */
 export function buildWhatsAppContactUrl(whatsappPhoneRaw: string | null | undefined, message: string): string | null {
   const phone = normalizePhoneBR(whatsappPhoneRaw)

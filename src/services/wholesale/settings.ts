@@ -77,11 +77,15 @@ function fromRow(row: SettingsRow): WholesaleSiteSettings {
 
 export async function getWholesaleSiteSettings(companyId: number): Promise<WholesaleSiteSettings> {
   const admin = createAdminClient()
-  const { data } = await (admin as any)
+  const { data, error } = await (admin as any)
     .from('wholesale_site_settings')
     .select('catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id')
     .eq('company_id', companyId)
-    .maybeSingle() as { data: SettingsRow | null }
+    .maybeSingle() as { data: SettingsRow | null; error: { message: string } | null }
+
+  // Erro de banco NUNCA vira "configuração padrão": isso abriria o catálogo (catalog_active=true)
+  // e trocaria pedido mínimo/WhatsApp por defaults numa falha transitória. Só "sem linha" usa defaults.
+  if (error) throw new Error(`Falha ao ler a configuração do atacado: ${error.message}`)
 
   return data ? fromRow(data) : DEFAULT_SETTINGS
 }

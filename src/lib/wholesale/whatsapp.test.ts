@@ -1,76 +1,93 @@
 import { describe, it, expect } from 'vitest'
-import { buildWhatsAppOrderMessage, buildWhatsAppContactUrl } from './whatsapp'
-import { formatCurrency } from '@/lib/utils/currency'
+import { buildOrderWhatsAppMessage, buildWhatsAppContactUrl, formatPhoneBR, type WhatsAppOrder } from './whatsapp'
 
-const ITEM = { productName: 'Calcinha Fio', attributes: 'P', quantity: 2, unitPrice: 10 }
+const ORDER: WhatsAppOrder = {
+  code: 'AT-000184',
+  customerName: 'Maria Silva',
+  customerPhone: '+5584999999999',
+  totalItems: 5,
+  subtotal: 154.5,
+  items: [
+    { productName: 'Conjunto Nuance', sku: 'NUA-M-PRETO', attributes: [{ type: 'Tamanho', value: 'M' }, { type: 'Cor', value: 'Preto' }], quantity: 2, unitPrice: 39.9, subtotal: 79.8 },
+    { productName: 'Sutiã Reforçado', sku: 'SR-G-BEGE', attributes: [{ type: 'Tamanho', value: 'G' }, { type: 'Cor', value: 'Bege' }], quantity: 3, unitPrice: 24.9, subtotal: 74.7 },
+  ],
+}
+const COMPANY = '84988887777'
 
-describe('buildWhatsAppOrderMessage', () => {
-  it('null quando não há itens', () => {
-    expect(buildWhatsAppOrderMessage([], '84999998888')).toBeNull()
+describe('buildOrderWhatsAppMessage (a partir do pedido persistido)', () => {
+  it('gera o formato completo: código, cliente, SKU, atributos, quantidades, subtotais e totais', () => {
+    const r = buildOrderWhatsAppMessage(ORDER, COMPANY)!
+    expect(r.message).toBe([
+      'PEDIDO ATACADO — AT-000184',
+      'Cliente: Maria Silva',
+      'WhatsApp: (84) 99999-9999',
+      '',
+      '1. Conjunto Nuance',
+      'SKU: NUA-M-PRETO',
+      'Tamanho: M',
+      'Cor: Preto',
+      '2 un. × R$ 39,90',
+      'Subtotal: R$ 79,80',
+      '2. Sutiã Reforçado',
+      'SKU: SR-G-BEGE',
+      'Tamanho: G',
+      'Cor: Bege',
+      '3 un. × R$ 24,90',
+      'Subtotal: R$ 74,70',
+      '',
+      'Total de peças: 5',
+      'Total do pedido: R$ 154,50',
+      'Código do pedido: AT-000184',
+    ].join('\n'))
   })
 
-  it('null quando o telefone não é um WhatsApp BR válido', () => {
-    expect(buildWhatsAppOrderMessage([ITEM], '123')).toBeNull()
-    expect(buildWhatsAppOrderMessage([ITEM], null)).toBeNull()
-    expect(buildWhatsAppOrderMessage([ITEM], undefined)).toBeNull()
+  it('usa os totais persistidos do pedido (não recalcula a partir de outra fonte)', () => {
+    const r = buildOrderWhatsAppMessage({ ...ORDER, totalItems: 99, subtotal: 1234.56 }, COMPANY)!
+    expect(r.message).toContain('Total de peças: 99')
+    expect(r.message).toContain('Total do pedido: R$ 1.234,56')
   })
 
-  it('usa o displayName configurado na saudação', () => {
-    const order = buildWhatsAppOrderMessage([ITEM], '84999998888', 'Loja Exemplo')
-    expect(order?.message).toContain('no atacado da Loja Exemplo')
+  it('o destino é o WhatsApp da EMPRESA, nunca o telefone do comprador', () => {
+    const r = buildOrderWhatsAppMessage(ORDER, COMPANY)!
+    expect(r.url.startsWith('https://wa.me/5584988887777?text=')).toBe(true)
+    expect(r.url).not.toMatch(/wa\.me\/5584999999999/)
   })
 
-  it('cai no texto genérico quando não há displayName configurado', () => {
-    const order = buildWhatsAppOrderMessage([ITEM], '84999998888', null)
-    expect(order?.message).toBe(
-      [
-        'Olá! Gostaria de fazer este pedido:',
-        '',
-        'Calcinha Fio',
-        `P — 2 un. × ${formatCurrency(10)}`,
-        `Subtotal: ${formatCurrency(20)}`,
-        '',
-        'Total de unidades: 2',
-        `Total do pedido: ${formatCurrency(20)}`,
-      ].join('\n'),
-    )
+  it('texto é URL-encoded corretamente (acentos, quebras de linha, símbolos) e decodifica de volta idêntico', () => {
+    const r = buildOrderWhatsAppMessage({ ...ORDER, customerName: 'José & Cia #1 100%' }, COMPANY)!
+    const encoded = r.url.split('?text=')[1]
+    expect(encoded).not.toMatch(/[\n &#]/)
+    expect(decodeURIComponent(encoded)).toBe(r.message)
+    expect(r.message).toContain('José & Cia #1 100%')
   })
 
-  it('soma totais e agrupa por produto preservando ordem', () => {
-    const order = buildWhatsAppOrderMessage(
-      [
-        { productName: 'A', attributes: 'P', quantity: 1, unitPrice: 10 },
-        { productName: 'B', attributes: 'M', quantity: 2, unitPrice: 5 },
-        { productName: 'A', attributes: 'M', quantity: 3, unitPrice: 10 },
-      ],
-      '84999998888',
-    )
-    expect(order?.totalUnits).toBe(6)
-    expect(order?.totalValue).toBe(50)
-    const lines = order!.message.split('\n')
-    expect(lines.indexOf('A')).toBeLessThan(lines.indexOf('B'))
+  it('não mostra campos vazios (atributo sem valor, sem SKU)', () => {
+    const r = buildOrderWhatsAppMessage({
+      ...ORDER,
+      items: [{ productName: 'Body', sku: '', attributes: [{ type: 'Cor', value: '' }, { type: '', value: 'Único' }], quantity: 1, unitPrice: 10, subtotal: 10 }],
+    }, COMPANY)!
+    expect(r.message).toContain('1. Body\nÚnico\n1 un. × R$ 10,00')
+    expect(r.message).not.toMatch(/SKU:|Cor:/)
   })
 
-  it('monta a URL wa.me com o texto codificado', () => {
-    const order = buildWhatsAppOrderMessage([ITEM], '84999998888')
-    expect(order?.url).toMatch(/^https:\/\/wa\.me\/5584999998888\?text=/)
+  it('null quando o WhatsApp da empresa é inválido ou o pedido não tem itens', () => {
+    expect(buildOrderWhatsAppMessage(ORDER, '123')).toBeNull()
+    expect(buildOrderWhatsAppMessage(ORDER, null)).toBeNull()
+    expect(buildOrderWhatsAppMessage({ ...ORDER, items: [] }, COMPANY)).toBeNull()
   })
 
-  it('omite o prefixo de atributos quando a variação não tem atributo', () => {
-    const order = buildWhatsAppOrderMessage([{ ...ITEM, attributes: '' }], '84999998888')
-    expect(order?.message).toContain(`2 un. × ${formatCurrency(10)}`)
-    expect(order?.message).not.toContain('— 2 un.')
+  it('sem espaço não-quebrável (U+00A0) no texto', () => {
+    expect(buildOrderWhatsAppMessage(ORDER, COMPANY)!.message).not.toContain(' ')
   })
 })
 
-describe('buildWhatsAppContactUrl', () => {
-  it('null quando o telefone não é válido', () => {
-    expect(buildWhatsAppContactUrl(null, 'oi')).toBeNull()
-    expect(buildWhatsAppContactUrl('123', 'oi')).toBeNull()
+describe('formatPhoneBR / buildWhatsAppContactUrl', () => {
+  it('formata celular e fixo', () => {
+    expect(formatPhoneBR('+5584999999999')).toBe('(84) 99999-9999')
+    expect(formatPhoneBR('+558433221100')).toBe('(84) 3322-1100')
   })
-
-  it('monta a URL com a mensagem informada', () => {
-    const url = buildWhatsAppContactUrl('84999998888', 'Olá!')
-    expect(url).toBe('https://wa.me/5584999998888?text=Ol%C3%A1!')
+  it('contato genérico: URL válida ou null', () => {
+    expect(buildWhatsAppContactUrl('84999998888', 'Olá! Tudo bem?')).toBe(`https://wa.me/5584999998888?text=${encodeURIComponent('Olá! Tudo bem?')}`)
+    expect(buildWhatsAppContactUrl('abc', 'x')).toBeNull()
   })
 })

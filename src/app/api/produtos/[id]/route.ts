@@ -9,6 +9,7 @@ import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-d
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
 import { NextResponse } from 'next/server'
+import { loadWholesaleProductDetail } from '@/services/wholesale/adminStatus'
 import { buildVariationOverridePatch } from './buildVariationOverridePatch'
 import { putSchema } from './putSchema'
 
@@ -39,7 +40,7 @@ export async function GET(
 
   const { data: product, error: productError } = await (admin as any)
     .from('products')
-    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med, wholesale_price')
+    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med, wholesale_price, wholesale_enabled')
     .eq('id', productId)
     .eq('company_id', user.company_id)
     .single()
@@ -71,7 +72,17 @@ export async function GET(
     return NextResponse.json({ error: variationsError.message }, { status: 500 })
   }
 
-  return NextResponse.json({ product, variations: variations ?? [] })
+  // Status comercial do atacado — calculado pela MESMA regra do catálogo
+  // público (evaluateWholesaleSellability), nunca reimplementado no front.
+  const wholesale = await loadWholesaleProductDetail(admin as any, user.company_id, {
+    id: product.id,
+    active: product.active,
+    wholesale_enabled: product.wholesale_enabled ?? false,
+    wholesale_price: product.wholesale_price ?? null,
+    base_price: Number(product.base_price),
+  })
+
+  return NextResponse.json({ product, variations: variations ?? [], wholesale })
 }
 
 // ─── PUT /api/produtos/[id] ───────────────────────────────────────────────────
@@ -184,6 +195,8 @@ export async function PUT(
       origem:      productFields.origem,
       unidade_med: productFields.unidade_med,
       wholesale_price: productFields.wholesale_price,
+      // Só grava quando enviado — PUT sem o campo nunca toca o canal.
+      ...(patch.wholesale_enabled !== undefined ? { wholesale_enabled: patch.wholesale_enabled } : {}),
       ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
     .eq('id', productId) as {

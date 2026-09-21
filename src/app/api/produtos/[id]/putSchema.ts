@@ -69,4 +69,6 @@ export const putSchema = z.object({
   unidade_med: z.string().max(10).optional(),
   // Fundação varejo/atacado (2026-08-31).
   wholesale_price: wholesalePriceFieldSchema(),
+  // Canal de atacado — participação explícita do produto no catálogo público.
+  wholesale_enabled: z.boolean().optional(),
 }).partial()

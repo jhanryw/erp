@@ -66,6 +66,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
         attributes: v.attributes.map((a) => a.value).join(' · '),
         displayPrice: v.price,
         imageUrl: product.images[0]?.url ?? null,
+        maxQuantity: v.maxQuantity,
       }, qty)
       trackAddToCart({ contentId: String(v.variationId), contentName: product.name, value: v.price, quantity: qty })
     }
@@ -115,7 +116,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
                     <button
                       type="button"
                       disabled={!v.available}
-                      onClick={() => setQty(v.variationId, qty - 1, v.stockQuantity)}
+                      onClick={() => setQty(v.variationId, qty - 1, v.maxQuantity)}
                       className="p-2 text-gray-500 hover:text-gray-900 disabled:opacity-30"
                     >
                       <Minus className="w-3.5 h-3.5" />
@@ -123,8 +124,8 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
                     <span className="w-8 text-center text-sm font-medium tabular-nums">{qty}</span>
                     <button
                       type="button"
-                      disabled={!v.available}
-                      onClick={() => setQty(v.variationId, qty + 1, v.stockQuantity)}
+                      disabled={!v.available || qty >= v.maxQuantity}
+                      onClick={() => setQty(v.variationId, qty + 1, v.maxQuantity)}
                       className="p-2 text-gray-500 hover:text-gray-900 disabled:opacity-30"
                     >
                       <Plus className="w-3.5 h-3.5" />

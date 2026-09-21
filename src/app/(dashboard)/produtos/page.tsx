@@ -20,29 +20,18 @@ import {
 } from '@/components/ui/table'
 import { EmptyState } from '@/components/ui/empty-state'
 import { PageSearch } from '@/components/ui/page-search'
+import { Pagination } from '@/components/ui/pagination'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
-import { DeleteProductButton } from './_components/delete-product-button'
 import { NuvemshopBulkButton } from './_components/nuvemshop-bulk-button'
+import { ProductsTable, type ProductTableRow } from './_components/products-table'
+import { WholesaleFilters } from './_components/wholesale-filters'
+import { listProductsForAdmin, ATACADO_FILTERS, SITUACAO_FILTERS, type AtacadoFilter, type SituacaoFilter } from '@/services/wholesale/adminList'
 
 export const dynamic = 'force-dynamic'
 
 type ProductCategory = { id: number; name: string }
 type ProductSupplier  = { id: number; name: string }
 type ProductBrand     = { id: number; name: string }
-
-type ProductRowFull = {
-  id:         number
-  name:       string
-  sku:        string
-  base_cost:  number
-  base_price: number
-  margin_pct: number
-  photo_url:  string | null
-  active:     boolean
-  categories: ProductCategory | ProductCategory[] | null
-  suppliers:  ProductSupplier | ProductSupplier[] | null
-  brands:     ProductBrand | ProductBrand[] | null
-}
 
 type ProductRowLite = {
   id:         number
@@ -52,22 +41,6 @@ type ProductRowLite = {
   active:     boolean
   photo_url:  string | null
   categories: ProductCategory | ProductCategory[] | null
-}
-
-async function getProductsFull(search?: string): Promise<ProductRowFull[]> {
-  const supabase = createAdminClient()
-  let query = supabase
-    .from('products')
-    .select(`id, name, sku, base_cost, base_price, margin_pct, photo_url, active,
-             categories:category_id (id, name), suppliers:supplier_id (id, name),
-             brands:brand_id (id, name)`)
-    .order('name', { ascending: true })
-
-  if (search) query = (query as any).or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
-
-  const { data, error } = await query
-  if (error) { console.error('Erro ao listar produtos:', error.message); return [] }
-  return (data ?? []) as unknown as ProductRowFull[]
 }
 
 async function getProductsLite(search?: string): Promise<ProductRowLite[]> {
@@ -113,10 +86,12 @@ async function resolveDisplayUrls<T extends { id: number; photo_url: string | nu
 export default async function ProdutosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>
+  searchParams: Promise<{ q?: string; page?: string; atacado?: string; situacao?: string }>
 }) {
-  const { q } = await searchParams
+  const { q, page, atacado, situacao } = await searchParams
   const search = q?.trim() || undefined
+  const atacadoFilter = ATACADO_FILTERS.find((f) => f === atacado) as AtacadoFilter | undefined
+  const situacaoFilter = SITUACAO_FILTERS.find((f) => f === situacao) as SituacaoFilter | undefined
 
   const serverClient = createClient()
   const { data: { user } } = await serverClient.auth.getUser()
@@ -126,27 +101,59 @@ export default async function ProdutosPage({
   // Produtos não está bloqueado, então custo/margem passam a aparecer para
   // todos os roles (a validação server-side de venda continua autoritativa
   // e nunca confiou nesse valor — ver resolveAuthoritativeItemCosts).
-  const products = await getProductsFull(search)
-  const withImages = await resolveDisplayUrls(products, profile?.company_id ?? null)
-  return <ProdutosFullView products={withImages} search={search} />
+  //
+  // Sempre escopado por empresa. Status do atacado calculado em LOTE só
+  // para a página exibida (ver services/wholesale/adminList.ts).
+  const companyId = profile?.company_id ?? null
+  const result = companyId
+    ? await listProductsForAdmin(createAdminClient() as any, companyId, { search, atacado: atacadoFilter, situacao: situacaoFilter, page: Number(page) || 1 })
+    : { products: [], summaries: new Map(), total: 0, page: 1, totalPages: 1 }
+  const withImages = await resolveDisplayUrls(result.products, companyId)
+
+  const rows: ProductTableRow[] = withImages.map((p) => {
+    const first = <T,>(v: T | T[] | null) => (Array.isArray(v) ? v[0] ?? null : v ?? null)
+    const summary = result.summaries.get(p.id)
+    return {
+      id: p.id, name: p.name, sku: p.sku,
+      category: first(p.categories)?.name ?? null,
+      supplier: first(p.suppliers)?.name ?? null,
+      brand: first(p.brands)?.name ?? null,
+      base_cost: p.base_cost, base_price: p.base_price, margin_pct: p.margin_pct, active: p.active,
+      displayUrl: p.displayUrl,
+      wholesaleStatus: summary?.status ?? 'disabled',
+      hasImage: summary?.hasImage ?? false,
+    }
+  })
+
+  return (
+    <ProdutosFullView
+      rows={rows} total={result.total} page={result.page} totalPages={result.totalPages}
+      search={search} atacado={atacadoFilter} situacao={situacaoFilter}
+    />
+  )
 }
 
 // ─── Visão completa (admin/gerente) ────────────────────────────────────────────
 
 function ProdutosFullView({
-  products,
-  search,
+  rows, total, page, totalPages, search, atacado, situacao,
 }: {
-  products: (ProductRowFull & { displayUrl: string | null })[]
+  rows: ProductTableRow[]
+  total: number
+  page: number
+  totalPages: number
   search?: string
+  atacado?: string
+  situacao?: string
 }) {
+  const filtered = Boolean(search || atacado || situacao)
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Produtos</h1>
           <p className="text-sm text-text-muted">
-            {products.length} produto{products.length !== 1 ? 's' : ''} cadastrado{products.length !== 1 ? 's' : ''}
+            {total} produto{total !== 1 ? 's' : ''} {filtered ? 'encontrado' : 'cadastrado'}{total !== 1 ? 's' : ''}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -158,78 +165,30 @@ function ProdutosFullView({
         </div>
       </div>
 
-      <Suspense>
-        <PageSearch defaultValue={search} placeholder="Buscar por nome ou SKU..." />
-      </Suspense>
+      <div className="flex flex-wrap items-center gap-4">
+        <Suspense>
+          <PageSearch defaultValue={search} placeholder="Buscar por nome ou SKU..." />
+        </Suspense>
+        <Suspense>
+          <WholesaleFilters atacado={atacado} situacao={situacao} />
+        </Suspense>
+      </div>
 
-      {products.length === 0 ? (
+      {rows.length === 0 ? (
         <EmptyState
           icon={<Package className="h-4 w-4" />}
-          title={search ? `Nenhum produto para "${search}"` : 'Nenhum produto cadastrado'}
-          description={search ? 'Tente outro termo.' : 'Cadastre o primeiro produto do catálogo.'}
-          action={search ? undefined : { label: 'Cadastrar produto', href: '/produtos/novo' }}
+          title={filtered ? 'Nenhum produto para os filtros aplicados' : 'Nenhum produto cadastrado'}
+          description={filtered ? 'Tente outro termo ou limpe os filtros.' : 'Cadastre o primeiro produto do catálogo.'}
+          action={filtered ? undefined : { label: 'Cadastrar produto', href: '/produtos/novo' }}
         />
       ) : (
-        <Card>
-          <CardHeader className="text-sm text-text-muted">{products.length} itens</CardHeader>
-          <div className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Produto</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Categoria</TableHead>
-                  <TableHead>Fornecedor</TableHead>
-                  <TableHead>Marca</TableHead>
-                  <TableHead>Custo</TableHead>
-                  <TableHead>Preço</TableHead>
-                  <TableHead>Margem</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Ações</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {products.map((product) => {
-                  const category = Array.isArray(product.categories) ? product.categories[0] ?? null : product.categories ?? null
-                  const supplier = Array.isArray(product.suppliers)  ? product.suppliers[0]  ?? null : product.suppliers  ?? null
-                  const brand    = Array.isArray(product.brands)     ? product.brands[0]     ?? null : product.brands     ?? null
-                  return (
-                    <TableRow key={product.id}>
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <ProductThumb url={product.displayUrl} name={product.name} />
-                          <div className="font-medium">{product.name}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell><code>{product.sku}</code></TableCell>
-                      <TableCell>{category?.name ?? '—'}</TableCell>
-                      <TableCell>{supplier?.name ?? '—'}</TableCell>
-                      <TableCell>{brand?.name ?? '—'}</TableCell>
-                      <TableCell>{formatCurrency(product.base_cost)}</TableCell>
-                      <TableCell>{formatCurrency(product.base_price)}</TableCell>
-                      <TableCell>
-                        <span className={product.margin_pct >= 40 ? 'text-success' : product.margin_pct >= 25 ? 'text-warning' : 'text-error'}>
-                          {formatPercent(product.margin_pct)}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={product.active ? 'default' : 'secondary'}>
-                          {product.active ? 'Ativo' : 'Inativo'}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Link href={`/produtos/${product.id}`}><Button variant="outline" size="sm">Ver</Button></Link>
-                          <DeleteProductButton id={product.id} />
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        </Card>
+        <>
+          <ProductsTable rows={rows} total={total} />
+          <Pagination
+            page={page} totalPages={totalPages} baseUrl="/produtos" query={search}
+            extraParams={{ atacado, situacao }}
+          />
+        </>
       )}
     </div>
   )

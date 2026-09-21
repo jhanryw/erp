@@ -28,6 +28,8 @@ export interface CartItem {
   displayPrice: number
   quantity: number
   imageUrl: string | null
+  /** Estoque atual conhecido (do catálogo/última validação) — limita os botões +/-. `undefined` = desconhecido. A revalidação no servidor continua sendo a autoridade. */
+  maxQuantity?: number
 }
 
 interface CartContextValue {
@@ -36,12 +38,21 @@ interface CartContextValue {
   updateQuantity: (variationId: number, quantity: number) => void
   removeItem: (variationId: number) => void
   clear: () => void
+  /** Substitui os itens por uma versão sincronizada com o servidor (ver cartSync.ts). */
+  syncItems: (updater: (items: CartItem[]) => CartItem[]) => void
+  /** `false` até o carrinho ser lido do localStorage. */
+  ready: boolean
   totalItems: number
   totalDisplayValue: number
 }
 
 const CartContext = createContext<CartContextValue | null>(null)
 const STORAGE_KEY = 'santtorini_wholesale_cart_v1'
+
+/** Limita a quantidade ao estoque conhecido (quando há). Nunca abaixo de 1 — remoção é feita por quem chama. */
+function clampQuantity(quantity: number, max: number | undefined): number {
+  return max != null && max > 0 ? Math.min(quantity, max) : quantity
+}
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([])
@@ -64,16 +75,17 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setItems((prev) => {
       const existing = prev.find((i) => i.variationId === item.variationId)
       if (existing) {
-        return prev.map((i) => i.variationId === item.variationId ? { ...i, quantity: i.quantity + quantity } : i)
+        const merged = clampQuantity(existing.quantity + quantity, item.maxQuantity ?? existing.maxQuantity)
+        return prev.map((i) => i.variationId === item.variationId ? { ...i, quantity: merged, displayPrice: item.displayPrice, maxQuantity: item.maxQuantity ?? i.maxQuantity } : i)
       }
-      return [...prev, { ...item, quantity }]
+      return [...prev, { ...item, quantity: clampQuantity(quantity, item.maxQuantity) }]
     })
   }, [])
 
   const updateQuantity = useCallback((variationId: number, quantity: number) => {
     setItems((prev) => quantity <= 0
       ? prev.filter((i) => i.variationId !== variationId)
-      : prev.map((i) => i.variationId === variationId ? { ...i, quantity } : i))
+      : prev.map((i) => i.variationId === variationId ? { ...i, quantity: clampQuantity(quantity, i.maxQuantity) } : i))
   }, [])
 
   const removeItem = useCallback((variationId: number) => {
@@ -81,12 +93,13 @@ export function CartProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const clear = useCallback(() => setItems([]), [])
+  const syncItems = useCallback((updater: (items: CartItem[]) => CartItem[]) => setItems((prev) => updater(prev)), [])
 
   const totalItems = items.reduce((s, i) => s + i.quantity, 0)
   const totalDisplayValue = items.reduce((s, i) => s + i.quantity * i.displayPrice, 0)
 
   return (
-    <CartContext.Provider value={{ items, addItem, updateQuantity, removeItem, clear, totalItems, totalDisplayValue }}>
+    <CartContext.Provider value={{ items, addItem, updateQuantity, removeItem, clear, syncItems, ready: loaded, totalItems, totalDisplayValue }}>
       {children}
     </CartContext.Provider>
   )

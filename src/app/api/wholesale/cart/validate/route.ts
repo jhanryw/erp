@@ -1,8 +1,10 @@
 export const dynamic = 'force-dynamic'
+// Catálogo/estoque/pedido NUNCA podem sair do cache de dados do Next (supabase-js usa fetch GET).
+export const fetchCache = 'force-no-store'
 
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
-import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
+import { publicRouteError, resolveWholesalePublicContext } from '@/lib/wholesale/publicContext'
 import { revalidateWholesaleCart } from '@/services/wholesale/cartValidation'
 
 // Sem sessão de cliente — o catálogo não tem login (seção 1 do pedido).
@@ -13,12 +15,12 @@ const schema = z.object({
   items: z.array(z.object({
     variationId: z.number().int().positive(),
     quantity: z.number().int().positive(),
-  })).min(1),
+  })).min(1).max(200),
 })
 
 export async function POST(request: Request) {
-  const tenant = await resolveWholesaleSiteTenant()
-  if (!tenant) return NextResponse.json({ error: 'Catálogo de atacado não configurado.' }, { status: 404 })
+  const ctx = await resolveWholesalePublicContext()
+  if (!ctx.ok) return NextResponse.json({ error: ctx.error }, { status: ctx.status })
 
   let body: unknown
   try { body = await request.json() } catch { return NextResponse.json({ error: 'JSON inválido.' }, { status: 400 }) }
@@ -26,6 +28,10 @@ export async function POST(request: Request) {
   const parsed = schema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 422 })
 
-  const result = await revalidateWholesaleCart(tenant.companyId, parsed.data.items)
-  return NextResponse.json(result)
+  try {
+    const result = await revalidateWholesaleCart(ctx.companyId, parsed.data.items)
+    return NextResponse.json(result)
+  } catch (err) {
+    return publicRouteError('POST /api/wholesale/cart/validate', err, { company_id: ctx.companyId, lines: parsed.data.items.length })
+  }
 }
