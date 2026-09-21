@@ -17,6 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { selectAllPages } from './queryBatching'
 import { loadWholesaleAdminSummaries, type WholesaleProductSummary } from './adminStatus'
+import { sanitizePostgrestSearch } from '@/lib/utils/postgrest-search'
 
 export const ADMIN_PAGE_SIZE = 50
 
@@ -30,6 +31,8 @@ export interface AdminListFilters {
   search?: string
   atacado?: AtacadoFilter
   situacao?: SituacaoFilter
+  /** `products.supplier_id` — filtra no banco, junto com todos os demais filtros. */
+  supplierId?: number
   page?: number
 }
 
@@ -60,11 +63,6 @@ export interface AdminListResult {
 const FULL_COLUMNS = `id, name, sku, base_cost, base_price, margin_pct, photo_url, active, wholesale_enabled, wholesale_price,
              categories:category_id (id, name), suppliers:supplier_id (id, name), brands:brand_id (id, name)`
 
-/** Remove caracteres que quebrariam a sintaxe do filtro `.or()` do PostgREST. */
-function sanitizeSearch(search: string): string {
-  return search.replace(/[,()%*\\]/g, ' ').trim()
-}
-
 function baseQuery(admin: SupabaseClient, companyId: number, columns: string, filters: AdminListFilters, enabled: boolean | undefined, withCount = false) {
   let query = (admin as any)
     .from('products')
@@ -72,7 +70,8 @@ function baseQuery(admin: SupabaseClient, companyId: number, columns: string, fi
     .eq('company_id', companyId)
 
   if (enabled !== undefined) query = query.eq('wholesale_enabled', enabled)
-  const search = filters.search ? sanitizeSearch(filters.search) : ''
+  if (filters.supplierId !== undefined) query = query.eq('supplier_id', filters.supplierId)
+  const search = filters.search ? sanitizePostgrestSearch(filters.search) : ''
   if (search) query = query.or(`name.ilike.%${search}%,sku.ilike.%${search}%`)
   return query.order('name', { ascending: true }).order('id', { ascending: true })
 }

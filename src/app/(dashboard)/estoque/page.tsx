@@ -16,101 +16,33 @@ import { Button } from '@/components/ui/button'
 import { StatCard } from '@/components/ui/stat-card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
+import { getMultiStockData } from '@/services/stockList'
+import { SupplierFilter } from '@/components/ui/supplier-filter'
+import { listSuppliersForFilter, parseSupplierFilter, type SupplierOption } from '@/lib/suppliers/filter'
 import { EstoqueSearch } from './estoque-search'
 import { EstoqueMultiTable } from './estoque-multi-table'
 
 export const dynamic = 'force-dynamic'
 
-type LocationBalance = {
-  location_id:   number
-  location_name: string
-  slug:          string
-  is_main_store: boolean
-  priority:      number
-  quantity:      number
-}
-
-type MultiStockRow = {
-  product_variation_id:       number
-  product_id:                 number
-  product_name:               string
-  sku_variation:              string
-  sku_parent:                 string | null
-  tamanho:                    string | null
-  cor:                        string | null
-  company_id:                 number
-  total_qty:                  number
-  main_store_qty:             number
-  needs_transfer:             boolean
-  total_stock_value_at_cost:  number | null
-  total_stock_value_at_price: number | null
-  last_entry_date:            string | null
-  balances_by_location:       LocationBalance[]
-}
-
-type StockLocation = {
-  id:            number
-  name:          string
-  slug:          string
-  is_main_store: boolean
-  priority:      number
-}
-
-async function getMultiStockData(search?: string) {
-  const supabase = createAdminClient()
-
-  let itemsQuery = (supabase as any)
-    .from('vw_stock_live_multi')
-    .select('*')
-    .order('product_name', { ascending: true })
-    .order('tamanho',      { ascending: true })
-    .order('cor',          { ascending: true })
-
-  if (search) {
-    itemsQuery = itemsQuery.or(
-      `product_name.ilike.%${search}%,sku_variation.ilike.%${search}%,sku_parent.ilike.%${search}%`,
-    )
-  }
-
-  const [stockResult, summaryResult, locationsResult] = await Promise.all([
-    itemsQuery,
-    (supabase as any)
-      .from('vw_stock_live_multi')
-      .select('product_id, total_qty, main_store_qty, needs_transfer, total_stock_value_at_cost, total_stock_value_at_price'),
-    (supabase as any)
-      .from('stock_locations')
-      .select('id, name, slug, is_main_store, priority')
-      .eq('active', true)
-      .order('priority', { ascending: true }),
-  ])
-
-  const items     = (stockResult.data     ?? []) as MultiStockRow[]
-  const all       = (summaryResult.data   ?? []) as MultiStockRow[]
-  const locations = (locationsResult.data ?? []) as StockLocation[]
-
-  const withStock = all.filter((r) => Number(r.total_qty ?? 0) > 0)
-
-  return {
-    items,
-    locations,
-    productCount:       new Set(withStock.map((r) => r.product_id)).size,
-    totalQty:           withStock.reduce((s, r) => s + Number(r.total_qty), 0),
-    totalCostValue:     withStock.reduce((s, r) => s + Number(r.total_stock_value_at_cost  ?? 0), 0),
-    totalSaleValue:     withStock.reduce((s, r) => s + Number(r.total_stock_value_at_price ?? 0), 0),
-    alertCount:         all.filter((r) => Number(r.total_qty) > 0 && Number(r.total_qty) <= 3).length,
-    needsTransferCount: all.filter((r) => r.needs_transfer).length,
-  }
-}
-
 export default async function EstoquePage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>
+  searchParams: Promise<{ q?: string; fornecedor?: string }>
 }) {
-  const { q } = await searchParams
+  const { q, fornecedor } = await searchParams
   const search = q?.trim() || undefined
+  const supplierId = parseSupplierFilter(fornecedor)
 
-  const data = await getMultiStockData(search)
+  // Empresa SEMPRE da sessão (a view e os locais eram lidos sem filtro de empresa).
+  const profile = await requirePageRole('usuario')
+  const admin = createAdminClient() as any
+  const [data, suppliers] = profile.company_id
+    ? await Promise.all([
+        getMultiStockData(admin, profile.company_id, { search, supplierId }),
+        listSuppliersForFilter(admin, profile.company_id),
+      ])
+    : [await getMultiStockData(admin, -1, {}), [] as SupplierOption[]]
 
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   // Estoque não está bloqueado: valor em custo/estoque aparece para todos os
@@ -197,15 +129,26 @@ export default async function EstoquePage({
         </Link>
       </div>
 
-      <Suspense><EstoqueSearch defaultValue={q} /></Suspense>
+      <div className="flex flex-wrap items-center gap-4">
+        <Suspense><EstoqueSearch defaultValue={q} /></Suspense>
+        <Suspense><SupplierFilter suppliers={suppliers} selected={supplierId} /></Suspense>
+      </div>
 
       {data.items.length === 0 ? (
-        <EmptyState
-          icon={<Warehouse className="h-4 w-4" />}
-          title="Estoque vazio"
-          description="Registre a primeira entrada de estoque."
-          action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
-        />
+        (search || supplierId !== undefined) ? (
+          <EmptyState
+            icon={<Warehouse className="h-4 w-4" />}
+            title="Nenhum item para os filtros aplicados"
+            description="Tente outro termo ou limpe o filtro de fornecedor."
+          />
+        ) : (
+          <EmptyState
+            icon={<Warehouse className="h-4 w-4" />}
+            title="Estoque vazio"
+            description="Registre a primeira entrada de estoque."
+            action={{ label: 'Registrar entrada', href: '/estoque/entrada' }}
+          />
+        )
       ) : (
         <EstoqueMultiTable items={data.items} locations={data.locations} />
       )}

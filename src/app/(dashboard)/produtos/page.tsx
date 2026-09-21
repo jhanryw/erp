@@ -25,6 +25,8 @@ import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { NuvemshopBulkButton } from './_components/nuvemshop-bulk-button'
 import { ProductsTable, type ProductTableRow } from './_components/products-table'
 import { WholesaleFilters } from './_components/wholesale-filters'
+import { SupplierFilter } from '@/components/ui/supplier-filter'
+import { listSuppliersForFilter, parseSupplierFilter, SUPPLIER_QUERY_PARAM, type SupplierOption } from '@/lib/suppliers/filter'
 import { listProductsForAdmin, ATACADO_FILTERS, SITUACAO_FILTERS, type AtacadoFilter, type SituacaoFilter } from '@/services/wholesale/adminList'
 
 export const dynamic = 'force-dynamic'
@@ -86,9 +88,10 @@ async function resolveDisplayUrls<T extends { id: number; photo_url: string | nu
 export default async function ProdutosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string; atacado?: string; situacao?: string }>
+  searchParams: Promise<{ q?: string; page?: string; atacado?: string; situacao?: string; fornecedor?: string }>
 }) {
-  const { q, page, atacado, situacao } = await searchParams
+  const { q, page, atacado, situacao, fornecedor } = await searchParams
+  const supplierId = parseSupplierFilter(fornecedor)
   const search = q?.trim() || undefined
   const atacadoFilter = ATACADO_FILTERS.find((f) => f === atacado) as AtacadoFilter | undefined
   const situacaoFilter = SITUACAO_FILTERS.find((f) => f === situacao) as SituacaoFilter | undefined
@@ -105,9 +108,13 @@ export default async function ProdutosPage({
   // Sempre escopado por empresa. Status do atacado calculado em LOTE só
   // para a página exibida (ver services/wholesale/adminList.ts).
   const companyId = profile?.company_id ?? null
-  const result = companyId
-    ? await listProductsForAdmin(createAdminClient() as any, companyId, { search, atacado: atacadoFilter, situacao: situacaoFilter, page: Number(page) || 1 })
-    : { products: [], summaries: new Map(), total: 0, page: 1, totalPages: 1 }
+  const admin = createAdminClient() as any
+  const [result, suppliers] = companyId
+    ? await Promise.all([
+        listProductsForAdmin(admin, companyId, { search, atacado: atacadoFilter, situacao: situacaoFilter, supplierId, page: Number(page) || 1 }),
+        listSuppliersForFilter(admin, companyId),
+      ])
+    : [{ products: [], summaries: new Map(), total: 0, page: 1, totalPages: 1 }, [] as SupplierOption[]]
   const withImages = await resolveDisplayUrls(result.products, companyId)
 
   const rows: ProductTableRow[] = withImages.map((p) => {
@@ -129,6 +136,7 @@ export default async function ProdutosPage({
     <ProdutosFullView
       rows={rows} total={result.total} page={result.page} totalPages={result.totalPages}
       search={search} atacado={atacadoFilter} situacao={situacaoFilter}
+      suppliers={suppliers} supplierId={supplierId}
     />
   )
 }
@@ -136,7 +144,7 @@ export default async function ProdutosPage({
 // ─── Visão completa (admin/gerente) ────────────────────────────────────────────
 
 function ProdutosFullView({
-  rows, total, page, totalPages, search, atacado, situacao,
+  rows, total, page, totalPages, search, atacado, situacao, suppliers, supplierId,
 }: {
   rows: ProductTableRow[]
   total: number
@@ -145,8 +153,10 @@ function ProdutosFullView({
   search?: string
   atacado?: string
   situacao?: string
+  suppliers: SupplierOption[]
+  supplierId?: number
 }) {
-  const filtered = Boolean(search || atacado || situacao)
+  const filtered = Boolean(search || atacado || situacao || supplierId !== undefined)
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
@@ -170,6 +180,9 @@ function ProdutosFullView({
           <PageSearch defaultValue={search} placeholder="Buscar por nome ou SKU..." />
         </Suspense>
         <Suspense>
+          <SupplierFilter suppliers={suppliers} selected={supplierId} />
+        </Suspense>
+        <Suspense>
           <WholesaleFilters atacado={atacado} situacao={situacao} />
         </Suspense>
       </div>
@@ -186,7 +199,7 @@ function ProdutosFullView({
           <ProductsTable rows={rows} total={total} />
           <Pagination
             page={page} totalPages={totalPages} baseUrl="/produtos" query={search}
-            extraParams={{ atacado, situacao }}
+            extraParams={{ atacado, situacao, [SUPPLIER_QUERY_PARAM]: supplierId !== undefined ? String(supplierId) : undefined }}
           />
         </>
       )}
