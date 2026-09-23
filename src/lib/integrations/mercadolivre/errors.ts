@@ -21,6 +21,27 @@ export type MercadoLivreErrorKind =
   | 'timeout'
   | 'network'
 
+export interface MercadoLivreCause {
+  /** 'error' bloqueia; 'warning' não (doc "Validar publicações"). */
+  type: 'error' | 'warning'
+  code: string | null
+  message: string
+}
+
+/** Extrai `cause[]` de uma resposta de erro do ML (mensagens redigidas). */
+export function parseMercadoLivreCauses(data: unknown): MercadoLivreCause[] {
+  const cause = data && typeof data === 'object' ? (data as { cause?: unknown }).cause : null
+  if (!Array.isArray(cause)) return []
+  return cause
+    .filter((c): c is Record<string, unknown> => Boolean(c) && typeof c === 'object')
+    .slice(0, 50)
+    .map((c) => ({
+      type: String(c.type ?? 'error').toLowerCase() === 'warning' ? 'warning' as const : 'error' as const,
+      code: typeof c.code === 'string' ? c.code : null,
+      message: redactSecrets(String(c.message ?? c.code ?? 'erro')).slice(0, 500),
+    }))
+}
+
 const RETRYABLE: ReadonlySet<MercadoLivreErrorKind> = new Set(['rate_limited', 'server', 'timeout', 'network', 'refresh_in_progress'])
 
 export class MercadoLivreError extends Error {
@@ -30,11 +51,13 @@ export class MercadoLivreError extends Error {
   readonly mlError: string | null
   readonly retryAfterSeconds: number | null
   readonly requestId: string | null
+  /** Itens de `cause` da resposta (validação de anúncio: erros e warnings), já redigidos. */
+  readonly causes: MercadoLivreCause[]
 
   constructor(
     kind: MercadoLivreErrorKind,
     message: string,
-    opts: { httpStatus?: number | null; mlError?: string | null; retryAfterSeconds?: number | null; requestId?: string | null } = {},
+    opts: { httpStatus?: number | null; mlError?: string | null; retryAfterSeconds?: number | null; requestId?: string | null; causes?: MercadoLivreCause[] } = {},
   ) {
     super(redactSecrets(message))
     this.name = 'MercadoLivreError'
@@ -43,6 +66,7 @@ export class MercadoLivreError extends Error {
     this.mlError = opts.mlError ?? null
     this.retryAfterSeconds = opts.retryAfterSeconds ?? null
     this.requestId = opts.requestId ?? null
+    this.causes = opts.causes ?? []
   }
 
   /** Falha transitória — o chamador (fila futura) pode tentar de novo depois. */

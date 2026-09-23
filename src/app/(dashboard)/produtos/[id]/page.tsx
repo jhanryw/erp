@@ -21,6 +21,8 @@ import { formatCurrency, formatPercent } from '@/lib/utils/currency'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getKitCompositionDetails, type KitCompositionDetail } from '@/services/inventory/availability.service'
 import { KitCompositionPanel } from '@/components/produtos/kit-composition-panel'
+import { ChannelListingsPanel } from '@/components/channels/channel-listings-panel'
+import { hasMinRole } from '@/types/roles'
 import { DeleteProductButton } from '../_components/delete-product-button'
 import { NuvemshopSendButton } from '../_components/nuvemshop-send-button'
 
@@ -336,6 +338,7 @@ export default async function ProdutoDetalhePage({
           </div>
         </Card>
       )}
+      {hasMinRole(profile.role, 'gerente') && <ChannelListingsPanel productId={product.id} />}
     </div>
   )
 }

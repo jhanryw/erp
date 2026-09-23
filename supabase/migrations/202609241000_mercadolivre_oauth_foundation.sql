@@ -47,14 +47,31 @@ BEGIN;
 
 -- ─── 1-2. provider / status ──────────────────────────────────────────────────
 
-ALTER TABLE public.company_integrations
-  DROP CONSTRAINT IF EXISTS company_integrations_provider_check;
+-- Remove os CHECKs vigentes de provider/status pela DEFINIÇÃO (não pelo
+-- nome presumido): se no banco real o CHECK inline original tiver outro
+-- nome, um DROP ... IF EXISTS pelo nome não o removeria e o CHECK antigo
+-- continuaria bloqueando 'mercadolivre'/'needs_reauth'.
+DO $$
+DECLARE
+  v_con record;
+BEGIN
+  FOR v_con IN
+    SELECT conname
+    FROM pg_constraint
+    WHERE conrelid = 'public.company_integrations'::regclass
+      AND contype = 'c'
+      AND (pg_get_constraintdef(oid) ~* '\mprovider\M' OR pg_get_constraintdef(oid) ~* '\mstatus\M')
+  LOOP
+    EXECUTE format('ALTER TABLE public.company_integrations DROP CONSTRAINT %I', v_con.conname);
+  END LOOP;
+END $$;
+
+-- Listas são SUPERCONJUNTO das vigentes (202609051100 + 20260817) — o ADD
+-- revalida as linhas existentes, que continuam todas válidas.
 ALTER TABLE public.company_integrations
   ADD CONSTRAINT company_integrations_provider_check
   CHECK (provider IN ('chatwoot', 'meta', 'nuvemshop', 'focus_nfe', 'fiscal_certificate', 'mercadolivre'));
 
-ALTER TABLE public.company_integrations
-  DROP CONSTRAINT IF EXISTS company_integrations_status_check;
 ALTER TABLE public.company_integrations
   ADD CONSTRAINT company_integrations_status_check
   CHECK (status IN ('pending', 'active', 'inactive', 'error', 'needs_reauth'));

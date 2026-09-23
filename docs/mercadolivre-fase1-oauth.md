@@ -114,3 +114,32 @@ Nenhuma estrutura de anúncio foi criada. A conexão guarda `site_id` por integr
 
 - Durante esta fase, outro trabalho em paralelo alterou a Nuvemshop (`src/lib/integrations/nuvemshop.ts`, `src/services/nuvemshop/*`). No último run, **um teste e o build falham por arquivos desse trabalho** (`src/services/nuvemshop/nuvemshop.testutil.ts`: flag de regex exige es2018; `nuvemshop.integration.test.ts` caso 14b). Nada disso é do Mercado Livre: typecheck sem erros fora de `src/services/nuvemshop/`, e todas as suítes de Mercado Livre/kits passam.
 - `company_integrations` agora tem as colunas genéricas de OAuth; providers existentes não usam e ficam NULL.
+
+---
+
+## Fechamento da Fase 1 (2026-09-24) — pronto para homologação
+
+- Global: vitest 151 arquivos / 1776 testes ✅ · typecheck 0 erros ✅ · build ✅ · SQL `product_kits` (97) ✅ · SQL `mercadolivre_oauth` ✅ · concorrência kits e ML ✅.
+- Os 2 problemas da Nuvemshop (regex `/s` com target ES2017 em `nuvemshop.testutil.ts`; caso 14b) já estavam corrigidos no commit `522e70b` — nenhuma alteração adicional necessária.
+- Migration endurecida: os CHECKs de provider/status são removidos pela **definição** (não pelo nome presumido). Validada num banco com integrações pré-existentes de todos os providers/status e CHECK com nome divergente: linhas e segredos preservados, `needs_reauth` aceito, valores inválidos recusados.
+- Callback: usuário sem papel admin voltando do ML recebe `reason=forbidden` (antes: `session`).
+- Suítes SQL antigas desatualizadas (pré-existentes, fora do escopo): `rpc_create_sale_recipient_atomicity` (cenário 4 contradiz 202609021000), `rpc_create_sale_sale_type` (teste 6 contradiz 20260915), `sales_receipt_token` (cenário 4 colide com o próprio trigger de imutabilidade).
+
+### Comandos após aplicar a migration (banco de HOMOLOGAÇÃO)
+
+```bash
+# 1. aplicar (a migration tem BEGIN/COMMIT próprios — não usar -1)
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/202609241000_mercadolivre_oauth_foundation.sql
+
+# 2. conferir estrutura
+psql "$DATABASE_URL" -c "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='public.company_integrations'::regclass AND contype='c';"
+psql "$DATABASE_URL" -c "SELECT proname FROM pg_proc WHERE proname IN ('rpc_consume_oauth_state','rpc_upsert_oauth_integration','rpc_claim_integration_token_refresh','rpc_complete_integration_token_refresh','rpc_fail_integration_token_refresh','rpc_disconnect_oauth_integration') ORDER BY 1;"
+
+# 3. testes (o .sql roda em BEGIN/ROLLBACK; o .sh deixa uma empresa de teste — só em homologação)
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/mercadolivre_oauth.test.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/company_integrations_and_external_links.test.sql
+DATABASE_URL="$DATABASE_URL" bash supabase/tests/mercadolivre_oauth.concurrency.sh
+
+# 4. após o deploy com as variáveis: job de refresh responde (0 candidatos antes de conectar)
+curl -sS -X POST -H "Authorization: Bearer $CRON_SECRET" https://<DOMINIO>/api/jobs/mercadolivre/refresh-tokens
+```

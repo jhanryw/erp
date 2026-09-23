@@ -10,7 +10,7 @@
  *   - corpo de erro da API é resumido e redigido (sem ecoar credenciais).
  */
 
-import { MercadoLivreError } from './errors'
+import { MercadoLivreError, parseMercadoLivreCauses } from './errors'
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -94,7 +94,7 @@ export function toMercadoLivreError(
     ? obj.error_description
     : typeof obj.message === 'string' ? obj.message : ''
   const message = `Mercado Livre ${status} em ${where}${mlError ? ` (${mlError})` : ''}${description ? `: ${description}` : ''}`
-  const opts = { httpStatus: status, mlError, requestId }
+  const opts = { httpStatus: status, mlError, requestId, causes: parseMercadoLivreCauses(data) }
 
   if (mlError === 'invalid_grant') return new MercadoLivreError('reauth_required', message, opts)
   if (status === 429) {

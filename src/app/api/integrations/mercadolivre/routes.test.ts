@@ -79,6 +79,15 @@ describe('callback (8)', () => {
   })
 })
 
+describe('callback sem permissão', () => {
+  it('gerente voltando do ML → reason=forbidden, serviço não é chamado', async () => {
+    session.current = { id: 'user-g', role: 'gerente', company_id: 1 }
+    const res = await callback(new Request(`${base}/api/integrations/mercadolivre/callback?code=TG-x&state=abc`))
+    expect(res.headers.get('location')).toBe(`${base}/configuracoes/mercadolivre?ml=error&reason=forbidden`)
+    expect(service.completeMercadoLivreOAuth).not.toHaveBeenCalled()
+  })
+})
+
 describe('status', () => {
   it('devolve a view da empresa da sessão', async () => {
     service.getMercadoLivreConnection.mockResolvedValue({ state: 'connected', seller_id: '555' })

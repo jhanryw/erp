@@ -16,6 +16,7 @@ const REASON_MESSAGES: Record<string, string> = {
   reauth_required: 'O Mercado Livre recusou a autorização. Conecte novamente.',
   config: 'A integração ainda não foi configurada no servidor (credenciais do app Qarvon).',
   session: 'Sua sessão expirou durante a conexão. Entre de novo e reconecte.',
+  forbidden: 'Somente administradores da empresa podem conectar o Mercado Livre.',
   rate_limited: 'O Mercado Livre limitou as requisições. Aguarde alguns segundos e tente de novo.',
   server: 'O Mercado Livre está instável no momento. Tente novamente em instantes.',
   timeout: 'O Mercado Livre demorou a responder. Tente novamente.',

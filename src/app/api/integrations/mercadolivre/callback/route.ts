@@ -20,7 +20,7 @@ export async function GET(request: Request) {
   const { user, response } = await requireIntegrationAdmin()
   if (response) {
     page.searchParams.set('ml', 'error')
-    page.searchParams.set('reason', 'session')
+    page.searchParams.set('reason', response.status === 403 ? 'forbidden' : 'session')
     return safeRedirect(page)
   }
 
