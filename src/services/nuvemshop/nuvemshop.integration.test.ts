@@ -7,6 +7,7 @@ import {
   ctxCompany1,
   ctxCompany2,
   type FakeNuvemshopApi,
+  type NsFakeDbOptions,
   type NsFakeTables,
 } from './nuvemshop.testutil'
 
@@ -27,10 +28,9 @@ vi.mock('@/services/nuvemshop/context.service', () => ({
     return ctx ? { ok: true, data: ctx } : { ok: false, error: 'Nuvemshop não configurada para esta empresa.', status: 404 }
   },
 }))
-vi.mock('@/services/inventory/availability.service', () => ({
-  getSellableQuantity: async () => ({ ok: true, data: 42 }),
-  getAffectedSellableVariationIds: async (_c: number, ids: number[]) => ({ ok: true, data: ids }),
-}))
+// availability.service NÃO é mockado: roda de verdade sobre o fake DB, cuja
+// RPC padrão responde "função inexistente" (migration de kits ausente). O mock
+// fixo anterior (getSellableQuantity → 42) escondia o envio de estoque 0.
 
 import { publishProductToNuvemshop } from './publish.service'
 import { processNuvemshopProductDeleted } from './productWebhook.service'
@@ -40,6 +40,7 @@ import { selectPendingStockBatch } from './stockBatch'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 
 let tables: NsFakeTables
+let dbOptions: NsFakeDbOptions
 
 const mapRows = (productId?: number) =>
   tables.produto_map.filter((r) => r.source === 'nuvemshop' && (productId == null || r.produto_id === productId))
@@ -48,9 +49,10 @@ const productRow = (productId: number) => tables.produto_map.find((r) => r.produ
 
 beforeEach(() => {
   tables = baseTables()
+  dbOptions = {}
   h.api = createFakeNuvemshopApi()
   h.ctxByCompany = new Map([[1, ctxCompany1], [2, ctxCompany2]])
-  ;(createAdminClient as any).mockImplementation(() => createNuvemshopFakeDb(tables))
+  ;(createAdminClient as any).mockImplementation(() => createNuvemshopFakeDb(tables, dbOptions))
 })
 
 describe('publicação canônica', () => {
@@ -193,7 +195,8 @@ describe('republicação', () => {
     expect(mapRows(10)).toHaveLength(3)
 
     const push = await pushVariantStockToNuvemshop(101)
-    expect(push).toMatchObject({ success: true, skipped: false, newQty: 42 })
+    // Soma real de stock_balances da variação 101 (3), não um valor mockado.
+    expect(push).toMatchObject({ success: true, skipped: false, newQty: 3 })
     expect(h.api.calls.stockPuts.at(-1)).toMatchObject({ storeId: '111', productId: second.remoteProductId, variantId: variantRow(101)!.external_variant_id })
   })
 })
@@ -314,5 +317,81 @@ describe('sync-batch', () => {
     }
     expect(iterations).toBe(3)
     expect(new Set(visited).size).toBe(60)
+  })
+})
+
+describe('estoque fail-safe (migration de kits ausente / falhas de banco)', () => {
+  const syncLogs = () => tables.nuvemshop_sync_logs.filter((l) => l.event_type === 'stock_push_erp')
+
+  async function publishAndResetPuts() {
+    const pub = await publishProductToNuvemshop(ctxCompany1, 10)
+    h.api.calls.stockPuts.length = 0
+    return pub
+  }
+
+  it('RPC de disponibilidade inexistente + produto normal → envia a soma de stock_balances', async () => {
+    await publishAndResetPuts()
+    // rpc padrão do fake = PGRST202 (função não existe)
+    const r = await pushVariantStockToNuvemshop(102)
+    expect(r).toMatchObject({ success: true, newQty: 5 })
+    expect(h.api.calls.stockPuts).toEqual([expect.objectContaining({ qty: 5 })])
+  })
+
+  it('coluna product_kind inexistente → produto tratado como normal, valor legado', async () => {
+    await publishAndResetPuts()
+    dbOptions.missingColumns = ['product_kind']
+    const r = await pushVariantStockToNuvemshop(101)
+    expect(r).toMatchObject({ success: true, newQty: 3 })
+    expect(h.api.calls.stockPuts.at(-1)?.qty).toBe(3)
+  })
+
+  it('erro na query de stock_balances → nenhum PUT, success=false, timestamp preservado', async () => {
+    await publishAndResetPuts()
+    const before = variantRow(101)!.last_stock_synced_at
+    dbOptions.failSelectTables = ['stock_balances']
+    const r = await pushVariantStockToNuvemshop(101)
+    expect(r.success).toBe(false)
+    expect(r.error).toMatch(/^stock_resolution_failed: stock_balances/)
+    expect(r.newQty).toBeUndefined()
+    expect(h.api.calls.stockPuts).toHaveLength(0)
+    expect(variantRow(101)!.last_stock_synced_at).toBe(before)
+    expect(syncLogs().at(-1)).toMatchObject({ success: false, stock_after: null, error_message: expect.stringMatching(/stock_resolution_failed/) })
+  })
+
+  it('erro ao ler variação/tipo do produto (não é schema ausente) → nenhum PUT', async () => {
+    await publishAndResetPuts()
+    dbOptions.failSelectTables = ['product_variations']
+    const r = await pushVariantStockToNuvemshop(101)
+    expect(r.success).toBe(false)
+    expect(h.api.calls.stockPuts).toHaveLength(0)
+  })
+
+  it('kit com RPC falhando → nenhum PUT (nunca 0)', async () => {
+    await publishAndResetPuts()
+    tables.products.find((p) => p.id === 10)!.product_kind = 'kit'
+    const r = await pushVariantStockToNuvemshop(101)
+    expect(r).toMatchObject({ success: false, error: expect.stringMatching(/stock_resolution_failed: disponibilidade do kit/) })
+    expect(h.api.calls.stockPuts).toHaveLength(0)
+    expect(variantRow(101)!.last_stock_synced_at ?? null).toBeNull()
+  })
+
+  it('kit com RPC funcionando → envia o valor derivado dos componentes', async () => {
+    await publishAndResetPuts()
+    tables.products.find((p) => p.id === 10)!.product_kind = 'kit'
+    dbOptions.rpc = (name, args) => name === 'rpc_get_variation_availability'
+      ? { data: args.p_variation_ids.map((id: number) => ({ product_variation_id: id, product_id: 10, product_kind: 'kit', manual_enabled: true, sellable_quantity: 2, inventory_available: true, is_sellable: true })), error: null }
+      : { data: null, error: { message: 'rpc inesperada' } }
+    const r = await pushVariantStockToNuvemshop(101)
+    expect(r).toMatchObject({ success: true, newQty: 2 })
+    expect(h.api.calls.stockPuts.at(-1)?.qty).toBe(2)
+  })
+
+  it('publicação aborta se o estoque não puder ser carregado (nada criado com 0)', async () => {
+    dbOptions.failSelectTables = ['stock_balances']
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r).toMatchObject({ status: 'failed', code: 'db_error' })
+    expect(r.message).toMatch(/publicação abortada/)
+    expect(h.api.calls.create).toBe(0)
+    expect(mapRows(10)).toHaveLength(0)
   })
 })
