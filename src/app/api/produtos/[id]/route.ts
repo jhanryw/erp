@@ -12,6 +12,8 @@ import { NextResponse } from 'next/server'
 import { loadWholesaleProductDetail } from '@/services/wholesale/adminStatus'
 import { buildVariationOverridePatch } from './buildVariationOverridePatch'
 import { putSchema } from './putSchema'
+import { listKitsUsingVariations } from '@/services/kits.service'
+import { getKitCompositionDetails } from '@/services/inventory/availability.service'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -40,7 +42,7 @@ export async function GET(
 
   const { data: product, error: productError } = await (admin as any)
     .from('products')
-    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med, wholesale_price, wholesale_enabled')
+    .select('id, name, sku, category_id, supplier_id, brand_id, origin, base_cost, base_price, active, photo_url, ncm, cest, origem, unidade_med, wholesale_price, wholesale_enabled, product_kind')
     .eq('id', productId)
     .eq('company_id', user.company_id)
     .single()
@@ -82,7 +84,14 @@ export async function GET(
     base_price: Number(product.base_price),
   })
 
-  return NextResponse.json({ product, variations: variations ?? [], wholesale })
+  // Kits: composição + disponibilidade derivada por variação (camada central).
+  let kitCompositions: Record<number, unknown> | null = null
+  if (product.product_kind === 'kit') {
+    const details = await getKitCompositionDetails(user.company_id, (variations ?? []).map((v: { id: number }) => v.id))
+    kitCompositions = details.ok ? Object.fromEntries(details.data) : {}
+  }
+
+  return NextResponse.json({ product, variations: variations ?? [], wholesale, kit_compositions: kitCompositions })
 }
 
 // ─── PUT /api/produtos/[id] ───────────────────────────────────────────────────
@@ -129,6 +138,23 @@ export async function PUT(
   // Snapshot antes para auditoria — também verifica que o produto pertence à empresa
   const before = await getProductSnapshot(productId, user.company_id)
   if (!before) return NextResponse.json({ error: 'Produto não encontrado' }, { status: 404 })
+
+  // Kits (2026-09-23): variação de kit nasce com SKU próprio e composição,
+  // via POST /api/produtos/kits/[id]/variacoes — nunca pelo gerador de SKU
+  // tipo/modelo/ano + initializeStock deste handler (kit não tem estoque).
+  const { data: kindRow } = await (createAdminClient() as any)
+    .from('products')
+    .select('product_kind')
+    .eq('id', productId)
+    .eq('company_id', user.company_id)
+    .maybeSingle() as { data: { product_kind: 'standard' | 'kit' } | null }
+  const isKit = kindRow?.product_kind === 'kit'
+  if (isKit && variations_to_add && variations_to_add.length > 0) {
+    return NextResponse.json(
+      { error: 'Variações de kit são criadas pela seção "Composição do kit" (SKU e componentes próprios).' },
+      { status: 422 }
+    )
+  }
 
   // ── Merge: payload parcial + valores atuais do banco ────────────────────────
   // Campos ausentes no payload herdam o valor atual do produto.
@@ -248,6 +274,17 @@ export async function PUT(
       if (saleCount && saleCount > 0) {
         return NextResponse.json(
           { error: `Variação #${varId} possui vendas registradas e não pode ser removida.` },
+          { status: 409 }
+        )
+      }
+
+      // Bloquear se a variação for componente de algum kit (FK RESTRICT
+      // também barraria, mas com mensagem técnica).
+      const usedBy = await listKitsUsingVariations(user.company_id, [varId])
+      if (!usedBy.ok) return NextResponse.json({ error: usedBy.error }, { status: usedBy.status })
+      if (usedBy.data.length > 0) {
+        return NextResponse.json(
+          { error: `Variação #${varId} é componente do(s) kit(s) ${usedBy.data.map((k) => k.kit_sku).join(', ')}. Remova-a da composição antes.` },
           { status: 409 }
         )
       }

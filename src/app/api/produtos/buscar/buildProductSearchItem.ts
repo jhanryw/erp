@@ -23,6 +23,8 @@ export interface ProductSearchRow {
   cor: string | null
   tamanho: string | null
   stock: number
+  /** Kit (produto composto): `stock` é a disponibilidade DERIVADA dos componentes, não saldo físico. */
+  is_kit?: boolean
 }
 
 export interface ProductSearchItem {
@@ -37,6 +39,8 @@ export interface ProductSearchItem {
   cor: string | null
   tamanho: string | null
   stock: number
+  /** `true` para kit — `stock` = quantos kits os componentes permitem montar agora (Estoque Loja). */
+  is_kit: boolean
 }
 
 export function buildProductSearchItem(row: ProductSearchRow, saleType: SaleType): ProductSearchItem {
@@ -58,5 +62,6 @@ export function buildProductSearchItem(row: ProductSearchRow, saleType: SaleType
     cor: row.cor,
     tamanho: row.tamanho,
     stock: row.stock,
+    is_kit: row.is_kit ?? false,
   }
 }

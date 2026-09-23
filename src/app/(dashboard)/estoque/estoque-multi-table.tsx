@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { ArrowLeftRight } from 'lucide-react'
@@ -47,9 +48,21 @@ type StockLocation = {
   priority: number
 }
 
+type KitAvailability = { available_main_store: number; available_online: number; manual_enabled: boolean }
+
 interface Props {
   items: MultiStockRow[]
   locations: StockLocation[]
+  /** Variações de KIT → disponibilidade derivada (kit não tem saldo por local). */
+  kitAvailability?: Record<number, KitAvailability>
+}
+
+function KitBadge() {
+  return (
+    <span className="ml-1.5 inline-block rounded bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-brand align-middle">
+      Kit · estoque derivado
+    </span>
+  )
 }
 
 interface TransferState {
@@ -63,7 +76,7 @@ interface TransferState {
   balances: LocationBalance[]
 }
 
-export function EstoqueMultiTable({ items, locations }: Props) {
+export function EstoqueMultiTable({ items, locations, kitAvailability = {} }: Props) {
   const router = useRouter()
   const [transfer, setTransfer] = useState<TransferState>({
     open: false, pvid: null, pvName: '', fromLocationId: null,
@@ -149,7 +162,30 @@ export function EstoqueMultiTable({ items, locations }: Props) {
 
         {/* ── Mobile: cards ───────────────────────────────────────── */}
         <div className="md:hidden divide-y divide-border">
-          {items.map((item) => (
+          {items.map((item) => {
+            const kit = kitAvailability[item.product_variation_id]
+            if (kit) {
+              return (
+                <div key={item.product_variation_id} className="px-4 py-3.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-text-primary truncate">{item.product_name}<KitBadge /></p>
+                      <p className="text-xs text-text-muted mt-0.5"><code className="font-mono">{item.sku_variation}</code></p>
+                      <Link href={`/produtos/${item.product_id}`} className="text-xs text-brand hover:underline mt-1.5 inline-block">
+                        Ver composição
+                      </Link>
+                    </div>
+                    <div className="text-right">
+                      <p className={`text-lg font-bold tabular-nums ${kit.available_online === 0 ? 'text-error' : 'text-text-primary'}`}>
+                        {formatNumber(kit.available_online)}
+                      </p>
+                      <p className="text-[10px] text-text-muted leading-none">disponível (loja: {kit.available_main_store})</p>
+                    </div>
+                  </div>
+                </div>
+              )
+            }
+            return (
             <div key={item.product_variation_id} className="px-4 py-3.5">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
@@ -189,7 +225,8 @@ export function EstoqueMultiTable({ items, locations }: Props) {
                 </div>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
 
         {/* ── Desktop: tabela ─────────────────────────────────────── */}
@@ -216,6 +253,33 @@ export function EstoqueMultiTable({ items, locations }: Props) {
 
             <TableBody>
               {items.map((item) => {
+                const kit = kitAvailability[item.product_variation_id]
+                if (kit) {
+                  return (
+                    <TableRow key={item.product_variation_id}>
+                      <TableCell className="font-medium">{item.product_name}<KitBadge /></TableCell>
+                      <TableCell>{item.cor ?? '—'}</TableCell>
+                      <TableCell>{item.tamanho ?? '—'}</TableCell>
+                      <TableCell><code>{item.sku_variation}</code></TableCell>
+                      <TableCell colSpan={locationCols.length + (locationCols.length > 1 ? 1 : 0)} className="text-sm">
+                        <span className={`font-semibold tabular-nums ${kit.available_online === 0 ? 'text-error' : ''}`}>
+                          Disponível: {formatNumber(kit.available_online)}
+                        </span>
+                        <span className="ml-2 text-xs text-text-muted">(Estoque Loja: {formatNumber(kit.available_main_store)})</span>
+                        {!kit.manual_enabled && <span className="ml-2 text-xs text-warning">desativado</span>}
+                      </TableCell>
+                      <TableCell>—</TableCell>
+                      <TableCell>—</TableCell>
+                      {locationCols.length > 1 && (
+                        <TableCell>
+                          <Link href={`/produtos/${item.product_id}`} className="text-xs font-medium text-brand hover:underline">
+                            Ver composição
+                          </Link>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  )
+                }
                 const balanceMap = new Map(item.balances_by_location.map((b) => [b.location_id, b.quantity]))
 
                 return (

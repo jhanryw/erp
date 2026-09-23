@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { formatCurrency, formatNumber } from '@/lib/utils/currency'
 import { requirePageRole } from '@/lib/auth/requirePageRole'
 import { getMultiStockData } from '@/services/stockList'
+import { getKitStockAnnotations } from '@/services/inventory/availability.service'
 import { SupplierFilter } from '@/components/ui/supplier-filter'
 import { listSuppliersForFilter, parseSupplierFilter, type SupplierOption } from '@/lib/suppliers/filter'
 import { EstoqueSearch } from './estoque-search'
@@ -43,6 +44,13 @@ export default async function EstoquePage({
         listSuppliersForFilter(admin, profile.company_id),
       ])
     : [await getMultiStockData(admin, -1, {}), [] as SupplierOption[]]
+
+  // Kits (2026-09-23): nunca têm saldo por local — a tabela mostra a
+  // disponibilidade DERIVADA dos componentes, calculada pela camada central.
+  const kitAnnotations = profile.company_id
+    ? await getKitStockAnnotations(profile.company_id, data.items.map((i) => i.product_variation_id))
+    : null
+  const kitAvailability = kitAnnotations?.ok ? Object.fromEntries(kitAnnotations.data) : {}
 
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   // Estoque não está bloqueado: valor em custo/estoque aparece para todos os
@@ -150,7 +158,7 @@ export default async function EstoquePage({
           />
         )
       ) : (
-        <EstoqueMultiTable items={data.items} locations={data.locations} />
+        <EstoqueMultiTable items={data.items} locations={data.locations} kitAvailability={kitAvailability} />
       )}
     </div>
   )

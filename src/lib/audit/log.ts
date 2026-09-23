@@ -40,6 +40,7 @@ export type AuditResource =
   | 'crm_conversation' | 'crm_message' | 'crm_conversation_note'
   | 'wholesale_order'
   | 'fiscal_operation_policy' | 'fiscal_certificate' | 'fiscal_csc' | 'fiscal_focus_token'
+  | 'company_integration'
 
 export interface AuditPayload {
   action:         AuditAction

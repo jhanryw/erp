@@ -2,7 +2,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { createStockEntry } from '@/services/estoque.service'
-import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { stockLotSchema } from '@/lib/validators'
 import { z } from 'zod'
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
       after:  { lot_id: result.data.lot_id, new_quantity: result.data.new_quantity, new_avg_cost: result.data.new_avg_cost },
     })
 
-    pushVariantStockToNuvemshop(parsed.data.product_variation_id, { eventType: 'stock_push_erp' })
+    pushMultipleVariantStocksToNuvemshop([parsed.data.product_variation_id], { eventType: 'stock_push_erp' })
       .catch((err) => console.error('[POST /api/estoque/entrada] Nuvemshop sync error', err))
 
     return NextResponse.json(result.data)

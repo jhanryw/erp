@@ -61,7 +61,8 @@ export default function EstoqueEntradaMatrizPage() {
   // ── Carga inicial ────────────────────────────────────────────────────────────
   useEffect(() => {
     Promise.all([
-      supabase.from('products').select('id, name, sku').eq('active', true).order('name'),
+      // Kit não recebe entrada (estoque derivado dos componentes).
+      (supabase as any).from('products').select('id, name, sku').eq('active', true).eq('product_kind', 'standard').order('name'),
       supabase.from('suppliers').select('id, name').eq('active', true).order('name'),
       (supabase as any)
         .from('stock_locations')

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createHmac, timingSafeEqual } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { cancelSale } from '@/services/vendas.service'
 import { notifyNewSale } from '@/lib/push/newSale'
 import { normalizeE164BR } from '@/lib/utils/phone'
@@ -314,11 +314,9 @@ export async function POST(request: Request) {
             .eq('pedido_id', pedidoId)
             .eq('mapped', true)) as { data: Array<{ product_variation_id: number }> | null }
 
-          for (const item of itens ?? []) {
-            await pushVariantStockToNuvemshop(item.product_variation_id, {
-              eventType: 'stock_confirm_ns', externalOrderId: externalId,
-            })
-          }
+          await pushMultipleVariantStocksToNuvemshop((itens ?? []).map((item) => item.product_variation_id), {
+            eventType: 'stock_confirm_ns', externalOrderId: externalId,
+          })
         }
       }
 
@@ -568,12 +566,12 @@ export async function POST(request: Request) {
     }).catch((err) => console.error(`[webhook/order] Falha ao notificar venda ${sale.id}:`, err))
 
     // ── 14. Confirmar estoque final na Nuvemshop ─────────────────────────────────
-    for (const item of mappedItens) {
-      await pushVariantStockToNuvemshop(item.product_variation_id!, {
-        eventType:       'stock_confirm_ns',
-        externalOrderId: externalId,
-      })
-    }
+    // Expande para variações afetadas (componentes de kit vendido e kits que
+    // dependem de um componente vendido) — camada central, sem regra de kit aqui.
+    await pushMultipleVariantStocksToNuvemshop(mappedItens.map((item) => item.product_variation_id!), {
+      eventType:       'stock_confirm_ns',
+      externalOrderId: externalId,
+    })
 
     // ── 15. Motor Fiscal Configurável — obedece à política 'website' da empresa ──
     // Antes desta fase, pedido do site NUNCA emitia nada fiscal (gap real,

@@ -153,7 +153,14 @@ export function ProductSearchInput({ onSelect, disabled, saleType = 'retail' }: 
                   ${i === cursor ? 'bg-brand/10 text-brand' : 'hover:bg-bg-overlay text-text-primary'}`}
               >
                 <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{item.product_name}</p>
+                  <p className="text-sm font-medium truncate">
+                    {item.is_kit && (
+                      <span className="mr-1.5 inline-block rounded bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-brand align-middle">
+                        Kit
+                      </span>
+                    )}
+                    {item.product_name}
+                  </p>
                   <p className="text-xs text-text-muted mt-0.5 flex flex-wrap gap-x-2">
                     {item.tamanho && <span>Tam: <span className="font-medium">{item.tamanho}</span></span>}
                     {item.cor     && <span>Cor: <span className="font-medium">{item.cor}</span></span>}
@@ -166,7 +173,9 @@ export function ProductSearchInput({ onSelect, disabled, saleType = 'retail' }: 
                   ) : (
                     <p className="text-sm font-semibold">{formatCurrency(item.price as number)}</p>
                   )}
-                  <p className="text-xs text-text-muted">{item.stock} em estoque</p>
+                  <p className="text-xs text-text-muted">
+                    {item.is_kit ? `${item.stock} kits disponíveis` : `${item.stock} em estoque`}
+                  </p>
                 </div>
               </button>
             </li>

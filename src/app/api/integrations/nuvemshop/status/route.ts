@@ -1,41 +1,20 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/supabase/session'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { getNuvemshopPublicationOverview } from '@/services/nuvemshop/publicationStatus.service'
 
 export async function GET() {
-  const { response: unauth } = await requireRole('gerente')
-  if (unauth) return unauth
+  const { user, response } = await requireRole('gerente')
+  if (response) return response
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa.' }, { status: 403 })
 
-  const admin = createAdminClient()
-
-  const [mappedProductsRes, totalVariantsRes, lastSyncRes] = await Promise.all([
-    (admin as any)
-      .from('produto_map')
-      .select('produto_id')
-      .eq('source', 'nuvemshop')
-      .not('external_id', 'is', null) as Promise<{ data: Array<{ produto_id: number }> | null }>,
-
-    (admin as any)
-      .from('produto_map')
-      .select('*', { count: 'exact', head: true })
-      .eq('source', 'nuvemshop')
-      .not('external_variant_id', 'is', null) as Promise<{ count: number | null }>,
-
-    (admin as any)
-      .from('produto_map')
-      .select('last_stock_synced_at')
-      .eq('source', 'nuvemshop')
-      .not('last_stock_synced_at', 'is', null)
-      .order('last_stock_synced_at', { ascending: false })
-      .limit(1)
-      .maybeSingle() as Promise<{ data: { last_stock_synced_at: string } | null }>,
-  ])
-
-  const totalProducts = new Set((mappedProductsRes.data ?? []).map((r) => r.produto_id)).size
+  const overview = await getNuvemshopPublicationOverview(user.company_id)
+  if (!overview.ok) return NextResponse.json({ error: overview.error }, { status: 500 })
 
   return NextResponse.json({
-    total_products: totalProducts,
-    total_variants: totalVariantsRes.count ?? 0,
-    last_synced_at: lastSyncRes.data?.last_stock_synced_at ?? null,
+    total_products:     overview.data.counts.published,
+    inconsistent:       overview.data.counts.inconsistent,
+    not_published:      overview.data.counts.not_published,
+    total_variants:     overview.data.total_variants_mapped,
+    last_synced_at:     overview.data.last_stock_synced_at,
   })
 }

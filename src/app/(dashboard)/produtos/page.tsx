@@ -129,6 +129,7 @@ export default async function ProdutosPage({
       displayUrl: p.displayUrl,
       wholesaleStatus: summary?.status ?? 'disabled',
       hasImage: summary?.hasImage ?? false,
+      isKit: p.product_kind === 'kit',
     }
   })
 
@@ -169,6 +170,7 @@ function ProdutosFullView({
         <div className="flex items-center gap-2">
           <NuvemshopBulkButton />
           <Link href="/produtos/importar"><Button variant="outline">Importar</Button></Link>
+          <Link href="/produtos/kits/novo"><Button variant="outline">Novo Kit</Button></Link>
           <Link href="/produtos/novo">
             <Button><Plus className="mr-2 h-4 w-4" />Novo Produto</Button>
           </Link>

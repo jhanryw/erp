@@ -2,7 +2,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { logError } from '@/lib/errors/log'
 import { transferStockBulk } from '@/services/estoque.service'
-import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
@@ -75,7 +75,7 @@ export async function POST(request: Request) {
 
     // Sincronizar cada variação transferida com a Nuvemshop (fire-and-forget, non-fatal)
     for (const item of outcome.transferred) {
-      pushVariantStockToNuvemshop(item.product_variation_id, { eventType: 'stock_push_erp' })
+      pushMultipleVariantStocksToNuvemshop([item.product_variation_id], { eventType: 'stock_push_erp' })
         .catch(err =>
           console.error(
             `[POST /api/estoque/transferencia/bulk] Nuvemshop sync error pvid:${item.product_variation_id}`,

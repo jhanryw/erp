@@ -15,6 +15,9 @@ import { ProductMediaManager } from '../../_components/product-media'
 import { WHOLESALE_STATUS_LABEL, WHOLESALE_VARIATION_STATUS_LABEL } from '@/services/wholesale/adminStatusLabels'
 import type { WholesaleAdminStatus, WholesaleVariationDetail } from '@/services/wholesale/adminStatus'
 import { Badge } from '@/components/ui/badge'
+import { KitCompositionPanel } from '@/components/produtos/kit-composition-panel'
+import { KitAddVariation } from '@/components/produtos/kit-add-variation'
+import type { KitCompositionDetail } from '@/services/inventory/availability.service'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -103,6 +106,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
 
   // Variation state
   const [variations, setVariations] = useState<VariationRow[]>([])
+  // Kits (2026-09-23): produto composto — variações ganham seção de
+  // composição e o "adicionar variação" passa a ser o do kit.
+  const [productKind, setProductKind] = useState<'standard' | 'kit'>('standard')
+  const [kitCompositions, setKitCompositions] = useState<Record<number, KitCompositionDetail>>({})
   const [toDelete, setToDelete] = useState<number[]>([])
   const [toAdd, setToAdd] = useState<NewVariation[]>([])
   const [variationTypes, setVariationTypes] = useState<VariationType[]>([])
@@ -181,6 +188,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
 
       const loadedVariations: VariationRow[] = prodJson.variations ?? []
       setVariations(loadedVariations)
+      setProductKind((product as any).product_kind === 'kit' ? 'kit' : 'standard')
+      setKitCompositions(prodJson.kit_compositions ?? {})
 
       // '' quando null — nunca "0" (campo vazio ≠ preço zero).
       const initialEdits: Record<number, OverrideEdit> = {}
@@ -726,7 +735,9 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                     <div className="min-w-0 flex-1">
                       <code className="text-xs text-text-primary">{v.sku_variation}</code>
                       <p className="text-xs text-text-muted mb-2">
-                        {attrLabel(v)} · Custo: {fmtCurrency(v.cost_override)}
+                        {attrLabel(v)} · Custo: {productKind === 'kit'
+                          ? `${fmtCurrency(kitCompositions[v.id]?.unit_cost ?? 0)} (derivado dos componentes)`
+                          : fmtCurrency(v.cost_override)}
                       </p>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
@@ -783,7 +794,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           )}
         </div>
 
-        {/* ── Adicionar variação (colapsável) ── */}
+        {/* ── Adicionar variação (colapsável) — produto normal ── */}
+        {productKind !== 'kit' && (
         <div className="card overflow-hidden">
           {/* Cabeçalho — sempre visível, toggle ao clicar */}
           <button
@@ -914,6 +926,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
             </div>
           )}
         </div>
+        )}
 
         {/* ── Ações ── */}
         <div className="flex gap-3">
@@ -927,6 +940,29 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           </Button>
         </div>
       </form>
+
+      {/* ── Kit: composição por variação (fora do <form> — salva sozinha) ── */}
+      {productKind === 'kit' && (
+        <div className="space-y-4">
+          <h3 className="text-sm font-semibold text-text-primary">Composição do kit</h3>
+          {variations.map((v) => (
+            <KitCompositionPanel
+              key={v.id}
+              variationId={v.id}
+              sku={v.sku_variation}
+              label={attrLabel(v) === '—' ? null : attrLabel(v)}
+              initial={kitCompositions[v.id] ?? null}
+              editable
+            />
+          ))}
+          <KitAddVariation
+            productId={Number(params.id)}
+            sizes={sizeType?.variation_values ?? []}
+            colors={colorType?.variation_values ?? []}
+            onCreated={() => window.location.reload()}
+          />
+        </div>
+      )}
     </div>
   )
 }

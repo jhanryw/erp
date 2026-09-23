@@ -1,50 +1,24 @@
 import { NextResponse } from 'next/server'
 import { requireRole } from '@/lib/supabase/session'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { getNuvemshopPublicationOverview } from '@/services/nuvemshop/publicationStatus.service'
 
+/**
+ * Situação de publicação dos produtos ativos da empresa.
+ *   products: não publicados (compatibilidade com a resposta antiga)
+ *   items:    todos, com state 'not_published' | 'published' | 'inconsistent'
+ * Estoque NÃO esconde produto — só vem como `stock_total`.
+ */
 export async function GET() {
-  const { response: unauth } = await requireRole('gerente')
-  if (unauth) return unauth
+  const { user, response } = await requireRole('gerente')
+  if (response) return response
+  if (!user.company_id) return NextResponse.json({ error: 'Usuário sem empresa.' }, { status: 403 })
 
-  const admin = createAdminClient()
-
-  const { data: mappedRows } = (await (admin as any)
-    .from('produto_map')
-    .select('produto_id')
-    .eq('source', 'nuvemshop')
-    .not('external_variant_id', 'is', null)) as { data: Array<{ produto_id: number }> | null }
-
-  const mappedIds = new Set((mappedRows ?? []).map((r) => r.produto_id))
-
-  const { data: products, error } = (await admin
-    .from('products')
-    .select(`
-      id,
-      name,
-      product_variations (
-        stock_balances ( quantity )
-      )
-    `)
-    .eq('active', true)
-    .order('name', { ascending: true })) as unknown as {
-    data: Array<{
-      id: number
-      name: string
-      product_variations: Array<{ stock_balances: Array<{ quantity: number }> }>
-    }> | null
-    error: { message: string } | null
-  }
-
-  if (error || !products) {
-    return NextResponse.json({ error: 'Erro ao buscar produtos.' }, { status: 500 })
-  }
-
-  const withStock = products.filter((p) => {
-    const total = p.product_variations.flatMap((v) => v.stock_balances).reduce((sum, s) => sum + (s.quantity ?? 0), 0)
-    return total > 0
-  })
+  const overview = await getNuvemshopPublicationOverview(user.company_id)
+  if (!overview.ok) return NextResponse.json({ error: 'Erro ao buscar produtos.' }, { status: 500 })
 
   return NextResponse.json({
-    products: withStock.filter((p) => !mappedIds.has(p.id)).map(({ id, name }) => ({ id, name })),
+    products: overview.data.items.filter((i) => i.state === 'not_published').map(({ id, name }) => ({ id, name })),
+    items:    overview.data.items,
+    counts:   overview.data.counts,
   })
 }

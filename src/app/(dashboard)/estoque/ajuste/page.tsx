@@ -65,6 +65,7 @@ export default function EstoqueAjustePage() {
       supabase
         .from('products')
         .select('id, name, sku')
+        .eq('product_kind', 'standard') // kit não tem ajuste físico
         .order('name'),
       (supabase as any)
         .from('stock_locations')

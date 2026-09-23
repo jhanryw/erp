@@ -1,29 +1,57 @@
 /**
  * Client da API Nuvemshop (Tiendanube)
  *
- * Envs necessárias:
- *   NUVEMSHOP_ACCESS_TOKEN  — token de acesso da loja
- *   NUVEMSHOP_STORE_ID      — ID numérico da loja
+ * Só HTTP — nada de banco aqui. Mappings ERP ↔ Nuvemshop ficam em
+ * `services/nuvemshop/mappings.service.ts`.
+ *
+ * Credenciais: passadas explicitamente (resolvidas por empresa em
+ * `services/nuvemshop/context.service.ts`). Sem credenciais, cai no legado
+ * NUVEMSHOP_ACCESS_TOKEN / NUVEMSHOP_STORE_ID.
  */
-
-import { createAdminClient } from '@/lib/supabase/admin'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function baseUrl() {
+/**
+ * Credenciais de UMA loja. Toda chamada nova recebe as credenciais resolvidas
+ * pela integração da empresa (`services/nuvemshop/context.service.ts`); o
+ * fallback para env só existe para chamadores legados que ainda não passam.
+ */
+export interface NuvemshopCredentials {
+  storeId:     string
+  accessToken: string
+}
+
+/** Erro HTTP da API Nuvemshop — `status` permite tratar 404 como "não existe". */
+export class NuvemshopApiError extends Error {
+  constructor(public readonly status: number, public readonly body: string, prefix = 'Nuvemshop API') {
+    super(`${prefix} ${status}: ${body}`)
+    this.name = 'NuvemshopApiError'
+  }
+}
+
+export function isNuvemshopNotFound(err: unknown): boolean {
+  return err instanceof NuvemshopApiError && err.status === 404
+}
+
+function resolveCredentials(creds?: NuvemshopCredentials): NuvemshopCredentials {
+  if (creds) return creds
   const storeId = process.env.NUVEMSHOP_STORE_ID
   if (!storeId) throw new Error('NUVEMSHOP_STORE_ID não definida.')
-  return `https://api.tiendanube.com/v1/${storeId}`
+  const accessToken = process.env.NUVEMSHOP_ACCESS_TOKEN
+  if (!accessToken) throw new Error('NUVEMSHOP_ACCESS_TOKEN não definida.')
+  return { storeId, accessToken }
+}
+
+function baseUrl(creds?: NuvemshopCredentials) {
+  return `https://api.tiendanube.com/v1/${resolveCredentials(creds).storeId}`
 }
 
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
 
-function authHeaders(): Record<string, string> {
-  const token = process.env.NUVEMSHOP_ACCESS_TOKEN
-  if (!token) throw new Error('NUVEMSHOP_ACCESS_TOKEN não definida.')
+function authHeaders(creds?: NuvemshopCredentials): Record<string, string> {
   return {
-    Authentication:  `bearer ${token}`,
+    Authentication:  `bearer ${resolveCredentials(creds).accessToken}`,
     'Content-Type':  'application/json',
     'User-Agent':    APP_AGENT,
   }
@@ -39,10 +67,17 @@ export interface NuvemshopProductPayload {
   images?:      string[]
 }
 
+export interface NuvemshopRemoteVariant {
+  id:     number
+  sku?:   string | null
+  price?: string
+  stock?: number | null
+}
+
 export interface NuvemshopProductResponse {
   id:       number
   name:     Record<string, string>
-  variants: Array<{ id: number; price: string; stock: number }>
+  variants: NuvemshopRemoteVariant[]
 }
 
 // ─── createNuvemshopProductFull types ─────────────────────────────────────────
@@ -75,7 +110,8 @@ export interface NuvemshopProductFullPayload {
  * Retorna o produto criado com o ID externo.
  */
 export async function createNuvemshopProduct(
-  payload: NuvemshopProductPayload
+  payload: NuvemshopProductPayload,
+  creds?:  NuvemshopCredentials
 ): Promise<NuvemshopProductResponse> {
   const body: Record<string, unknown> = {
     name: { pt: payload.name },
@@ -95,15 +131,14 @@ export async function createNuvemshopProduct(
     body.images = payload.images.map((src) => ({ src }))
   }
 
-  const res = await fetch(`${baseUrl()}/products`, {
+  const res = await fetch(`${baseUrl(creds)}/products`, {
     method:  'POST',
-    headers: authHeaders(),
+    headers: authHeaders(creds),
     body:    JSON.stringify(body),
   })
 
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Nuvemshop API ${res.status}: ${text}`)
+    throw new NuvemshopApiError(res.status, await res.text())
   }
 
   return res.json() as Promise<NuvemshopProductResponse>
@@ -116,7 +151,8 @@ export async function createNuvemshopProduct(
  * Retorna o produto criado incluindo todos os variants com seus IDs externos.
  */
 export async function createNuvemshopProductFull(
-  payload: NuvemshopProductFullPayload
+  payload: NuvemshopProductFullPayload,
+  creds?:  NuvemshopCredentials
 ): Promise<NuvemshopProductResponse> {
   const body: Record<string, unknown> = {
     name:      { pt: payload.name },
@@ -146,121 +182,17 @@ export async function createNuvemshopProductFull(
       : {}),
   }))
 
-  const res = await fetch(`${baseUrl()}/products`, {
+  const res = await fetch(`${baseUrl(creds)}/products`, {
     method:  'POST',
-    headers: authHeaders(),
+    headers: authHeaders(creds),
     body:    JSON.stringify(body),
   })
 
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Nuvemshop API ${res.status}: ${text}`)
+    throw new NuvemshopApiError(res.status, await res.text())
   }
 
   return res.json() as Promise<NuvemshopProductResponse>
-}
-
-// ─── getMappedNuvemshopProduct ────────────────────────────────────────────────
-
-/**
- * Retorna o mapping existente para um produto, ou null se ainda não enviado.
- */
-export async function getMappedNuvemshopProduct(
-  produtoId: number
-): Promise<{ external_id: string } | null> {
-  const admin = createAdminClient()
-
-  const { data } = await (admin as any)
-    .from('produto_map')
-    .select('external_id')
-    .eq('produto_id', produtoId)
-    .eq('source', 'nuvemshop')
-    .is('product_variation_id', null)   // linha de produto — evita conflito com linhas de variação
-    .maybeSingle() as { data: { external_id: string } | null }
-
-  return data ?? null
-}
-
-// ─── mapProductToNuvemshop ────────────────────────────────────────────────────
-
-/**
- * Persiste o relacionamento produto_id ↔ external_id na tabela produto_map.
- */
-export async function mapProductToNuvemshop(
-  produtoId:  number,
-  externalId: string
-): Promise<void> {
-  const admin = createAdminClient()
-
-  const { data: existing, error: selectError } = (await (admin as any)
-    .from('produto_map')
-    .select('id')
-    .eq('source', 'nuvemshop')
-    .eq('produto_id', produtoId)
-    .is('product_variation_id', null)
-    .maybeSingle()) as { data: { id: number } | null; error: { message: string } | null }
-
-  if (selectError) throw new Error(`mapProductToNuvemshop (select): ${selectError.message}`)
-
-  if (existing) {
-    const { error } = (await (admin as any)
-      .from('produto_map')
-      .update({ external_id: externalId })
-      .eq('id', existing.id)
-    ) as { error: { message: string } | null }
-    if (error) throw new Error(`mapProductToNuvemshop (update): ${error.message}`)
-  } else {
-    const { error } = (await (admin as any)
-      .from('produto_map')
-      .insert({ produto_id: produtoId, external_id: externalId, source: 'nuvemshop', product_variation_id: null })
-    ) as { error: { message: string } | null }
-    if (error) throw new Error(`mapProductToNuvemshop (insert): ${error.message}`)
-  }
-}
-
-// ─── mapVariantToNuvemshop ────────────────────────────────────────────────────
-
-/**
- * Persiste o relacionamento variação interna ↔ variante externa na produto_map.
- * Idempotente: atualiza se já existir linha para essa variação interna.
- */
-export async function mapVariantToNuvemshop(
-  produtoId:          number,
-  productVariationId: number,
-  externalProductId:  string,
-  externalVariantId:  string
-): Promise<void> {
-  const admin = createAdminClient()
-
-  const { data: existing, error: selectError } = (await (admin as any)
-    .from('produto_map')
-    .select('id')
-    .eq('source', 'nuvemshop')
-    .eq('product_variation_id', productVariationId)
-    .maybeSingle()) as { data: { id: number } | null; error: { message: string } | null }
-
-  if (selectError) throw new Error(`mapVariantToNuvemshop (select): ${selectError.message}`)
-
-  if (existing) {
-    const { error } = (await (admin as any)
-      .from('produto_map')
-      .update({ external_id: externalProductId, external_variant_id: externalVariantId })
-      .eq('id', existing.id)
-    ) as { error: { message: string } | null }
-    if (error) throw new Error(`mapVariantToNuvemshop (update): ${error.message}`)
-  } else {
-    const { error } = (await (admin as any)
-      .from('produto_map')
-      .insert({
-        produto_id:           produtoId,
-        product_variation_id: productVariationId,
-        external_id:          externalProductId,
-        external_variant_id:  externalVariantId,
-        source:               'nuvemshop',
-      })
-    ) as { error: { message: string } | null }
-    if (error) throw new Error(`mapVariantToNuvemshop (insert): ${error.message}`)
-  }
 }
 
 // ─── updateVariantStock ───────────────────────────────────────────────────────
@@ -272,19 +204,73 @@ export async function mapVariantToNuvemshop(
 export async function updateVariantStock(
   externalProductId: string,
   externalVariantId: string,
-  newQuantity:       number
+  newQuantity:       number,
+  creds?:            NuvemshopCredentials
 ): Promise<void> {
   const res = await fetch(
-    `${baseUrl()}/products/${externalProductId}/variants/${externalVariantId}`,
+    `${baseUrl(creds)}/products/${externalProductId}/variants/${externalVariantId}`,
     {
       method:  'PUT',
-      headers: authHeaders(),
+      headers: authHeaders(creds),
       body:    JSON.stringify({ stock: newQuantity }),
     }
   )
 
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Nuvemshop updateVariantStock ${res.status}: ${text}`)
+    throw new NuvemshopApiError(res.status, await res.text(), 'Nuvemshop updateVariantStock')
   }
+}
+
+// ─── Leitura de produtos remotos ──────────────────────────────────────────────
+
+/** Produto remoto pelo ID. `null` quando a Nuvemshop responde 404 (excluído). */
+export async function getNuvemshopProduct(
+  externalProductId: string,
+  creds?:            NuvemshopCredentials
+): Promise<NuvemshopProductResponse | null> {
+  const res = await fetch(`${baseUrl(creds)}/products/${encodeURIComponent(externalProductId)}`, {
+    headers: authHeaders(creds),
+  })
+  if (res.status === 404) return null
+  if (!res.ok) throw new NuvemshopApiError(res.status, await res.text())
+  return res.json() as Promise<NuvemshopProductResponse>
+}
+
+/** Produto remoto que contém uma variante com este SKU. `null` em 404. */
+export async function getNuvemshopProductBySku(
+  sku:    string,
+  creds?: NuvemshopCredentials
+): Promise<NuvemshopProductResponse | null> {
+  const res = await fetch(`${baseUrl(creds)}/products/sku/${encodeURIComponent(sku)}`, {
+    headers: authHeaders(creds),
+  })
+  if (res.status === 404) return null
+  if (!res.ok) throw new NuvemshopApiError(res.status, await res.text())
+  return res.json() as Promise<NuvemshopProductResponse>
+}
+
+const LIST_PAGE_SIZE = 200
+const LIST_MAX_PAGES = 500
+
+/**
+ * Todos os produtos da loja (id, nome, variantes com id/sku), paginado.
+ * Lança em qualquer falha — quem reconcilia NÃO pode tratar lista parcial
+ * como verdade (senão invalidaria mappings válidos).
+ */
+export async function listAllNuvemshopProducts(
+  creds?: NuvemshopCredentials
+): Promise<NuvemshopProductResponse[]> {
+  const out: NuvemshopProductResponse[] = []
+  for (let page = 1; page <= LIST_MAX_PAGES; page++) {
+    const url = `${baseUrl(creds)}/products?page=${page}&per_page=${LIST_PAGE_SIZE}&fields=id,name,variants`
+    const res = await fetch(url, { headers: authHeaders(creds) })
+    // Nuvemshop responde 404 ao pedir uma página além da última.
+    if (res.status === 404 && page > 1) break
+    if (!res.ok) throw new NuvemshopApiError(res.status, await res.text())
+    const items = await res.json() as NuvemshopProductResponse[]
+    out.push(...items)
+    if (items.length < LIST_PAGE_SIZE) break
+    if (page === LIST_MAX_PAGES) throw new Error('listAllNuvemshopProducts: limite de páginas atingido.')
+  }
+  return out
 }

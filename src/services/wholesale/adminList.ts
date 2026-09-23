@@ -47,6 +47,8 @@ export interface AdminProductRow {
   active: boolean
   wholesale_enabled: boolean
   wholesale_price: number | null
+  /** 'kit' = produto composto (estoque derivado). Ausente em linhas antigas de teste → tratado como standard. */
+  product_kind?: 'standard' | 'kit'
   categories: { id: number; name: string } | { id: number; name: string }[] | null
   suppliers: { id: number; name: string } | { id: number; name: string }[] | null
   brands: { id: number; name: string } | { id: number; name: string }[] | null
@@ -60,7 +62,7 @@ export interface AdminListResult {
   totalPages: number
 }
 
-const FULL_COLUMNS = `id, name, sku, base_cost, base_price, margin_pct, photo_url, active, wholesale_enabled, wholesale_price,
+const FULL_COLUMNS = `id, name, sku, base_cost, base_price, margin_pct, photo_url, active, wholesale_enabled, wholesale_price, product_kind,
              categories:category_id (id, name), suppliers:supplier_id (id, name), brands:brand_id (id, name)`
 
 function baseQuery(admin: SupabaseClient, companyId: number, columns: string, filters: AdminListFilters, enabled: boolean | undefined, withCount = false) {

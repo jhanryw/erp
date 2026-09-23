@@ -14,9 +14,11 @@ export function NuvemshopSendButton({ produtoId }: Props) {
   const [state, setState]           = useState<State>('idle')
   const [externalId, setExternalId] = useState<string | null>(null)
   const [skipped, setSkipped]       = useState(false)
+  const [errorMsg, setErrorMsg]     = useState<string | null>(null)
 
   async function handleSend() {
     setState('loading')
+    setErrorMsg(null)
     try {
       const res  = await fetch('/api/integrations/nuvemshop/product', {
         method:  'POST',
@@ -30,9 +32,11 @@ export function NuvemshopSendButton({ produtoId }: Props) {
         setSkipped(!!data.skipped)
         setState('success')
       } else {
+        setErrorMsg(data.error ?? `Erro ${res.status}`)
         setState('error')
       }
     } catch {
+      setErrorMsg('Falha de conexão.')
       setState('error')
     }
   }
@@ -41,24 +45,29 @@ export function NuvemshopSendButton({ produtoId }: Props) {
     return (
       <span className="inline-flex items-center gap-1 text-sm text-green-600">
         <Send className="h-3.5 w-3.5" />
-        {skipped ? 'Já enviado' : 'Enviado'}{externalId ? ` · ID ${externalId}` : ''}
+        {skipped ? 'Já publicado' : 'Publicado'}{externalId ? ` · ID ${externalId}` : ''}
       </span>
     )
   }
 
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={handleSend}
-      disabled={state === 'loading'}
-    >
-      <Send className="mr-2 h-4 w-4" />
-      {state === 'loading'
-        ? 'Enviando...'
-        : state === 'error'
-        ? 'Tentar novamente'
-        : 'Enviar para Nuvemshop'}
-    </Button>
+    <span className="inline-flex flex-col items-start gap-1">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handleSend}
+        disabled={state === 'loading'}
+      >
+        <Send className="mr-2 h-4 w-4" />
+        {state === 'loading'
+          ? 'Enviando...'
+          : state === 'error'
+          ? 'Tentar novamente'
+          : 'Enviar para Nuvemshop'}
+      </Button>
+      {state === 'error' && errorMsg && (
+        <span className="max-w-xs text-xs text-error">{errorMsg}</span>
+      )}
+    </span>
   )
 }

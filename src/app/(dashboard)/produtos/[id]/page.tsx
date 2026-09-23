@@ -18,6 +18,9 @@ import {
   TableCell,
 } from '@/components/ui/table'
 import { formatCurrency, formatPercent } from '@/lib/utils/currency'
+import { requirePageRole } from '@/lib/auth/requirePageRole'
+import { getKitCompositionDetails, type KitCompositionDetail } from '@/services/inventory/availability.service'
+import { KitCompositionPanel } from '@/components/produtos/kit-composition-panel'
 import { DeleteProductButton } from '../_components/delete-product-button'
 import { NuvemshopSendButton } from '../_components/nuvemshop-send-button'
 
@@ -35,6 +38,7 @@ type ProductRow = {
   origin: string | null
   created_at: string
   company_id: number
+  product_kind: 'standard' | 'kit'
   categories?: { id: number; name: string } | null
   suppliers?: { id: number; name: string } | null
   brands?: { id: number; name: string } | null
@@ -54,7 +58,7 @@ type VariationRow = {
   product_variation_attributes: AttributeRow[]
 }
 
-async function getProduct(id: string) {
+async function getProduct(id: string, companyId: number) {
   const supabase = createAdminClient()
   const productId = Number(id)
 
@@ -74,11 +78,15 @@ async function getProduct(id: string) {
       origin,
       created_at,
       company_id,
+      product_kind,
       categories:category_id (id, name),
       suppliers:supplier_id (id, name),
       brands:brand_id (id, name)
     `)
     .eq('id', productId)
+    // Multi-tenant: nunca abrir produto de outra empresa por id (a leitura
+    // é via service_role, então o filtro precisa ser explícito).
+    .eq('company_id', companyId)
     .single()
 
   if (productError || !product) return null
@@ -114,10 +122,20 @@ async function getProduct(id: string) {
     .eq('product_id', productId)
     .order('sku_variation', { ascending: true })
 
+  const variationRows = (variations ?? []) as VariationRow[]
+
+  // Kit: composição + disponibilidade derivada por variação (camada central).
+  let kitCompositions = new Map<number, KitCompositionDetail>()
+  if (row.product_kind === 'kit') {
+    const details = await getKitCompositionDetails(companyId, variationRows.map((v) => v.id))
+    if (details.ok) kitCompositions = details.data
+  }
+
   return {
     product: row,
-    variations: (variations ?? []) as VariationRow[],
+    variations: variationRows,
     displayUrl,
+    kitCompositions,
   }
 }
 
@@ -131,11 +149,15 @@ export default async function ProdutoDetalhePage({
 }: {
   params: { id: string }
 }) {
-  const result = await getProduct(params.id)
+  const profile = await requirePageRole('usuario')
+  if (!profile.company_id) notFound()
+
+  const result = await getProduct(params.id, profile.company_id)
 
   if (!result) notFound()
 
-  const { product, variations, displayUrl } = result
+  const { product, variations, displayUrl, kitCompositions } = result
+  const isKit = product.product_kind === 'kit'
 
   // Fase 2 (ajuste final) — usuario = admin fora dos 9 módulos bloqueados.
   // Produtos não está bloqueado: custo/margem voltam a aparecer para todos
@@ -167,6 +189,7 @@ export default async function ProdutoDetalhePage({
               <h1 className="text-2xl font-semibold tracking-tight">{product.name}</h1>
               <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                 <code>{product.sku}</code>
+                {isKit && <Badge variant="outline">Kit</Badge>}
                 {product.categories?.name && <span>{product.categories.name}</span>}
                 {product.suppliers?.name && <span>· {product.suppliers.name}</span>}
                 {product.brands?.name && <span>· {product.brands.name}</span>}
@@ -196,16 +219,33 @@ export default async function ProdutoDetalhePage({
           value={formatCurrency(product.base_price)}
           icon={<Package className="h-4 w-4" />}
         />
-        <StatCard
-          title="Custo Base"
-          value={formatCurrency(product.base_cost)}
-          icon={<Package className="h-4 w-4" />}
-        />
-        <StatCard
-          title="Margem"
-          value={formatPercent(product.margin_pct)}
-          icon={<Package className="h-4 w-4" />}
-        />
+        {isKit ? (
+          <>
+            <StatCard
+              title="Custo (derivado)"
+              value={formatCostRange([...kitCompositions.values()].map((k) => k.unit_cost))}
+              icon={<Package className="h-4 w-4" />}
+            />
+            <StatCard
+              title="Disponível (kits)"
+              value={String([...kitCompositions.values()].reduce((sum, k) => sum + k.available_online, 0))}
+              icon={<Package className="h-4 w-4" />}
+            />
+          </>
+        ) : (
+          <>
+            <StatCard
+              title="Custo Base"
+              value={formatCurrency(product.base_cost)}
+              icon={<Package className="h-4 w-4" />}
+            />
+            <StatCard
+              title="Margem"
+              value={formatPercent(product.margin_pct)}
+              icon={<Package className="h-4 w-4" />}
+            />
+          </>
+        )}
         <StatCard
           title="Origem"
           value={ORIGIN_LABELS[product.origin ?? ''] ?? '—'}
@@ -253,9 +293,11 @@ export default async function ProdutoDetalhePage({
                       </TableCell>
                       <TableCell>{attrs || '—'}</TableCell>
                       <TableCell>
-                        {v.cost_override != null
-                          ? formatCurrency(v.cost_override)
-                          : 'base'}
+                        {isKit
+                          ? `${formatCurrency(kitCompositions.get(v.id)?.unit_cost ?? 0)} (derivado)`
+                          : v.cost_override != null
+                            ? formatCurrency(v.cost_override)
+                            : 'base'}
                       </TableCell>
                       <TableCell>
                         {v.price_override != null
@@ -275,6 +317,32 @@ export default async function ProdutoDetalhePage({
           </div>
         )}
       </Card>
+
+      {isKit && (
+        <Card>
+          <CardHeader>
+            <h2 className="text-lg font-semibold">Composição do kit</h2>
+          </CardHeader>
+          <div className="space-y-4 p-5">
+            {variations.map((v) => (
+              <KitCompositionPanel
+                key={v.id}
+                variationId={v.id}
+                sku={v.sku_variation}
+                label={(v.product_variation_attributes ?? []).map((a) => a.variation_values?.value).filter(Boolean).join(' / ') || null}
+                initial={kitCompositions.get(v.id) ?? null}
+              />
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   )
+}
+
+function formatCostRange(costs: number[]): string {
+  if (costs.length === 0) return '—'
+  const min = Math.min(...costs)
+  const max = Math.max(...costs)
+  return min === max ? formatCurrency(min) : `${formatCurrency(min)} – ${formatCurrency(max)}`
 }

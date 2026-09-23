@@ -105,6 +105,24 @@ export async function canDeleteProduct(productId: number): Promise<ServiceOutcom
     )
   }
 
+  // Regra 3 (kits, 2026-09-23): variação usada como componente de kit —
+  // apagar deixaria o kit sem composição (FK RESTRICT também barraria).
+  const { data: kitUsage, error: kitErr } = await (admin as any)
+    .from('product_kit_components')
+    .select('kit:product_variations!product_kit_components_kit_product_variation_id_fkey(sku_variation)')
+    .in('component_product_variation_id', variationIds)
+    .limit(5) as { data: Array<{ kit: { sku_variation: string } | null }> | null; error: { message: string } | null }
+
+  if (kitErr) return failure(kitErr.message)
+
+  if (kitUsage && kitUsage.length > 0) {
+    const skus = [...new Set(kitUsage.map((k) => k.kit?.sku_variation).filter(Boolean))].join(', ')
+    return failure(
+      `Produto não pode ser excluído: é componente do(s) kit(s) ${skus}. Remova-o da composição antes.`,
+      409
+    )
+  }
+
   return success({ variationIds })
 }
 

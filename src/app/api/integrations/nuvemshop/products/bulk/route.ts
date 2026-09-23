@@ -1,106 +1,39 @@
 import { NextResponse } from 'next/server'
-import { requireRole } from '@/lib/supabase/session'
-import { createAdminClient } from '@/lib/supabase/admin'
-import {
-  createNuvemshopProduct,
-  getMappedNuvemshopProduct,
-  mapProductToNuvemshop,
-  mapVariantToNuvemshop,
-} from '@/lib/integrations/nuvemshop'
+import { requireNuvemshopRouteContext } from '@/services/nuvemshop/routeContext'
+import { publishProductToNuvemshop } from '@/services/nuvemshop/publish.service'
+import { getNuvemshopPublicationOverview } from '@/services/nuvemshop/publicationStatus.service'
 
-type ProductRow = {
-  id: number
-  name: string
-  base_price: number
-  photo_url: string | null
+const DELAY_MS = 600
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * "Enviar todos para Nuvemshop" (/produtos). Antes criava produto de 1
+ * variante e mapeava só a primeira; agora delega ao service canônico
+ * (todas as variações ativas, pareadas por SKU). Resposta mantém o formato.
+ */
 export async function POST(_request: Request) {
-  const { response: unauth } = await requireRole('gerente')
-  if (unauth) return unauth
+  const { ctx, response } = await requireNuvemshopRouteContext('gerente')
+  if (response) return response
 
-  try {
-    const admin = createAdminClient()
+  const overview = await getNuvemshopPublicationOverview(ctx.companyId)
+  if (!overview.ok) return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
 
-    // Buscar apenas produtos ativos
-    const { data: products, error } = await admin
-      .from('products')
-      .select('id, name, base_price, photo_url')
-      .eq('active', true) as unknown as {
-        data: ProductRow[] | null
-        error: { message: string } | null
-      }
+  const total = overview.data.items.length
+  let enviados = 0
+  let pulados = 0
+  const erros: { id: number; name: string; error: string }[] = []
 
-    if (error || !products) {
-      console.error('[integrations/nuvemshop/bulk] Erro ao buscar produtos', error?.message)
-      return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
-    }
-
-    const total   = products.length
-    let enviados  = 0
-    let pulados   = 0
-    const erros: { id: number; name: string; error: string }[] = []
-
-    for (const product of products) {
-      try {
-        // Pular se já mapeado
-        const existing = await getMappedNuvemshopProduct(product.id)
-        if (existing) {
-          pulados++
-          continue
-        }
-
-        // Enviar
-        const nuvemshopProduct = await createNuvemshopProduct({
-          name:   product.name,
-          price:  product.base_price,
-          images: product.photo_url ? [product.photo_url] : undefined,
-        })
-
-        const externalProductId = String(nuvemshopProduct.id)
-
-        // Salvar mapping de produto
-        await mapProductToNuvemshop(product.id, externalProductId)
-
-        // Salvar mapping de variação (primeira variação interna ↔ primeiro variant externo)
-        const firstNsVariant = nuvemshopProduct.variants?.[0]
-        if (firstNsVariant) {
-          const { data: firstVariation } = (await (admin as any)
-            .from('product_variations')
-            .select('id')
-            .eq('product_id', product.id)
-            .order('id', { ascending: true })
-            .limit(1)
-            .maybeSingle()) as { data: { id: number } | null }
-
-          if (firstVariation) {
-            try {
-              await mapVariantToNuvemshop(
-                product.id,
-                firstVariation.id,
-                externalProductId,
-                String(firstNsVariant.id)
-              )
-            } catch (variantErr) {
-              console.error(`[integrations/nuvemshop/bulk] Erro ao salvar variant mapping #${product.id}`, variantErr)
-            }
-          }
-        }
-
-        enviados++
-      } catch (err) {
-        console.error(`[integrations/nuvemshop/bulk] Erro no produto #${product.id}`, err)
-        erros.push({
-          id:    product.id,
-          name:  product.name,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-    }
-
-    return NextResponse.json({ total, enviados, pulados, erros })
-  } catch (err) {
-    console.error('[integrations/nuvemshop/bulk] Exceção não tratada', err)
-    return NextResponse.json({ error: 'Erro interno do servidor.' }, { status: 500 })
+  for (const item of overview.data.items) {
+    if (item.state === 'published') { pulados++; continue }
+    const r = await publishProductToNuvemshop(ctx, item.id)
+    if (r.status === 'published' || r.status === 'relinked') enviados++
+    else if (r.status === 'already_published') pulados++
+    else erros.push({ id: item.id, name: item.name, error: r.message ?? 'Erro desconhecido' })
+    await sleep(DELAY_MS)
   }
+
+  return NextResponse.json({ total, enviados, pulados, erros })
 }

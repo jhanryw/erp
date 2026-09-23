@@ -29,6 +29,8 @@ export interface ProductTableRow {
   displayUrl: string | null
   wholesaleStatus: WholesaleAdminStatus
   hasImage: boolean
+  /** Produto composto — sem estoque próprio. */
+  isKit?: boolean
 }
 
 type BulkChanges = { wholesale_enabled?: boolean; wholesale_price_percent?: number }
@@ -163,7 +165,12 @@ export function ProductsTable({ rows, total }: { rows: ProductTableRow[]; total:
                   <TableCell>
                     <div className="flex items-center gap-3">
                       <ProductThumb url={product.displayUrl} name={product.name} />
-                      <div className="font-medium">{product.name}</div>
+                      <div className="font-medium">
+                        {product.name}
+                        {product.isKit && (
+                          <span className="ml-1.5 inline-block rounded bg-brand/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-brand align-middle">Kit</span>
+                        )}
+                      </div>
                     </div>
                   </TableCell>
                   <TableCell><code>{product.sku}</code></TableCell>

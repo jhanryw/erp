@@ -484,6 +484,7 @@ export default function EstoqueEntradaLotePage() {
         .from('products')
         .select('id, name, sku')
         .eq('active', true)
+        .eq('product_kind', 'standard') // kit não recebe entrada
         .order('name')
       if (error) throw error
       return (data ?? []) as ProductMeta[]

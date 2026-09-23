@@ -8,6 +8,12 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { notifyNewSale } from '@/lib/push/newSale'
 import type { ServiceOutcome } from './produtos.service'
+import {
+  findKitVariationIds,
+  getKitUnitCosts,
+  getVariationAvailability,
+  type StockMode,
+} from './inventory/availability.service'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -134,8 +140,17 @@ function failure(error: string, status = 500): { ok: false; error: string; statu
 /**
  * Verifica disponibilidade de estoque para todos os itens de uma venda.
  * Retorna erro no primeiro item com estoque insuficiente.
+ *
+ * Kits (2026-09-23): não têm saldo próprio — a pré-checagem usa a
+ * disponibilidade DERIVADA dos componentes (serviço central, mesmo modo de
+ * baixa da venda). Produto normal segue exatamente a checagem de sempre.
+ * A decisão final continua sendo de rpc_create_sale, sob lock.
  */
-export async function validateStockForSale(items: SaleItem[], companyId: number | null): Promise<ServiceOutcome> {
+export async function validateStockForSale(
+  items: SaleItem[],
+  companyId: number | null,
+  stockMode: StockMode = 'main_store',
+): Promise<ServiceOutcome> {
   const admin = createAdminClient()
   const variationIds = items.map((i) => i.product_variation_id)
 
@@ -155,7 +170,31 @@ export async function validateStockForSale(items: SaleItem[], companyId: number 
     }
   }
 
+  let kitIds = new Set<number>()
+  if (companyId != null) {
+    const kits = await findKitVariationIds(companyId, variationIds)
+    if (!kits.ok) return failure(kits.error, kits.status)
+    kitIds = kits.data
+  }
+
+  if (kitIds.size > 0) {
+    const availability = await getVariationAvailability(companyId!, [...kitIds], stockMode)
+    if (!availability.ok) return failure(availability.error, availability.status)
+    for (const item of items.filter((i) => kitIds.has(i.product_variation_id))) {
+      const available = availability.data.get(item.product_variation_id)?.sellable_quantity ?? 0
+      if (available < item.quantity) {
+        return failure(
+          `Kit #${item.product_variation_id} sem componentes suficientes. ` +
+          `Disponível: ${available}, solicitado: ${item.quantity}.`,
+          400
+        )
+      }
+    }
+  }
+
   for (const item of items) {
+    if (kitIds.has(item.product_variation_id)) continue
+
     const { data: balances } = await admin
       .from('stock_balances')
       .select('quantity')
@@ -292,6 +331,19 @@ export async function resolveAuthoritativeItemCosts(
       return failure(`Variação #${row.id} não pertence à empresa.`, 403)
     }
     costMap.set(row.id, row.cost_override ?? row.products.base_cost ?? 0)
+  }
+
+  // Kits: custo = soma dos componentes (mesma regra que rpc_create_sale grava
+  // no snapshot). Sem isso, base_cost=0 do produto-kit faria a checagem de
+  // margem negativa nunca disparar para kit.
+  if (companyId != null) {
+    const kits = await findKitVariationIds(companyId, variationIds)
+    if (!kits.ok) return failure(kits.error, kits.status)
+    if (kits.data.size > 0) {
+      const kitCosts = await getKitUnitCosts(companyId, [...kits.data])
+      if (!kitCosts.ok) return failure(kitCosts.error, kitCosts.status)
+      for (const [kitId, cost] of kitCosts.data) costMap.set(kitId, cost)
+    }
   }
 
   const resolved = items.map((item) => {

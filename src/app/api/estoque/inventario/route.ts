@@ -1,7 +1,7 @@
 import { NextResponse }             from 'next/server'
 import { requireRole }              from '@/lib/supabase/session'
 import { adjustStock }              from '@/services/estoque.service'
-import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
+import { pushMultipleVariantStocksToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 import { auditLog }                 from '@/lib/audit/log'
 import { logError }                 from '@/lib/errors/log'
 
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
         })
 
         // Sincronizar estoque corrigido na Nuvemshop de forma não-bloqueante
-        pushVariantStockToNuvemshop(item.product_variation_id, { eventType: 'stock_push_erp' })
+        pushMultipleVariantStocksToNuvemshop([item.product_variation_id], { eventType: 'stock_push_erp' })
           .catch((err) => console.error('[POST /api/estoque/inventario] Nuvemshop sync error', err))
       }
     } catch (err) {

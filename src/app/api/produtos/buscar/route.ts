@@ -5,6 +5,8 @@ import { requireRole } from '@/lib/supabase/session'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { buildProductSearchItem, type ProductSearchRow, type ProductSearchItem } from './buildProductSearchItem'
 import type { SaleType } from '@/lib/pricing/resolveSalePrice'
+import { sanitizePostgrestSearch } from '@/lib/utils/postgrest-search'
+import { getVariationAvailability, getKitCompositionDetails } from '@/services/inventory/availability.service'
 
 export type { ProductSearchItem } from './buildProductSearchItem'
 
@@ -147,5 +149,96 @@ export async function GET(request: NextRequest) {
     return buildProductSearchItem(row, saleType)
   })
 
-  return NextResponse.json({ items })
+  // Kits (2026-09-23): não têm linha em stock_balances, então nunca saem da
+  // consulta acima (inner join em saldo). Entram aqui pela disponibilidade
+  // DERIVADA no Estoque Loja (mesmo modo de baixa do PDV) — só os vendáveis
+  // (ativos manualmente e com componentes suficientes).
+  const kitItems = await searchSellableKits(admin, companyId, q, saleType)
+  return NextResponse.json({ items: [...items, ...kitItems] })
+}
+
+async function searchSellableKits(
+  admin: ReturnType<typeof createAdminClient>,
+  companyId: number,
+  rawQuery: string,
+  saleType: SaleType,
+): Promise<ProductSearchItem[]> {
+  const q = sanitizePostgrestSearch(rawQuery)
+  if (q.length < 2) return []
+
+  const { data: kitProducts } = await (admin as any)
+    .from('products')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('product_kind', 'kit')
+    .eq('active', true)
+    .ilike('name', `%${q}%`)
+    .limit(12) as { data: Array<{ id: number }> | null }
+
+  const kitProductIds = (kitProducts ?? []).map((p) => p.id)
+  const orFilter = kitProductIds.length > 0
+    ? `sku_variation.ilike.%${q}%,product_id.in.(${kitProductIds.join(',')})`
+    : `sku_variation.ilike.%${q}%`
+
+  const { data: rows, error } = await (admin as any)
+    .from('product_variations')
+    .select(`
+      id, sku_variation, price_override, wholesale_price_override,
+      products!inner ( id, name, base_price, wholesale_price, company_id, product_kind, active ),
+      product_variation_attributes (
+        variation_types:variation_type_id ( slug ),
+        variation_values:variation_value_id ( value )
+      )
+    `)
+    .eq('active', true)
+    .eq('products.company_id', companyId)
+    .eq('products.product_kind', 'kit')
+    .eq('products.active', true)
+    .or(orFilter)
+    .limit(12) as {
+      data: Array<{
+        id: number
+        sku_variation: string
+        price_override: number | null
+        wholesale_price_override: number | null
+        products: { id: number; name: string; base_price: number; wholesale_price: number | null }
+        product_variation_attributes: Array<{ variation_types: { slug: string } | null; variation_values: { value: string } | null }>
+      }> | null
+      error: { message: string } | null
+    }
+
+  if (error || !rows || rows.length === 0) {
+    if (error) console.error('[api/produtos/buscar] kit query error', error)
+    return []
+  }
+
+  const ids = rows.map((r) => r.id)
+  const [availability, details] = await Promise.all([
+    getVariationAvailability(companyId, ids, 'main_store'),
+    getKitCompositionDetails(companyId, ids),
+  ])
+  if (!availability.ok) return []
+
+  return rows
+    .map((v) => {
+      const avail = availability.data.get(v.id)
+      if (!avail?.is_sellable) return null
+      const attrs = v.product_variation_attributes ?? []
+      const row: ProductSearchRow = {
+        variation_id: v.id,
+        sku_variation: v.sku_variation,
+        product_name: v.products.name,
+        base_price: v.products.base_price,
+        price_override: v.price_override,
+        wholesale_price: v.products.wholesale_price ?? null,
+        wholesale_price_override: v.wholesale_price_override,
+        cost: details.ok ? details.data.get(v.id)?.unit_cost ?? 0 : 0,
+        cor: attrs.find((a) => a.variation_types?.slug === 'cor')?.variation_values?.value ?? null,
+        tamanho: attrs.find((a) => a.variation_types?.slug === 'tamanho')?.variation_values?.value ?? null,
+        stock: avail.sellable_quantity,
+        is_kit: true,
+      }
+      return buildProductSearchItem(row, saleType)
+    })
+    .filter((i): i is ProductSearchItem => i !== null)
 }

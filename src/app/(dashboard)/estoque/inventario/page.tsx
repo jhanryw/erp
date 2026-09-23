@@ -95,7 +95,15 @@ export default function InventarioFisicoPage() {
         .order('cor')
 
       if (error) throw error
-      return (data ?? []) as StockItem[]
+
+      // Kits (2026-09-23) não têm estoque físico — não entram na contagem.
+      const { data: kitRows } = await (supabase as any)
+        .from('product_variations')
+        .select('id, products!inner(product_kind)')
+        .eq('products.product_kind', 'kit') as { data: Array<{ id: number }> | null }
+      const kitIds = new Set((kitRows ?? []).map((r) => r.id))
+
+      return ((data ?? []) as StockItem[]).filter((i) => !kitIds.has(i.product_variation_id))
     },
     staleTime: 30_000,
   })

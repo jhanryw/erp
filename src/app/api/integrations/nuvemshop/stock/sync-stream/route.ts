@@ -1,5 +1,6 @@
-import { requireRole } from '@/lib/supabase/session'
-import { createAdminClient } from '@/lib/supabase/admin'
+import { requireNuvemshopRouteContext } from '@/services/nuvemshop/routeContext'
+import { listNuvemshopMappingsForCompany } from '@/services/nuvemshop/mappings.service'
+import { mappedVariationIds } from '@/services/nuvemshop/stockBatch'
 import { pushVariantStockToNuvemshop } from '@/lib/services/nuvemshopSyncService'
 
 const DELAY_MS = 300
@@ -9,10 +10,9 @@ function sleep(ms: number) {
 }
 
 export async function POST() {
-  const { response: unauth } = await requireRole('gerente')
-  if (unauth) return unauth
+  const { ctx, response } = await requireNuvemshopRouteContext('gerente')
+  if (response) return response
 
-  const admin   = createAdminClient()
   const encoder = new TextEncoder()
 
   const stream = new ReadableStream({
@@ -24,23 +24,14 @@ export async function POST() {
       }
 
       try {
-        const { data: mappings, error } = (await (admin as any)
-          .from('produto_map')
-          .select('product_variation_id')
-          .eq('source', 'nuvemshop')
-          .not('external_variant_id', 'is', null)
-          .not('product_variation_id', 'is', null)) as {
-            data: Array<{ product_variation_id: number }> | null
-            error: { message: string } | null
-          }
-
-        if (error) {
-          send({ type: 'error', message: `Erro ao buscar mapeamentos: ${error.message}` })
+        const rows = await listNuvemshopMappingsForCompany(ctx.companyId)
+        if (!rows.ok) {
+          send({ type: 'error', message: `Erro ao buscar mapeamentos: ${rows.error}` })
           controller.close()
           return
         }
 
-        const variationIds = [...new Set((mappings ?? []).map((m) => m.product_variation_id))]
+        const variationIds = mappedVariationIds(rows.data)
 
         send({ type: 'start', total: variationIds.length })
 
@@ -56,7 +47,10 @@ export async function POST() {
           const variationId = variationIds[i]
           const result = await pushVariantStockToNuvemshop(variationId, { eventType: 'stock_push_erp' })
 
-          if (result.skipped) {
+          if (result.invalidated) {
+            send({ type: 'variant', status: 'error', variation_id: variationId, index: i + 1, error: 'Excluído na Nuvemshop — vínculo removido' })
+            errors++
+          } else if (result.skipped) {
             send({ type: 'variant', status: 'skipped', variation_id: variationId, index: i + 1 })
             skipped++
           } else if (result.success) {

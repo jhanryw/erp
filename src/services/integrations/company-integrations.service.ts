@@ -27,8 +27,8 @@ import type { ServiceOutcome } from '../produtos.service'
 // digital (.pfx) + senha + CSC Token da empresa. Ver
 // certificateService.ts. Amplia o MESMO CHECK constraint já usado por
 // 'focus_nfe' (migration 202609051100).
-export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop' | 'focus_nfe' | 'fiscal_certificate'
-export type IntegrationStatus = 'pending' | 'active' | 'inactive' | 'error'
+export type IntegrationProvider = 'chatwoot' | 'meta' | 'nuvemshop' | 'focus_nfe' | 'fiscal_certificate' | 'mercadolivre'
+export type IntegrationStatus = 'pending' | 'active' | 'inactive' | 'error' | 'needs_reauth'
 
 export interface CompanyIntegration {
   id: number
