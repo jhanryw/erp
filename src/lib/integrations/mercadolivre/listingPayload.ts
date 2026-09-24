@@ -122,6 +122,7 @@ export function parseItem(item: Record<string, unknown>, extra: { familyId?: str
       ...(extra.familyId ? { family_id: extra.familyId } : {}),
     },
     externalCategoryId: (item.category_id as string) ?? null,
+    listingTypeId: (item.listing_type_id as string) ?? null,
     externalStatus: (item.status as string) ?? null,
     externalSubStatus: Array.isArray(item.sub_status) ? (item.sub_status as string[]) : [],
     permalink: (item.permalink as string) ?? null,

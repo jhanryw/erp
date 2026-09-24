@@ -72,6 +72,9 @@ export interface ListingRow {
   product_id: number
   product_variation_id: number
   seller_sku: string
+  /** Chave estável da oferta dentro da variação (1 variação → N anúncios). */
+  offer_key: string
+  listing_type_id: string | null
   external_listing_id: string | null
   external_variant_id: string | null
   external_product_id: string | null
@@ -99,7 +102,7 @@ export interface ListingsRepo {
   begin(args: {
     companyId: number; integrationId: number; provider: string; productId: number; productVariationId: number
     sellerSku: string; attemptId: string; leaseSeconds: number; channelPrice: number | null
-    metadata: Record<string, unknown>; userId: string
+    metadata: Record<string, unknown>; userId: string; offerKey: string; listingTypeId: string | null
   }): Promise<BeginResult>
   complete(companyId: number, listingId: number, attemptId: string | null, snap: ChannelListingSnapshot,
     sentPrice: number | null, quantity: number | null, warning: string | null): Promise<boolean>
@@ -162,6 +165,11 @@ export interface PublishInput {
   /** Domínio do canal (ML: domain_id do preditor) — guardado p/ tabela de medidas e retry. */
   domainId?: string | null
   listingTypeId?: string
+  /**
+   * Oferta dentro da variação (idempotência): a mesma variação pode ter N
+   * anúncios no mesmo canal (ex.: Clássico + Premium). Padrão = tipo de anúncio.
+   */
+  offerKey?: string | null
   /** Nome genérico (ML UP: family_name). Padrão: nome do produto. */
   familyName?: string | null
   description?: string | null
@@ -177,6 +185,16 @@ export type PublishOutcome =
   | { productVariationId: number; status: 'failed'; reason: ListingErrorCode; message: string; listingId?: number }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const OFFER_KEY_RE = /^[a-z0-9][a-z0-9_-]{0,59}$/
+
+/** Chave da oferta: informada (slug) ou o tipo de anúncio; 'default' em último caso. */
+export function normalizeOfferKey(offerKey: string | null | undefined, listingTypeId: string | null | undefined): string {
+  const raw = (offerKey ?? '').trim().toLowerCase() || (listingTypeId ?? '').trim().toLowerCase() || 'default'
+  const key = raw.replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+/, '').slice(0, 60)
+  if (!OFFER_KEY_RE.test(key)) throw new ListingError('invalid_price', 'Identificador da oferta inválido (use letras, números, - e _).')
+  return key
+}
 
 export const CURRENCY_BY_SITE: Readonly<Record<string, string>> = {
   MLB: 'BRL', MLA: 'ARS', MLM: 'MXN', MLC: 'CLP', MCO: 'COP', MLU: 'UYU', MPE: 'PEN',
@@ -281,6 +299,9 @@ export async function publishListings(
   const d = resolveDeps(deps)
   const ctx = await d.resolveChannel(session.companyId)
   assertPublishAllowed(ctx)
+  // Oferta resolvida uma vez para o pedido inteiro (mesma chave em todas as variações).
+  const listingTypeId = input.listingTypeId ?? 'gold_special'
+  input = { ...input, listingTypeId, offerKey: normalizeOfferKey(input.offerKey, listingTypeId) }
   const product = await d.source.loadProduct(session.companyId, input.productId)
   if (!product) throw new ListingError('not_found', 'Produto não encontrado.')
 
@@ -349,14 +370,15 @@ async function publishOne(
     quantity,
     pictureUrls: pictures.valid,
     attributes,
-    channelOptions: { listing_type_id: input.listingTypeId ?? 'gold_special', condition: 'new' },
+    channelOptions: { listing_type_id: input.listingTypeId!, condition: 'new' },
   }
 
   // Vínculo em 'error' sem id externo = a tentativa anterior PODE ter criado o
   // anúncio (timeout/5xx no POST). Nunca republica às cegas: reconcilia por SKU
   // antes (vincula se achar; se não achar, a linha volta a 'draft' e segue).
   const existing = (await d.repo.listByProduct(session.companyId, product.id))
-    .find((r) => r.product_variation_id === pvid && r.integration_id === ctx.integrationId && r.local_status !== 'closed')
+    .find((r) => r.product_variation_id === pvid && r.integration_id === ctx.integrationId
+      && r.offer_key === input.offerKey && r.local_status !== 'closed')
   if (existing && !existing.external_listing_id && existing.local_status === 'error') {
     const rec = await reconcileListing(session.companyId, existing.id, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
     if (rec.outcome === 'attached') {
@@ -372,13 +394,15 @@ async function publishOne(
     leaseSeconds: d.leaseSeconds, channelPrice: vInput.channelPrice ?? null,
     metadata: {
       category_id: input.categoryId, domain_id: input.domainId ?? null, listing_type_id: draft.channelOptions.listing_type_id, family_name: productName,
-      description: input.description ?? null, attributes, model: ctx.model,
+      description: input.description ?? null, attributes, model: ctx.model, offer_key: input.offerKey,
     },
     userId: session.userId,
+    offerKey: input.offerKey!,
+    listingTypeId: input.listingTypeId ?? null,
   })
 
   if (begin.result === 'already_published') {
-    return { productVariationId: pvid, status: 'skipped', reason: 'already_published', message: 'Variação já publicada neste canal.', listingId: begin.listing_id }
+    return { productVariationId: pvid, status: 'skipped', reason: 'already_published', message: `Variação já tem a oferta "${input.offerKey}" neste canal.`, listingId: begin.listing_id }
   }
   if (begin.result === 'in_progress') {
     return { productVariationId: pvid, status: 'skipped', reason: 'in_progress', message: 'Publicação desta variação já está em andamento.', listingId: begin.listing_id }
@@ -475,7 +499,12 @@ function snapshotPatch(row: ListingRow, snap: ChannelListingSnapshot, localStatu
  * Sincronização manual: envia quantidade ABSOLUTA atual (camada central) e,
  * se mudou, o preço. Nunca altera a pausa manual.
  */
-export async function syncListing(companyId: number, listingId: number, deps?: ListingsServiceDeps): Promise<ListingRow> {
+export async function syncListing(
+  companyId: number,
+  listingId: number,
+  deps?: ListingsServiceDeps,
+  options: { quantityOnly?: boolean } = {},
+): Promise<ListingRow> {
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
   const ctx = await d.resolveChannel(companyId)
@@ -495,7 +524,8 @@ export async function syncListing(companyId: number, listingId: number, deps?: L
     let snap = await adapter.updateQuantity(refOf(row), quantity)
     warnings.push(...snap.warnings)
     let sentPrice = row.last_sent_price
-    if (row.last_sent_price == null || Math.abs(Number(row.last_sent_price) - price) > 0.009) {
+    // quantityOnly: fan-out de estoque (stock.changed) — nunca mexe em preço.
+    if (!options.quantityOnly && (row.last_sent_price == null || Math.abs(Number(row.last_sent_price) - price) > 0.009)) {
       snap = await adapter.updatePrice(refOf(row), price)
       warnings.push(...snap.warnings)
       sentPrice = snap.price != null && Math.abs(snap.price - price) <= 0.009 ? price : row.last_sent_price
@@ -571,7 +601,17 @@ export async function reconcileListing(companyId: number, listingId: number, dep
   const ctx = await d.resolveChannel(companyId)
   const found = await d.adapterFor(ctx).findListingsBySellerSku(row.seller_sku)
   const alreadyLinked = new Set((await d.repo.listByProduct(companyId, row.product_id)).map((r) => r.external_listing_id).filter(Boolean))
-  const candidates = found.filter((s) => !alreadyLinked.has(s.externalListingId) && s.externalStatus !== 'closed')
+  let candidates = found.filter((s) => !alreadyLinked.has(s.externalListingId) && s.externalStatus !== 'closed')
+  // Multi-oferta: o mesmo SKU pode ter N anúncios (Clássico, Premium…).
+  // Desempata pela condição comercial e categoria DESTA oferta — nunca escolhe no chute.
+  if (candidates.length > 1) {
+    const wantedType = row.listing_type_id ?? ((row.metadata ?? {}) as Record<string, unknown>).listing_type_id ?? null
+    const wantedCategory = ((row.metadata ?? {}) as Record<string, unknown>).category_id ?? null
+    const narrowed = candidates.filter((c) =>
+      (wantedType == null || c.listingTypeId == null || c.listingTypeId === wantedType)
+      && (wantedCategory == null || c.externalCategoryId == null || c.externalCategoryId === wantedCategory))
+    if (narrowed.length >= 1) candidates = narrowed
+  }
 
   if (candidates.length === 1) {
     const snap = candidates[0]
@@ -623,6 +663,8 @@ export interface ListingView {
   id: number
   product_variation_id: number
   seller_sku: string
+  offer_key: string
+  listing_type_id: string | null
   local_status: ListingLocalStatus
   external_status: string | null
   external_sub_status: string[]
@@ -661,6 +703,8 @@ export function toListingView(row: ListingRow): ListingView {
     id: row.id,
     product_variation_id: row.product_variation_id,
     seller_sku: row.seller_sku,
+    offer_key: row.offer_key,
+    listing_type_id: row.listing_type_id ?? ((row.metadata ?? {}) as Record<string, unknown>).listing_type_id as string ?? null,
     local_status: row.local_status,
     external_status: row.external_status,
     external_sub_status: row.external_sub_status ?? [],
@@ -689,6 +733,13 @@ export function toListingView(row: ListingRow): ListingView {
   }
 }
 
+export interface ChannelOfferView extends ListingView {
+  /** Preço efetivo desta oferta (preço do canal ?? preço do Qarvon). */
+  effective_price: number
+  /** O que mudou desde a última tentativa que falhou (o erro exibido é histórico). */
+  attempt_outdated: string[]
+}
+
 export interface ChannelProductOverview {
   variations: Array<{
     id: number
@@ -701,9 +752,8 @@ export interface ChannelProductOverview {
     sellable_quantity: number
     picture_count: number
     picture_problems: string[]
-    listing: ListingView | null
-    /** O que mudou desde a última tentativa que falhou (o erro exibido é histórico). */
-    attempt_outdated: string[]
+    /** TODAS as ofertas vivas da variação neste canal (1 variação → N anúncios). */
+    listings: ChannelOfferView[]
   }>
   product: { id: number; name: string; brand: string | null; model: string | null; is_kit: boolean }
 }
@@ -728,12 +778,18 @@ export async function getChannelProductOverview(companyId: number, productId: nu
     d.availability(companyId, product.variations.map((v) => v.id)),
     d.repo.listByProduct(companyId, productId),
   ])
-  const liveByVariation = new Map(listings.filter((l) => l.local_status !== 'closed').map((l) => [l.product_variation_id, l]))
+  const live = listings.filter((l) => l.local_status !== 'closed')
 
   const variations = await Promise.all(product.variations.map(async (v) => {
     const pics = validatePictureUrls(await d.source.loadPictures(companyId, product.id, v.id))
     const info = availability.get(v.id)
-    const listing = liveByVariation.get(v.id)
+    const offers: ChannelOfferView[] = live
+      .filter((l) => l.product_variation_id === v.id)
+      .sort((a, b) => a.id - b.id)
+      .map((l) => {
+        const effective = resolveListingPrice(product, v, l.channel_price)
+        return { ...toListingView(l), effective_price: effective, attempt_outdated: outdatedReasons(l, effective, info) }
+      })
     return {
       id: v.id,
       sku: v.sku,
@@ -741,12 +797,11 @@ export async function getChannelProductOverview(companyId: number, productId: nu
       size: v.size,
       is_kit: product.is_kit,
       manual_enabled: product.active && v.active && info?.manual_enabled !== false,
-      price: resolveListingPrice(product, v, listing?.channel_price),
+      price: resolveListingPrice(product, v, null),
       sellable_quantity: info?.sellable_quantity ?? 0,
       picture_count: pics.valid.length,
       picture_problems: pics.invalid.map((i) => i.reason),
-      listing: listing ? toListingView(listing) : null,
-      attempt_outdated: outdatedReasons(listing, resolveListingPrice(product, v, listing?.channel_price), info),
+      listings: offers,
     }
   }))
   return { product: { id: product.id, name: product.name, brand: product.brand, model: product.model, is_kit: product.is_kit }, variations }
@@ -774,7 +829,7 @@ function defaultAdapterFor(ctx: ChannelContext): ChannelAdapter {
   })
 }
 
-const LISTING_COLUMNS = `id, company_id, integration_id, provider, product_id, product_variation_id, seller_sku,
+const LISTING_COLUMNS = `id, company_id, integration_id, provider, product_id, product_variation_id, seller_sku, offer_key, listing_type_id,
   external_listing_id, external_variant_id, external_product_id, external_group_id, external_ids,
   external_category_id, external_status, external_sub_status, permalink, local_status, channel_price,
   last_sent_price, synced_quantity, last_synced_at, last_error, publish_lease_until, metadata`
@@ -787,7 +842,7 @@ export function createSupabaseListingsRepo(): ListingsRepo {
         p_company_id: a.companyId, p_integration_id: a.integrationId, p_provider: a.provider,
         p_product_id: a.productId, p_product_variation_id: a.productVariationId, p_seller_sku: a.sellerSku,
         p_attempt_id: a.attemptId, p_lease_seconds: a.leaseSeconds, p_channel_price: a.channelPrice,
-        p_metadata: a.metadata, p_user_id: a.userId,
+        p_metadata: a.metadata, p_user_id: a.userId, p_offer_key: a.offerKey, p_listing_type_id: a.listingTypeId,
       })
       if (error) throw new ListingError('channel_error', `Falha ao reservar publicação: ${error.message}`)
       return data as BeginResult

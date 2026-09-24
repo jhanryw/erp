@@ -41,7 +41,9 @@ class MemoryRepo implements ListingsRepo {
   now = () => Date.now()
 
   async begin(a: Parameters<ListingsRepo['begin']>[0]): Promise<BeginResult> {
-    const r = this.rows.find((x) => x.integration_id === a.integrationId && x.product_variation_id === a.productVariationId && x.company_id === a.companyId && x.local_status !== 'closed')
+    // Mesma semântica da RPC (202609260900): reserva POR OFERTA (variação × offer_key).
+    const r = this.rows.find((x) => x.integration_id === a.integrationId && x.product_variation_id === a.productVariationId
+      && x.offer_key === a.offerKey && x.company_id === a.companyId && x.local_status !== 'closed')
     const lease = new Date(this.now() + Math.max(a.leaseSeconds, 10) * 1000).toISOString()
     if (r) {
       if (r.local_status === 'active' || r.local_status === 'paused' || r.external_listing_id) return { result: 'already_published', listing_id: r.id }
@@ -53,7 +55,8 @@ class MemoryRepo implements ListingsRepo {
     }
     const row = {
       id: this.next++, company_id: a.companyId, integration_id: a.integrationId, provider: a.provider, product_id: a.productId,
-      product_variation_id: a.productVariationId, seller_sku: a.sellerSku, external_listing_id: null, external_variant_id: null,
+      product_variation_id: a.productVariationId, seller_sku: a.sellerSku, offer_key: a.offerKey, listing_type_id: a.listingTypeId,
+      external_listing_id: null, external_variant_id: null,
       external_product_id: null, external_group_id: null, external_ids: {}, external_category_id: null, external_status: null,
       external_sub_status: null, permalink: null, local_status: 'publishing' as const, channel_price: a.channelPrice, last_sent_price: null,
       synced_quantity: null, last_synced_at: null, last_error: null, publish_lease_until: lease, publish_attempt_id: a.attemptId, metadata: a.metadata,
@@ -227,7 +230,7 @@ describe('publicação', () => {
   })
 
   it('8. publicação concorrente com lease vivo → in_progress', async () => {
-    await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M', attemptId: 'a1', leaseSeconds: 120, channelPrice: null, metadata: {}, userId: USER })
+    await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M', attemptId: 'a1', leaseSeconds: 120, channelPrice: null, metadata: {}, userId: USER, offerKey: 'gold_special', listingTypeId: 'gold_special' })
     const { results } = await publishListings(session, publishInput(1, [11]), deps())
     expect(results[0]).toMatchObject({ status: 'skipped', reason: 'in_progress' })
     expect(api.items.size).toBe(0)
@@ -265,7 +268,7 @@ describe('publicação', () => {
 
   it('11. reconciliação sem anúncio no canal libera nova publicação; com 2 candidatos não escolhe sozinho', async () => {
     const d = deps()
-    await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M', attemptId: 'a1', leaseSeconds: 10, channelPrice: null, metadata: {}, userId: USER })
+    await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M', attemptId: 'a1', leaseSeconds: 10, channelPrice: null, metadata: {}, userId: USER, offerKey: 'gold_special', listingTypeId: 'gold_special' })
     repo.rows[0].publish_lease_until = new Date(Date.now() - 1000).toISOString()
     expect((await reconcileListing(COMPANY, repo.rows[0].id, d)).outcome).toBe('not_found')
     expect(repo.rows[0].local_status).toBe('draft')
@@ -488,9 +491,10 @@ describe('retry após falha: estado republicável e reconciliação', () => {
     availability.set(11, { sellable_quantity: 3, manual_enabled: true })
     const ov = await getChannelProductOverview(COMPANY, 1, deps())
     const v11 = ov.variations.find((v) => v.id === 11)!
-    expect(v11.listing?.last_attempt?.stage).toBe('validate')
-    expect(v11.attempt_outdated).toEqual(['preço mudou (49.9 → 59.9)', 'quantidade mudou (7 → 3)'])
-    expect(ov.variations.find((v) => v.id === 12)!.attempt_outdated).toEqual([])
+    expect(v11.listings).toHaveLength(1)
+    expect(v11.listings[0].last_attempt?.stage).toBe('validate')
+    expect(v11.listings[0].attempt_outdated).toEqual(['preço mudou (49.9 → 59.9)', 'quantidade mudou (7 → 3)'])
+    expect(ov.variations.find((v) => v.id === 12)!.listings).toEqual([])
   })
   it('R7. categoria de moda: SIZE_GRID_ID (comum) + SIZE_GRID_ROW_ID (por variação) chegam ao validate e publicam', async () => {
     api.requireSizeGrid = true
@@ -577,6 +581,76 @@ describe('tabela de medidas criada no fluxo → publicação', () => {
   })
 })
 
+describe('1 variação → N ofertas no mesmo canal', () => {
+  const posts = () => api.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/items'))
+
+  it('M1. Clássico + Premium da mesma variação: 2 anúncios, preço próprio, MESMA quantidade (estoque-mãe)', async () => {
+    await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_special' }, deps())
+    const r = await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_pro',
+      variations: [{ productVariationId: 11, channelPrice: 44.9, attributes: [{ id: 'SIZE', value_name: 'M' }] }] }, deps())
+    expect(r.results[0].status).toBe('published')
+    expect(repo.rows.map((x) => [x.offer_key, x.listing_type_id, x.channel_price])).toEqual([['gold_special', 'gold_special', null], ['gold_pro', 'gold_pro', 44.9]])
+    const items = posts().map((c) => JSON.parse(c.body!))
+    expect(items.map((b) => [b.listing_type_id, b.price, b.available_quantity])).toEqual([['gold_special', 49.9, 7], ['gold_pro', 44.9, 7]])
+    expect(items.every((b) => b.attributes.some((a: { id: string; value_name: string }) => a.id === 'SELLER_SKU' && a.value_name === 'SUT-PRETO-M'))).toBe(true)
+  })
+
+  it('M2. idempotência POR OFERTA: repetir a mesma oferta não duplica; offer_key própria permite 2ª oferta do mesmo tipo', async () => {
+    await publishListings(session, publishInput(1, [11]), deps())
+    const again = await publishListings(session, publishInput(1, [11]), deps())
+    expect(again.results[0]).toMatchObject({ status: 'skipped', reason: 'already_published' })
+    expect(posts()).toHaveLength(1)
+    const promo = await publishListings(session, { ...publishInput(1, [11]), offerKey: 'Promo 41,90',
+      variations: [{ productVariationId: 11, channelPrice: 41.9, attributes: [{ id: 'SIZE', value_name: 'M' }] }] }, deps())
+    expect(promo.results[0].status).toBe('published')
+    expect(repo.rows.map((x) => x.offer_key)).toEqual(['gold_special', 'promo-41-90'])
+    expect(posts()).toHaveLength(2)
+  })
+
+  it('M3. kit com 2 ofertas: ambas usam a disponibilidade derivada do kit', async () => {
+    await publishListings(session, publishInput(2, [21]), deps())
+    await publishListings(session, { ...publishInput(2, [21]), listingTypeId: 'gold_pro' }, deps())
+    expect(posts().map((c) => JSON.parse(c.body!).available_quantity)).toEqual([4, 4])
+    availability.set(21, { sellable_quantity: 1, manual_enabled: true })
+    for (const row of repo.rows) await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    expect([...api.items.values()].map((i) => i.available_quantity)).toEqual([1, 1])
+  })
+
+  it('M4. pausar/sincronizar uma oferta não mexe na outra (status próprio)', async () => {
+    await publishListings(session, publishInput(1, [11]), deps())
+    await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_pro' }, deps())
+    await pauseListing(COMPANY, repo.rows[0].id, deps())
+    expect(repo.rows.map((x) => x.local_status)).toEqual(['paused', 'active'])
+  })
+
+  it('M5. reconciliação multi-oferta: desempata pelo tipo de anúncio da oferta, nunca no chute', async () => {
+    await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_pro' }, deps())   // oferta Premium vinculada
+    // Clássico: ML criou o item mas o vínculo caiu (lease vencido); existe OUTRO item órfão de outro tipo
+    await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M',
+      attemptId: 'a1', leaseSeconds: 10, channelPrice: null, metadata: { listing_type_id: 'gold_special', category_id: 'MLB1234' }, userId: USER,
+      offerKey: 'gold_special', listingTypeId: 'gold_special' })
+    const classic = repo.rows[1]
+    classic.publish_lease_until = new Date(Date.now() - 1000).toISOString()
+    const adapter = deps().adapterFor!(channel())
+    const base = { sellerSku: 'SUT-PRETO-M', productName: 'X', title: 'X', description: null, categoryId: 'MLB1234', price: 49.9, currencyId: 'BRL', quantity: 7, pictureUrls: [JPG],
+      attributes: [{ id: 'BRAND', value_name: 'X' }, { id: 'MODEL', value_name: 'Y' }, { id: 'SIZE', value_name: 'M' }] }
+    const orphanClassic = await adapter.publishListing({ ...base, channelOptions: { listing_type_id: 'gold_special' } })
+    await adapter.publishListing({ ...base, channelOptions: { listing_type_id: 'gold_premium_extra' } })
+    const rec = await reconcileListing(COMPANY, classic.id, deps())
+    expect(rec).toMatchObject({ outcome: 'attached', externalListingId: orphanClassic.externalListingId })
+  })
+
+  it('M6. overview lista TODAS as ofertas da variação', async () => {
+    await publishListings(session, publishInput(1, [11]), deps())
+    await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_pro',
+      variations: [{ productVariationId: 11, channelPrice: 44.9, attributes: [{ id: 'SIZE', value_name: 'M' }] }] }, deps())
+    const ov = await getChannelProductOverview(COMPANY, 1, deps())
+    const v11 = ov.variations.find((v) => v.id === 11)!
+    expect(v11.listings.map((l) => [l.offer_key, l.effective_price])).toEqual([['gold_special', 49.9], ['gold_pro', 44.9]])
+    expect(v11.price).toBe(49.9)
+  })
+})
+
 describe('sincronização, pausa e reativação', () => {
   async function published(variationId = 11) {
     await publishListings(session, publishInput(variationId === 21 ? 2 : 1, [variationId]), deps())
@@ -594,6 +668,15 @@ describe('sincronização, pausa e reativação', () => {
     await syncListing(COMPANY, row.id, deps())
     expect(puts().slice(1)).toEqual([{ available_quantity: 3 }, { price: 52.9 }])
     expect(repo.rows[0].last_sent_price).toBe(52.9)
+  })
+
+  it('18b. fan-out de estoque (quantityOnly): envia só a quantidade, nunca o preço', async () => {
+    const row = await published()
+    availability.set(11, { sellable_quantity: 2, manual_enabled: true })
+    products[0].base_price = 99
+    await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    const puts = api.calls.filter((c) => c.method === 'PUT').map((c) => JSON.parse(c.body!))
+    expect(puts).toEqual([{ available_quantity: 2 }])
   })
 
   it('19. kit: sincronização usa a disponibilidade derivada (camada central)', async () => {

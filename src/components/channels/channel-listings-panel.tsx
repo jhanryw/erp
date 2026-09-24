@@ -7,7 +7,7 @@ import { ExternalLink, Loader2, PauseCircle, PlayCircle, RefreshCw, Search, Shop
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
-import type { ChannelProductOverview, ListingView } from '@/services/channels/listings.service'
+import type { ChannelOfferView, ChannelProductOverview, ListingView } from '@/services/channels/listings.service'
 import type { ChartCellValue, ChartTemplate, ChartTemplateAttribute, SizeChart, SizeChartSummary } from '@/lib/integrations/mercadolivre/sizeCharts'
 import type { MercadoLivrePublishForm } from '@/services/channels/mercadolivreChannel'
 import type { AttributeDefinition, CategorySuggestion } from '@/lib/integrations/mercadolivre/catalog'
@@ -47,8 +47,11 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  /** null = fechado; [] = todas as publicáveis; [ids] = só essas (Publicar novamente). */
-  const [publishing, setPublishing] = useState<number[] | null>(null)
+  /**
+   * null = fechado. variationIds vazio = todas as elegíveis. retry = "Publicar
+   * novamente" de UMA oferta (mesma offer_key/tipo, pré-preenchida).
+   */
+  const [publishing, setPublishing] = useState<{ variationIds: number[]; retry?: ChannelOfferView } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -88,8 +91,9 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
 
   const ml = data?.channels.mercadolivre
   const connected = ml?.state === 'connected'
-  // Republicável: sem vínculo, ou vínculo em 'draft' sem id externo (nada existe no canal).
-  const publishable = (data?.variations ?? []).filter((v) => (!v.listing || v.listing.can_publish) && v.manual_enabled && v.picture_count > 0)
+  // Nova oferta: qualquer variação habilitada com imagem — uma variação pode
+  // ter N ofertas (Clássico, Premium…) compartilhando o mesmo estoque.
+  const eligible = (data?.variations ?? []).filter((v) => v.manual_enabled && v.picture_count > 0)
 
   return (
     <section className="card space-y-4 p-5">
@@ -117,8 +121,8 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
                 </span>
               )}
             </div>
-            {connected && !publishing && publishable.length > 0 && (
-              <Button size="sm" onClick={() => setPublishing([])}>Publicar no Mercado Livre</Button>
+            {connected && !publishing && eligible.length > 0 && (
+              <Button size="sm" onClick={() => setPublishing({ variationIds: [] })}>Nova oferta no Mercado Livre</Button>
             )}
           </div>
 
@@ -136,95 +140,39 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
                   <th className="py-2 pr-3">SKU</th>
                   <th className="py-2 pr-3">Preço</th>
                   <th className="py-2 pr-3">Disponível</th>
-                  <th className="py-2 pr-3">Mercado Livre</th>
-                  <th className="py-2" />
+                  <th className="py-2 pr-3" colSpan={2}>Ofertas no Mercado Livre (mesmo estoque)</th>
                 </tr>
               </thead>
               <tbody>
-                {data.variations.map((v) => {
-                  const l = v.listing
-                  const st = l ? LOCAL_STATUS[l.local_status] ?? LOCAL_STATUS.draft : null
-                  return (
-                    <tr key={v.id} className="border-b border-border/60 align-top">
-                      <td className="py-2 pr-3">
-                        {[v.color, v.size].filter(Boolean).join(' / ') || '—'}
-                        {v.is_kit && <Badge variant="outline" className="ml-2">Kit</Badge>}
-                        {!v.manual_enabled && <span className="ml-2 text-xs text-warning">desativada</span>}
-                        {v.picture_count === 0 && <p className="text-xs text-error">sem imagem JPG/PNG pública</p>}
-                      </td>
-                      <td className="py-2 pr-3 font-mono text-xs">{v.sku}</td>
-                      <td className="py-2 pr-3">{formatCurrency(v.price)}</td>
-                      <td className="py-2 pr-3 tabular-nums">{v.sellable_quantity}</td>
-                      <td className="py-2 pr-3">
-                        {!l ? <span className="text-text-muted">Não publicado</span> : (
-                          <div className="space-y-0.5">
-                            <Badge variant={st!.variant}>{st!.label}</Badge>
-                            {l.external_status && (
-                              <p className="text-xs text-text-muted">
-                                ML: {l.external_status}{l.external_sub_status.length ? ` (${l.external_sub_status.join(', ')})` : ''}
-                              </p>
-                            )}
-                            <p className="text-xs text-text-muted">
-                              {l.external_listing_id ?? '—'} · enviado {l.synced_quantity ?? '—'} un · {l.price != null ? formatCurrency(l.price) : '—'}
-                            </p>
-                            {l.external_listing_id && <p className="text-xs text-text-muted">Última sincronização: {fmtDate(l.last_synced_at)}</p>}
-                            {l.external_listing_id && l.last_error && <p className="text-xs text-warning">{l.last_error}</p>}
-                            {!l.external_listing_id && l.last_attempt && (
-                              <div className="rounded-md bg-bg-overlay px-2 py-1 text-xs text-text-secondary">
-                                <p className="font-medium">
-                                  Tentativa anterior ({fmtDate(l.last_attempt.at)}) — {STAGE_LABEL[l.last_attempt.stage] ?? l.last_attempt.stage}:
-                                </p>
-                                <p className="break-words">{l.last_attempt.error}</p>
-                                {v.attempt_outdated.length > 0 && (
-                                  <p className="mt-0.5 text-info">Desde então: {v.attempt_outdated.join('; ')}. O erro acima pode não se aplicar mais.</p>
-                                )}
-                              </div>
-                            )}
-                            {!l.external_listing_id && l.last_error && l.last_error !== l.last_attempt?.error && (
-                              <p className="text-xs text-text-muted">{l.last_error}</p>
-                            )}
-                          </div>
+                {data.variations.map((v) => (
+                  <tr key={v.id} className="border-b border-border/60 align-top">
+                    <td className="py-2 pr-3">
+                      {[v.color, v.size].filter(Boolean).join(' / ') || '—'}
+                      {v.is_kit && <Badge variant="outline" className="ml-2">Kit</Badge>}
+                      {!v.manual_enabled && <span className="ml-2 text-xs text-warning">desativada</span>}
+                      {v.picture_count === 0 && <p className="text-xs text-error">sem imagem JPG/PNG pública</p>}
+                    </td>
+                    <td className="py-2 pr-3 font-mono text-xs">{v.sku}</td>
+                    <td className="py-2 pr-3">{formatCurrency(v.price)}</td>
+                    <td className="py-2 pr-3 tabular-nums">{v.sellable_quantity}</td>
+                    <td className="py-2 pr-3" colSpan={2}>
+                      <div className="space-y-2">
+                        {v.listings.length === 0 && <span className="text-text-muted">Não publicado</span>}
+                        {v.listings.map((l) => (
+                          <OfferBlock key={l.id} offer={l} busy={busy}
+                            canRepublish={!publishing && connected && v.manual_enabled && v.picture_count > 0}
+                            onAction={action}
+                            onRepublish={() => setPublishing({ variationIds: [v.id], retry: l })} />
+                        ))}
+                        {connected && !publishing && v.manual_enabled && v.picture_count > 0 && (
+                          <button type="button" className="text-xs text-brand hover:underline" onClick={() => setPublishing({ variationIds: [v.id] })}>
+                            + Nova oferta
+                          </button>
                         )}
-                      </td>
-                      <td className="py-2">
-                        {l && (
-                          <div className="flex flex-wrap gap-1">
-                            {l.external_listing_id ? (
-                              <>
-                                <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:sync`} onClick={() => action(l, 'sync')}>
-                                  <RefreshCw className="h-3.5 w-3.5" /> Sincronizar
-                                </Button>
-                                {l.local_status === 'paused' ? (
-                                  <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:activate`} onClick={() => action(l, 'activate')}>
-                                    <PlayCircle className="h-3.5 w-3.5" /> Reativar
-                                  </Button>
-                                ) : (
-                                  <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:pause`} onClick={() => action(l, 'pause')}>
-                                    <PauseCircle className="h-3.5 w-3.5" /> Pausar
-                                  </Button>
-                                )}
-                                {l.permalink && (
-                                  <a href={l.permalink} target="_blank" rel="noopener noreferrer" className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-brand hover:bg-brand/10">
-                                    <ExternalLink className="h-3.5 w-3.5" /> Abrir
-                                  </a>
-                                )}
-                              </>
-                            ) : l.can_publish ? (
-                              <Button size="sm" disabled={busy !== null || publishing !== null || !connected || !v.manual_enabled || v.picture_count === 0}
-                                onClick={() => setPublishing([v.id])}>
-                                Publicar novamente
-                              </Button>
-                            ) : l.needs_reconciliation ? (
-                              <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:reconcile`} onClick={() => action(l, 'reconcile')}>
-                                <Wrench className="h-3.5 w-3.5" /> Reconciliar
-                              </Button>
-                            ) : null}
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  )
-                })}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -232,7 +180,8 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
           {publishing && (
             <PublishFlow
               overview={data}
-              candidates={publishing.length ? publishable.filter((v) => publishing.includes(v.id)) : publishable}
+              retryOffer={publishing.retry ?? null}
+              candidates={publishing.variationIds.length ? eligible.filter((v) => publishing.variationIds.includes(v.id)) : eligible}
               onCancel={() => setPublishing(null)}
               onDone={async () => { setPublishing(null); await load() }}
             />
@@ -240,6 +189,79 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
         </div>
       )}
     </section>
+  )
+}
+
+// ─── Uma oferta (anúncio) da variação ────────────────────────────────────────
+
+const LISTING_TYPE_LABEL: Record<string, string> = { gold_special: 'Clássico', gold_pro: 'Premium' }
+
+function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish }: {
+  offer: ChannelOfferView
+  busy: string | null
+  canRepublish: boolean
+  onAction: (l: ListingView, kind: 'sync' | 'pause' | 'activate' | 'reconcile') => void
+  onRepublish: () => void
+}) {
+  const st = LOCAL_STATUS[l.local_status] ?? LOCAL_STATUS.draft
+  const typeLabel = l.listing_type_id ? (LISTING_TYPE_LABEL[l.listing_type_id] ?? l.listing_type_id) : null
+  return (
+    <div className="rounded-lg border border-border/70 p-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={st.variant}>{st.label}</Badge>
+        {typeLabel && <span className="text-xs font-medium">{typeLabel}</span>}
+        {l.offer_key !== l.listing_type_id && <span className="font-mono text-xs text-text-muted">{l.offer_key}</span>}
+        <span className="text-xs tabular-nums">{formatCurrency(l.effective_price)}{l.channel_price != null ? ' (preço do canal)' : ''}</span>
+      </div>
+      {l.external_status && (
+        <p className="text-xs text-text-muted">ML: {l.external_status}{l.external_sub_status.length ? ` (${l.external_sub_status.join(', ')})` : ''}</p>
+      )}
+      {l.external_listing_id && (
+        <p className="text-xs text-text-muted">
+          {l.external_listing_id} · enviado {l.synced_quantity ?? '—'} un · {l.price != null ? formatCurrency(l.price) : '—'} · sinc. {fmtDate(l.last_synced_at)}
+        </p>
+      )}
+      {l.external_listing_id && l.last_error && <p className="text-xs text-warning">{l.last_error}</p>}
+      {!l.external_listing_id && l.last_attempt && (
+        <div className="mt-1 rounded-md bg-bg-overlay px-2 py-1 text-xs text-text-secondary">
+          <p className="font-medium">Tentativa anterior ({fmtDate(l.last_attempt.at)}) — {STAGE_LABEL[l.last_attempt.stage] ?? l.last_attempt.stage}:</p>
+          <p className="break-words">{l.last_attempt.error}</p>
+          {l.attempt_outdated.length > 0 && (
+            <p className="mt-0.5 text-info">Desde então: {l.attempt_outdated.join('; ')}. O erro acima pode não se aplicar mais.</p>
+          )}
+        </div>
+      )}
+      {!l.external_listing_id && l.last_error && l.last_error !== l.last_attempt?.error && <p className="text-xs text-text-muted">{l.last_error}</p>}
+      <div className="mt-1 flex flex-wrap gap-1">
+        {l.external_listing_id ? (
+          <>
+            <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:sync`} onClick={() => onAction(l, 'sync')}>
+              <RefreshCw className="h-3.5 w-3.5" /> Sincronizar
+            </Button>
+            {l.local_status === 'paused' ? (
+              <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:activate`} onClick={() => onAction(l, 'activate')}>
+                <PlayCircle className="h-3.5 w-3.5" /> Reativar
+              </Button>
+            ) : (
+              <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:pause`} onClick={() => onAction(l, 'pause')}>
+                <PauseCircle className="h-3.5 w-3.5" /> Pausar
+              </Button>
+            )}
+            {l.permalink && (
+              <a href={l.permalink} target="_blank" rel="noopener noreferrer" className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-xs text-brand hover:bg-brand/10">
+                <ExternalLink className="h-3.5 w-3.5" /> Abrir
+              </a>
+            )}
+          </>
+        ) : l.can_publish ? (
+          <Button size="sm" disabled={busy !== null || !canRepublish} onClick={onRepublish}>Publicar novamente</Button>
+        ) : l.needs_reconciliation ? (
+          <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:reconcile`} onClick={() => onAction(l, 'reconcile')}>
+            <Wrench className="h-3.5 w-3.5" /> Reconciliar
+          </Button>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -284,14 +306,15 @@ function AttributeInput({ def, value, onChange }: {
   )
 }
 
-function PublishFlow({ overview, candidates, onCancel, onDone }: {
+function PublishFlow({ overview, candidates, retryOffer, onCancel, onDone }: {
   overview: Overview
   candidates: ChannelProductOverview['variations']
+  /** "Publicar novamente" de uma oferta: mesma offer_key/tipo e dados da última tentativa. */
+  retryOffer: ChannelOfferView | null
   onCancel: () => void
   onDone: () => void
 }) {
-  // "Publicar novamente": reaproveita categoria/atributos da última tentativa.
-  const previous = candidates.map((c) => c.listing?.previous_input).find(Boolean) ?? null
+  const previous = retryOffer?.previous_input ?? null
   const [query, setQuery] = useState(overview.product.name)
   const [suggestions, setSuggestions] = useState<CategorySuggestion[]>([])
   const [category, setCategory] = useState<CategorySuggestion | null>(null)
@@ -303,7 +326,12 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
   const [prices, setPrices] = useState<Record<number, string>>({})
   const [familyName, setFamilyName] = useState(previous?.family_name ?? overview.product.name)
   const [description, setDescription] = useState(previous?.description ?? '')
-  const [listingType, setListingType] = useState(previous?.listing_type_id ?? 'gold_special')
+  const [listingType, setListingType] = useState(retryOffer?.listing_type_id ?? previous?.listing_type_id ?? 'gold_special')
+  // Identificador da oferta dentro da variação (vazio = o tipo de anúncio).
+  const [offerKey, setOfferKey] = useState(retryOffer && retryOffer.offer_key !== retryOffer.listing_type_id ? retryOffer.offer_key : '')
+  const effectiveOfferKey = (offerKey.trim().toLowerCase() || listingType).replace(/[^a-z0-9_-]+/g, '-')
+  const offerTaken = (v: ChannelProductOverview['variations'][number]) =>
+    v.listings.some((l) => l.offer_key === effectiveOfferKey && (l.external_listing_id != null || !l.can_publish) && l.id !== retryOffer?.id)
   const [submitting, setSubmitting] = useState(false)
   // Tabela de medidas (categorias de moda)
   const [charts, setCharts] = useState<SizeChartSummary[] | null>(null)
@@ -349,7 +377,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
       }
       // Valores da tentativa anterior (se mesma categoria) têm prioridade sobre as sugestões.
       for (const cand of candidates) {
-        const prev = cand.listing?.previous_input
+        const prev = retryOffer && retryOffer.product_variation_id === cand.id ? retryOffer.previous_input : null
         if (!prev || prev.category_id !== s.category_id) continue
         for (const a of prev.attributes) {
           if (isCommon(a.id)) c[a.id] = a
@@ -452,6 +480,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
           category_id: category.category_id,
           domain_id: category.domain_id ?? null,
           listing_type_id: listingType,
+          offer_key: offerKey.trim() ? effectiveOfferKey : null,
           family_name: familyName,
           description: description || null,
           common_attributes: [
@@ -476,7 +505,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
 
   return (
     <div className="space-y-4 rounded-xl border border-brand/30 p-4">
-      <h3 className="text-sm font-semibold">Publicar no Mercado Livre</h3>
+      <h3 className="text-sm font-semibold">{retryOffer ? `Publicar novamente — oferta ${retryOffer.offer_key}` : 'Nova oferta no Mercado Livre'}</h3>
 
       <div className="space-y-2">
         <p className="text-xs font-semibold uppercase text-text-muted">1. Categoria</p>
@@ -507,10 +536,15 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
                 <input className="input-base mt-0.5 h-9 text-sm" maxLength={form.category.max_title_length} value={familyName} onChange={(e) => setFamilyName(e.target.value)} />
               </label>
               <label className="block text-xs text-text-muted">Tipo de anúncio
-                <select className="input-base mt-0.5 h-9 text-sm" value={listingType} onChange={(e) => setListingType(e.target.value)}>
+                <select className="input-base mt-0.5 h-9 text-sm" value={listingType} disabled={retryOffer != null} onChange={(e) => setListingType(e.target.value)}>
                   <option value="gold_special">Clássico (gold_special)</option>
                   <option value="gold_pro">Premium (gold_pro)</option>
                 </select>
+              </label>
+              <label className="block text-xs text-text-muted">Identificador da oferta (opcional)
+                <input className="input-base mt-0.5 h-9 text-sm" placeholder={listingType} maxLength={60} value={offerKey}
+                  disabled={retryOffer != null} onChange={(e) => setOfferKey(e.target.value)} />
+                <span>Use para ter duas ofertas do mesmo tipo (ex.: promo-4190). Todas compartilham o estoque da variação.</span>
               </label>
             </div>
             <label className="block text-xs text-text-muted">Descrição
@@ -573,6 +607,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
                   <span className="font-mono text-xs">{v.sku}</span>
                   <span>{[v.color, v.size].filter(Boolean).join(' / ')}</span>
                   <span className="text-text-muted">· qtd {v.sellable_quantity} · {v.picture_count} imagem(ns)</span>
+                  {offerTaken(v) && <span className="text-xs text-warning">já tem a oferta “{effectiveOfferKey}” — será ignorada</span>}
                 </label>
                 <div className="grid gap-3 sm:grid-cols-4">
                   <label className="block text-xs text-text-muted">Preço no ML (vazio = {formatCurrency(v.price)})

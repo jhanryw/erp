@@ -15,6 +15,8 @@ export const publishListingsSchema = z.object({
   category_id: z.string().trim().regex(/^[A-Z]{3}\d+$/, 'Categoria inválida.'),
   domain_id: z.string().trim().regex(/^([A-Z]{3}-)?[A-Z0-9_]{2,80}$/, 'Domínio inválido.').nullable().optional(),
   listing_type_id: z.string().trim().max(40).optional(),
+  // Oferta dentro da variação (N anúncios por variação). Padrão = listing_type_id.
+  offer_key: z.string().trim().toLowerCase().regex(/^[a-z0-9][a-z0-9_-]{0,59}$/, 'Identificador da oferta inválido.').nullable().optional(),
   family_name: z.string().trim().max(120).nullable().optional(),
   description: z.string().trim().max(50000).nullable().optional(),
   common_attributes: z.array(attributeValue).max(200).default([]),

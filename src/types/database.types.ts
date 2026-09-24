@@ -1088,6 +1088,7 @@ export interface Database {
           lucro_liquido_gerencial: number
           margem_liquida_pct: number
           saida_caixa_estoque: number
+          tarifas_marketplace: number
         }
       }
       mv_daily_sales_summary: {

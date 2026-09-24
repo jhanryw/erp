@@ -63,6 +63,9 @@ interface LoadSaleFiscalContextInput {
   operationOverrides?: Partial<FiscalOperationContext>
 }
 
+/** Canais cuja política fiscal ainda não foi definida — emissão bloqueada. */
+export const FISCAL_PENDING_CHANNELS: ReadonlySet<string> = new Set(['mercadolivre'])
+
 export async function loadSaleFiscalContext({
   saleId,
   companyId,
@@ -74,12 +77,18 @@ export async function loadSaleFiscalContext({
 
   const { data: sale, error: saleError } = await (admin as any)
     .from('sales')
-    .select('id, company_id, customer_id, status, total, discount_amount, surcharge_amount, shipping_charged')
+    .select('id, company_id, customer_id, status, total, discount_amount, surcharge_amount, shipping_charged, sales_channel')
     .eq('id', saleId)
     .eq('company_id', companyId)
-    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number; status: string; total: number; discount_amount: number | null; surcharge_amount: number | null; shipping_charged: number | null } | null; error: { message: string } | null }
+    .maybeSingle() as { data: { id: number; company_id: number; customer_id: number; status: string; total: number; discount_amount: number | null; surcharge_amount: number | null; shipping_charged: number | null; sales_channel: string | null } | null; error: { message: string } | null }
 
   if (saleError) throw new FiscalContextError(`Falha ao carregar venda ${saleId}: ${saleError.message}`)
+  // Fase 3 marketplace: a decisão fiscal de vendas Mercado Livre (NF-e do
+  // vendedor anexada ao pedido, Faturador ML…) ainda NÃO foi tomada — nenhum
+  // documento é emitido para esse canal até lá (inclusive em homologação).
+  if (sale?.sales_channel && FISCAL_PENDING_CHANNELS.has(sale.sales_channel)) {
+    throw new FiscalContextError(`Venda do canal ${sale.sales_channel}: decisão fiscal pendente — emissão bloqueada nesta fase.`)
+  }
   if (!sale) throw new FiscalContextError(`Venda ${saleId} não encontrada nesta empresa.`)
 
   // Prioridade 2 (2026-09-15) — "troca total" pela MESMA condição que

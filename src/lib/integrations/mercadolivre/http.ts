@@ -26,6 +26,8 @@ export interface MlHttpRequest {
   accessToken?: string | null
   timeoutMs?: number
   fetchImpl?: FetchLike
+  /** Headers de formato exigidos por alguns recursos (ex.: x-format-new). Nunca authorization. */
+  headers?: Record<string, string>
 }
 
 export interface MlHttpResponse<T> {
@@ -44,6 +46,9 @@ export async function mlHttp<T = unknown>(req: MlHttpRequest): Promise<MlHttpRes
   }
 
   const headers: Record<string, string> = { accept: 'application/json' }
+  for (const [k, v] of Object.entries(req.headers ?? {})) {
+    if (/^x-[a-z0-9-]+$/i.test(k)) headers[k.toLowerCase()] = v
+  }
   let body: string | undefined
   if (req.form) {
     headers['content-type'] = 'application/x-www-form-urlencoded'

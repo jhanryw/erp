@@ -50,6 +50,8 @@ export interface ChannelListingSnapshot {
   externalGroupId: string | null
   externalIds: Record<string, unknown>
   externalCategoryId: string | null
+  /** Condição comercial do anúncio (ML: listing_type_id) — desempate na reconciliação multi-oferta. */
+  listingTypeId?: string | null
   externalStatus: string | null
   externalSubStatus: string[]
   permalink: string | null

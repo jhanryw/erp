@@ -48,6 +48,7 @@ const EMPTY_DRE_DATA: DreData = {
   impostos: 0,
   frete: 0,
   outras_despesas: 0,
+  tarifas_marketplace: 0,
   total_opex: 0,
   resultado_operacional: 0,
   margem_operacional_pct: 0,
@@ -247,6 +248,7 @@ export default async function DrePage({
           <DreRow label="Operacional"     value={-data.operacional}     muted prefix="(−)" />
           <DreRow label="Impostos"        value={-data.impostos}        muted prefix="(−)" />
           <DreRow label="Frete (custo)"   value={-data.frete}           muted prefix="(−)" />
+          <DreRow label="Tarifas de marketplace" value={-(data.tarifas_marketplace ?? 0)} muted prefix="(−)" />
           <DreRow label="Outras Despesas" value={-data.outras_despesas} muted prefix="(−)" />
           <ResultRow
             label="Resultado Operacional"

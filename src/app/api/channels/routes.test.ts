@@ -32,6 +32,12 @@ vi.mock('@/services/integrations/mercadolivre.service', () => ({
   getMercadoLivreConnection: vi.fn(async () => ({ state: 'connected', nickname: 'TESTUSER', site_id: 'MLB', is_test_user: true })),
 }))
 vi.mock('@/lib/audit/log', () => ({ auditLog: vi.fn() }))
+const orders = vi.hoisted(() => ({ listChannelOrders: vi.fn(), reprocessChannelOrder: vi.fn() }))
+vi.mock('@/services/channels/channelOrders.service', async (orig) => {
+  const real = await orig<typeof import('@/services/channels/channelOrders.service')>()
+  return { ...real, ...orders }
+})
+vi.mock('@/services/channels/stockFanout.service', () => ({ runStockChannelFanout: vi.fn(async () => ({})) }))
 
 import { GET as getListings, POST as publish } from './listings/route'
 import { POST as sync } from './listings/[id]/sync/route'
@@ -41,6 +47,9 @@ import { POST as searchCharts } from '../integrations/mercadolivre/size-charts/s
 import { GET as getChart } from '../integrations/mercadolivre/size-charts/[chartId]/route'
 import { POST as chartTemplate } from '../integrations/mercadolivre/size-charts/template/route'
 import { POST as createChart } from '../integrations/mercadolivre/size-charts/route'
+import { GET as listOrders } from './orders/route'
+import { POST as reprocess } from './orders/[id]/reprocess/route'
+import { ChannelOrderError } from '@/services/channels/channelOrders.service'
 import { ListingError } from '@/services/channels/listings.service'
 
 const base = 'https://erp.example.com'
@@ -143,5 +152,22 @@ describe('rotas de canais', () => {
 
     session.current = { id: 'u', role: 'usuario', company_id: 1 }
     expect((await createChart(req(good))).status).toBe(403)
+  })
+
+  it('pedidos de marketplace: gerente+, empresa da sessão, estado validado; reprocessar respeita tenant', async () => {
+    orders.listChannelOrders.mockResolvedValue([{ id: 1 }])
+    expect((await listOrders(new NextRequest(`${base}/api/channels/orders?state=needs_attention&company_id=999`))).status).toBe(200)
+    expect(orders.listChannelOrders).toHaveBeenCalledWith(1, 'needs_attention')
+    expect((await listOrders(new NextRequest(`${base}/api/channels/orders?state=drop`))).status).toBe(400)
+
+    orders.reprocessChannelOrder.mockResolvedValue({ channelOrderId: 5, action: 'imported', saleId: 9 })
+    expect((await reprocess(new Request(`${base}/x`, { method: 'POST' }), { params: { id: '5' } })).status).toBe(200)
+    expect(orders.reprocessChannelOrder).toHaveBeenCalledWith(1, 5)
+    orders.reprocessChannelOrder.mockRejectedValue(new ChannelOrderError('not_found', 'Pedido não encontrado.'))
+    expect((await reprocess(new Request(`${base}/x`, { method: 'POST' }), { params: { id: '6' } })).status).toBe(404)
+
+    session.current = { id: 'u', role: 'usuario', company_id: 1 }
+    expect((await listOrders(new NextRequest(`${base}/api/channels/orders`))).status).toBe(403)
+    expect((await reprocess(new Request(`${base}/x`, { method: 'POST' }), { params: { id: '5' } })).status).toBe(403)
   })
 })

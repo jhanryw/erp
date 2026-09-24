@@ -35,9 +35,10 @@ BEGIN
   INSERT INTO ctx VALUES ('a', a), ('b', b), ('ua', ua), ('p_a', p_a), ('p_b', p_b), ('v1', v1), ('v2', v2), ('vb', vb), ('ia', ia), ('ib', ib), ('ns', ns);
 END $$;
 CREATE FUNCTION pg_temp.c(k text) RETURNS text LANGUAGE sql AS $$ SELECT v FROM ctx WHERE ctx.k = $1 $$;
-CREATE FUNCTION pg_temp.begin_pub(company int, integ bigint, product int, variation int, attempt uuid, lease int DEFAULT 60)
+CREATE FUNCTION pg_temp.begin_pub(company int, integ bigint, product int, variation int, attempt uuid, lease int DEFAULT 60, offer text DEFAULT 'gold_special')
 RETURNS jsonb LANGUAGE sql AS $$
-  SELECT rpc_begin_channel_listing_publish(company, integ, 'mercadolivre', product, variation, 'CL-SUT-P', attempt, lease, NULL, '{"category_id":"MLB1"}'::jsonb, pg_temp.c('ua')::uuid)
+  SELECT rpc_begin_channel_listing_publish(company, integ, 'mercadolivre', product, variation, 'CL-SUT-P', attempt, lease, NULL,
+    '{"category_id":"MLB1"}'::jsonb, pg_temp.c('ua')::uuid, offer, CASE WHEN offer LIKE 'gold%' THEN offer END)
 $$;
 CREATE FUNCTION pg_temp.complete_pub(company int, listing bigint, attempt uuid, ext text)
 RETURNS boolean LANGUAGE sql AS $$
@@ -105,10 +106,10 @@ DECLARE ok boolean;
 BEGIN
   ok := false;
   BEGIN
-    INSERT INTO channel_listings (company_id, integration_id, provider, product_id, product_variation_id, seller_sku, local_status, external_listing_id)
-    VALUES (a, ia, 'mercadolivre', p, v1, 'CL-SUT-P', 'active', 'MLB300');
+    INSERT INTO channel_listings (company_id, integration_id, provider, product_id, product_variation_id, seller_sku, local_status, external_listing_id, offer_key)
+    VALUES (a, ia, 'mercadolivre', p, v1, 'CL-SUT-P', 'active', 'MLB300', 'gold_special');
   EXCEPTION WHEN unique_violation THEN ok := true; END;
-  PERFORM pg_temp.eq(ok, true, '1 vínculo vivo por variação × integração');
+  PERFORM pg_temp.eq(ok, true, '1 vínculo vivo por variação × integração × OFERTA');
 
   ok := false;
   BEGIN
@@ -139,6 +140,54 @@ BEGIN
   PERFORM pg_temp.eq(rpc_fail_channel_listing_publish(b, pg_temp.c('l1')::bigint, NULL, 'x'), false, 'empresa B não altera vínculo de A');
 END $$;
 
+-- ─── Multi-oferta: 1 variação → N anúncios (202609260900) ───────────────────
+DO $$
+DECLARE r jsonb; r2 jsonb; a int := pg_temp.c('a')::int; ia bigint := pg_temp.c('ia')::bigint; p int := pg_temp.c('p_a')::int; v1 int := pg_temp.c('v1')::int;
+BEGIN
+  -- v1 já tem a oferta gold_special publicada (MLB100): Premium é OUTRA oferta
+  r := pg_temp.begin_pub(a, ia, p, v1, gen_random_uuid(), 60, 'gold_pro');
+  PERFORM pg_temp.eq(r->>'result', 'claimed', 'multi: 2ª oferta (Premium) da mesma variação é reservada');
+  PERFORM pg_temp.eq((SELECT offer_key || '|' || listing_type_id FROM channel_listings WHERE id = (r->>'listing_id')::bigint), 'gold_pro|gold_pro', 'multi: offer_key e listing_type_id gravados');
+  PERFORM pg_temp.eq(pg_temp.begin_pub(a, ia, p, v1, gen_random_uuid(), 60, 'gold_pro')->>'result', 'in_progress', 'multi: mesma oferta de novo → idempotente (in_progress)');
+  PERFORM pg_temp.eq(pg_temp.begin_pub(a, ia, p, v1, gen_random_uuid(), 60, 'gold_special')->>'result', 'already_published', 'multi: Clássico continua already_published');
+  r2 := pg_temp.begin_pub(a, ia, p, v1, gen_random_uuid(), 60, 'promo-4190');
+  PERFORM pg_temp.eq(r2->>'result', 'claimed', 'multi: offer_key própria permite 3ª oferta');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM channel_listings WHERE product_variation_id = v1 AND local_status <> 'closed'), 3, 'multi: 3 vínculos vivos na mesma variação');
+  PERFORM pg_temp.eq(pg_temp.begin_pub(a, ia, p, v1, gen_random_uuid(), 60, 'GOLD_PRO')->>'result', 'in_progress', 'multi: offer_key normalizada (minúsculas)');
+END $$;
+
+-- Compatibilidade com o código ANTERIOR (janela migration → deploy): chamada
+-- com os 11 parâmetros nomeados antigos continua funcionando, sem criar 2ª oferta.
+DO $$
+DECLARE r jsonb; a int := pg_temp.c('a')::int; ia bigint := pg_temp.c('ia')::bigint; p int := pg_temp.c('p_a')::int;
+  v1 int := pg_temp.c('v1')::int; v_new int;
+BEGIN
+  r := rpc_begin_channel_listing_publish(p_company_id => a, p_integration_id => ia, p_provider => 'mercadolivre', p_product_id => p,
+    p_product_variation_id => v1, p_seller_sku => 'CL-SUT-P', p_attempt_id => gen_random_uuid(), p_lease_seconds => 60,
+    p_channel_price => NULL, p_metadata => '{"listing_type_id":"gold_special"}'::jsonb, p_user_id => pg_temp.c('ua')::uuid);
+  PERFORM pg_temp.eq(r->>'result', 'already_published', 'compat: chamada antiga (11 params) acha o vínculo da variação');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM channel_listings WHERE product_variation_id = v1 AND local_status <> 'closed'), 3, 'compat: nenhuma oferta extra criada');
+
+  INSERT INTO product_variations (product_id, sku_variation) VALUES (p, 'CL-SUT-G') RETURNING id INTO v_new;
+  r := rpc_begin_channel_listing_publish(p_company_id => a, p_integration_id => ia, p_provider => 'mercadolivre', p_product_id => p,
+    p_product_variation_id => v_new, p_seller_sku => 'CL-SUT-G', p_attempt_id => gen_random_uuid(), p_lease_seconds => 60,
+    p_channel_price => NULL, p_metadata => '{"listing_type_id":"gold_pro"}'::jsonb, p_user_id => pg_temp.c('ua')::uuid);
+  PERFORM pg_temp.eq(r->>'result', 'claimed', 'compat: chamada antiga publica variação nova');
+  PERFORM pg_temp.eq((SELECT offer_key || '|' || listing_type_id FROM channel_listings WHERE id = (r->>'listing_id')::bigint), 'gold_pro|gold_pro',
+    'compat: oferta recebe o tipo do metadata');
+END $$;
+
+DO $$
+DECLARE ok boolean := false;
+BEGIN
+  BEGIN
+    UPDATE channel_listings SET offer_key = 'Com Espaço' WHERE id = pg_temp.c('l1')::bigint;
+  EXCEPTION WHEN check_violation THEN ok := true; END;
+  PERFORM pg_temp.eq(ok, true, 'multi: offer_key só slug');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM pg_proc WHERE proname = 'rpc_begin_channel_listing_publish'), 1, 'multi: 1 única assinatura da reserva');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM pg_indexes WHERE indexname = 'uq_channel_listings_live_variation'), 0, 'multi: unicidade por variação removida');
+END $$;
+
 -- ─── CHECKs, RLS e grants ─────────────────────────────────────────────────
 DO $$
 DECLARE ok boolean;
@@ -155,7 +204,8 @@ BEGIN
   PERFORM pg_temp.eq((SELECT relrowsecurity FROM pg_class WHERE oid = 'public.channel_listings'::regclass), true, 'RLS ligado');
   PERFORM pg_temp.eq(has_table_privilege('authenticated', 'public.channel_listings', 'SELECT'), false, 'authenticated sem SELECT direto');
   PERFORM pg_temp.eq(has_table_privilege('anon', 'public.channel_listings', 'SELECT'), false, 'anon sem SELECT');
-  PERFORM pg_temp.eq(has_function_privilege('authenticated', 'public.rpc_begin_channel_listing_publish(int, bigint, text, int, int, text, uuid, int, numeric, jsonb, uuid)', 'EXECUTE'), false, 'authenticated não executa begin');
+  PERFORM pg_temp.eq(has_function_privilege('authenticated', 'public.rpc_begin_channel_listing_publish(int, bigint, text, int, int, text, uuid, int, numeric, jsonb, uuid, text, text)', 'EXECUTE'), false, 'authenticated não executa begin');
+  PERFORM pg_temp.eq(has_function_privilege('service_role', 'public.rpc_begin_channel_listing_publish(int, bigint, text, int, int, text, uuid, int, numeric, jsonb, uuid, text, text)', 'EXECUTE'), true, 'service_role executa begin');
   PERFORM pg_temp.eq(has_function_privilege('anon', 'public.rpc_complete_channel_listing_publish(int, bigint, uuid, text, text, text, text, jsonb, text, text, text[], text, numeric, int, text)', 'EXECUTE'), false, 'anon não executa complete');
   PERFORM pg_temp.eq(has_function_privilege('service_role', 'public.rpc_fail_channel_listing_publish(int, bigint, uuid, text)', 'EXECUTE'), true, 'service_role executa fail');
 END $$;

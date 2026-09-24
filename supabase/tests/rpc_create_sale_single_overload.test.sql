@@ -80,7 +80,7 @@ DECLARE
   v_authenticated_has boolean;
   v_anon_has boolean;
   v_public_has boolean;
-  v_sig text := 'public.rpc_create_sale(int, uuid, payment_method, text, numeric, numeric, numeric, text, jsonb, uuid, numeric, numeric, jsonb, bigint, text, int, jsonb, text, text)';
+  v_sig text := 'public.rpc_create_sale(int, uuid, payment_method, text, numeric, numeric, numeric, text, jsonb, uuid, numeric, numeric, jsonb, bigint, text, int, jsonb, text, text, boolean)';
 BEGIN
   v_service_role_has  := has_function_privilege('service_role', v_sig, 'EXECUTE');
   v_authenticated_has := has_function_privilege('authenticated', v_sig, 'EXECUTE');

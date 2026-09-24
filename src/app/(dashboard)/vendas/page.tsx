@@ -34,7 +34,16 @@ const PAYMENT_LABELS: Record<string, string> = {
   cash:        'Dinheiro',
   credit_card: 'Crédito',
   debit_card:  'Débito',
+  digital_wallet: 'Carteira digital',
+  boleto:      'Boleto',
   cashback:    'Crédito de Troca',
+}
+
+/** Canais filtráveis (sales.sales_channel). */
+const CHANNEL_FILTERS: Record<string, string> = {
+  mercadolivre: 'Mercado Livre',
+  nuvemshop:    'Nuvemshop',
+  pos:          'PDV',
 }
 
 type SaleCustomer = { id: number; name: string; cpf: string | null }
@@ -48,6 +57,7 @@ type SaleRow = {
   cashback_used:   number | null
   payment_method:  string | null
   sale_origin:     string | null
+  sales_channel:   string | null
   status:          SaleStatus
   sale_date:       string
   created_at:      string
@@ -56,19 +66,21 @@ type SaleRow = {
   has_exchange:    boolean
 }
 
-async function getSales(companyId: number, search?: string, page = 1) {
+async function getSales(companyId: number, search?: string, page = 1, channel?: string) {
   const supabase = createAdminClient()
 
   let query = supabase
     .from('sales')
     .select(`
       id, sale_number, total, discount_amount, cashback_used,
-      payment_method, sale_origin, status, sale_date, created_at,
+      payment_method, sale_origin, sales_channel, status, sale_date, created_at,
       customers:customer_id (id, name, cpf),
       sellers:responsible_seller_id (id, name)
     `, { count: 'exact' })
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
+
+  if (channel && CHANNEL_FILTERS[channel]) query = (query as any).eq('sales_channel', channel)
 
   if (search) {
     // Filtra por número do pedido ou, via join, por nome do cliente
@@ -134,9 +146,10 @@ async function getSales(companyId: number, search?: string, page = 1) {
 export default async function VendasPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; page?: string }>
+  searchParams: Promise<{ q?: string; page?: string; canal?: string }>
 }) {
-  const { q, page: pageParam } = await searchParams
+  const { q, page: pageParam, canal } = await searchParams
+  const channel = canal && CHANNEL_FILTERS[canal] ? canal : undefined
   const search = q?.trim() || undefined
   const page   = Math.max(1, parseInt(pageParam ?? '1') || 1)
 
@@ -159,7 +172,7 @@ export default async function VendasPage({
     )
   }
 
-  const { sales, total, error } = await getSales(profile.company_id, search, page)
+  const { sales, total, error } = await getSales(profile.company_id, search, page, channel)
   const totalPages = search ? 1 : Math.ceil(total / PAGE_SIZE)
 
   return (
@@ -183,6 +196,18 @@ export default async function VendasPage({
       <Suspense>
         <PageSearch defaultValue={q} placeholder="Buscar por nº do pedido ou nome do cliente..." />
       </Suspense>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-text-muted">Canal:</span>
+        <Link href="/vendas" className={`rounded-full border px-2.5 py-1 ${!channel ? 'border-brand bg-brand/10 text-brand' : 'border-border hover:bg-bg-overlay'}`}>Todos</Link>
+        {Object.entries(CHANNEL_FILTERS).map(([key, label]) => (
+          <Link key={key} href={`/vendas?canal=${key}`}
+            className={`rounded-full border px-2.5 py-1 ${channel === key ? 'border-brand bg-brand/10 text-brand' : 'border-border hover:bg-bg-overlay'}`}>
+            {label}
+          </Link>
+        ))}
+        <Link href="/vendas/marketplace" className="ml-auto text-brand hover:underline">Pedidos de marketplace →</Link>
+      </div>
 
       {error && (
         <div className="rounded-lg border border-error/30 bg-error/5 px-4 py-3 text-sm text-error">
@@ -255,7 +280,11 @@ export default async function VendasPage({
                       </TableCell>
 
                       <TableCell>
-                        {sale.sale_origin ? (
+                        {sale.sales_channel === 'mercadolivre' ? (
+                          <span className="inline-flex items-center rounded-full bg-[#FFE600] px-2 py-0.5 text-xs font-medium text-[#2D3277]">
+                            Mercado Livre
+                          </span>
+                        ) : sale.sale_origin ? (
                           <span
                             className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium text-white"
                             style={{ backgroundColor: ORIGIN_COLORS[sale.sale_origin] ?? ORIGIN_COLORS.other }}
@@ -280,7 +309,7 @@ export default async function VendasPage({
           </div>
 
           {!search && totalPages > 1 && (
-            <Pagination page={page} totalPages={totalPages} baseUrl="/vendas" query={search} />
+            <Pagination page={page} totalPages={totalPages} baseUrl="/vendas" query={search} extraParams={channel ? { canal: channel } : undefined} />
           )}
         </Card>
       )}

@@ -28,6 +28,7 @@ interface FakeItem {
   pictures: Array<{ source: string }>
   permalink: string
   description: string | null
+  listing_type_id: string | null
 }
 
 export class FakeMlMarket extends FakeMlApi {
@@ -46,6 +47,11 @@ export class FakeMlMarket extends FakeMlApi {
   }
   chartSearches: Array<Record<string, unknown>> = []
   chartCreates: Array<Record<string, unknown>> = []
+  /** Pedidos/envios/custos/faturamento simulados (Fase 3). */
+  orders = new Map<string, Record<string, unknown>>()
+  shipments = new Map<string, Record<string, unknown>>()
+  shipmentCosts = new Map<string, Record<string, unknown>>()
+  billing = new Map<string, Record<string, unknown>>()
   chartCounter = 7000
   /** Ficha da tabela (section=grids) do domínio de teste — formato da doc oficial. */
   gridTemplate: Array<Record<string, unknown>> = [
@@ -87,7 +93,7 @@ export class FakeMlMarket extends FakeMlApi {
     const url = new URL(input)
     const method = init?.method ?? 'GET'
     const path = url.pathname
-    const isMarket = /^\/(items|user-products|sites|categories|domains|catalog)\b/.test(path) || /^\/users\/\d+\/items\/search$/.test(path)
+    const isMarket = /^\/(items|user-products|sites|categories|domains|catalog|orders|shipments|billing)\b/.test(path) || /^\/users\/\d+\/items\/search$/.test(path)
     if (!isMarket || this.overrides.some((o) => o.match(method, url))) return this.baseFetch(input, init)
 
     const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]))
@@ -97,6 +103,20 @@ export class FakeMlMarket extends FakeMlApi {
     const token = (headers.authorization ?? '').replace(/^Bearer /, '')
     if (!this.validAccess.has(token)) return json(401, { message: 'invalid access token', status: 401 })
     const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+
+    // ── pedidos / envios / faturamento (Fase 3)
+    if (method === 'GET') {
+      let mo = path.match(/^\/orders\/(\d+)$/)
+      if (mo) return this.orders.has(mo[1]) ? json(200, this.orders.get(mo[1])) : json(404, { message: 'order not found', status: 404 })
+      mo = path.match(/^\/shipments\/(\d+)\/costs$/)
+      if (mo) return this.shipmentCosts.has(mo[1]) ? json(200, this.shipmentCosts.get(mo[1])) : json(404, { message: 'not found', status: 404 })
+      mo = path.match(/^\/shipments\/(\d+)$/)
+      if (mo) return this.shipments.has(mo[1]) ? json(200, this.shipments.get(mo[1])) : json(404, { message: 'not found', status: 404 })
+      if (path === '/billing/integration/group/ML/order/details') {
+        const id = url.searchParams.get('order_ids') ?? ''
+        return json(200, { offset: 0, limit: 150, total: this.billing.has(id) ? 1 : 0, results: this.billing.has(id) ? [this.billing.get(id)] : [] })
+      }
+    }
 
     // ── catálogo
     if (method === 'GET' && /^\/sites\/MLB\/domain_discovery\/search$/.test(path)) {
@@ -214,7 +234,7 @@ export class FakeMlMarket extends FakeMlApi {
         available_quantity: qty, status: qty > 0 ? 'active' : 'paused', sub_status: qty > 0 ? [] : ['out_of_stock'],
         title: String(payload.title ?? `${payload.family_name} gerado`), family_name: (payload.family_name as string) ?? null,
         user_product_id: this.userProductsSeller ? `MLBU${7000 + n}` : null, family_id: this.userProductsSeller ? 9000 + n : null,
-        attributes: (payload.attributes as FakeItem['attributes']) ?? [], pictures, permalink: `https://produto.mercadolivre.com.br/${id}`, description: null,
+        attributes: (payload.attributes as FakeItem['attributes']) ?? [], pictures, permalink: `https://produto.mercadolivre.com.br/${id}`, description: null, listing_type_id: (payload.listing_type_id as string) ?? null,
       }
       this.items.set(id, item)
       return json(201, this.view(item))

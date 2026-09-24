@@ -401,6 +401,8 @@ export interface AvailabilityProcessResult {
   changed: number
   became_sellable: number
   became_unavailable: number
+  /** Variações cuja disponibilidade mudou (202609261100) — base do fan-out para canais. */
+  changed_variation_ids?: number[]
 }
 
 /**

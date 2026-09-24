@@ -24,6 +24,9 @@ export type MercadoLivreEvent =
   | 'mercadolivre.listing.paused'
   | 'mercadolivre.listing.activated'
   | 'mercadolivre.listing.reconciled'
+  | 'mercadolivre.webhook.received'
+  | 'mercadolivre.inbound.processed'
+  | 'mercadolivre.inbound.failed'
 
 export interface MercadoLivreLogFields {
   company_id?: number | null
@@ -40,12 +43,18 @@ export interface MercadoLivreLogFields {
   product_variation_id?: number | null
   external_listing_id?: string | null
   quantity?: number | null
+  topic?: string | null
+  event_id?: number | null
+  channel_order_id?: number | null
+  external_order_id?: string | null
+  action?: string | null
 }
 
 const ALLOWED_KEYS: ReadonlyArray<keyof MercadoLivreLogFields> = [
   'company_id', 'integration_id', 'seller_id', 'user_id', 'http_status',
   'request_id', 'worker_id', 'reason', 'path', 'duration_ms',
   'listing_id', 'product_variation_id', 'external_listing_id', 'quantity',
+  'topic', 'event_id', 'channel_order_id', 'external_order_id', 'action',
 ]
 
 export type LogSink = (line: string) => void

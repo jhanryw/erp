@@ -21,6 +21,7 @@ import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { validateCPF, maskCPF } from '@/lib/utils/cpf'
 import type { SaleStatus } from '@/types/database.types'
 import { ArrowRightLeft } from 'lucide-react'
+import { ChannelOrderCard, type ChannelOrderSummary } from '@/components/channels/channel-order-card'
 
 export const dynamic = 'force-dynamic'
 
@@ -52,6 +53,8 @@ const PAYMENT_LABELS: Record<string, string> = {
   cash:        'Dinheiro',
   credit_card: 'Crédito',
   debit_card:  'Débito',
+  digital_wallet: 'Carteira digital',
+  boleto:      'Boleto',
   cashback:    'Crédito de Troca',
 }
 
@@ -266,8 +269,22 @@ async function getSale(id: string, companyId: number) {
   )
   const hasCompletedTotalExchange = totalOrigQty > 0 && totalExchQty >= totalOrigQty
 
+  // Pedido de marketplace que originou a venda (Fase 3) — mesma empresa.
+  let channelOrder: ChannelOrderSummary | null = null
+  if (sale.sales_channel === 'mercadolivre') {
+    const { data: co } = await (admin as any).from('channel_orders')
+      .select('provider, integration_id, external_order_id, external_pack_id, external_shipment_id, channel_status, payment_status, shipping_status, shipping_mode, tracking_number, processing_state, attention_reason, gross_amount, marketplace_fees, shipping_cost_seller, other_costs, net_amount, money_release_date, is_test')
+      .eq('sale_id', sale.id).eq('company_id', companyId).maybeSingle()
+    if (co) {
+      const { data: integ } = await (admin as any).from('company_integrations')
+        .select('settings').eq('id', co.integration_id).eq('company_id', companyId).maybeSingle()
+      channelOrder = { ...co, account_nickname: (integ?.settings?.nickname as string | undefined) ?? null }
+    }
+  }
+
   return {
     ...sale,
+    channelOrder,
     customers:         customer ?? null,
     seller:            seller ?? null,
     responsibleSeller: responsibleSeller ?? null,
@@ -330,8 +347,13 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
   // confirmado por grep: `shipping_charged` não aparece em nenhum ponto
   // deste bloco.
   const fiscalResolverInput = { deliveryMode: sale.shipment?.delivery_mode ?? null, saleOrigin: sale.sale_origin ?? null }
-  const resolvedFiscalDocumentType = resolveFiscalDocumentType(fiscalResolverInput)
-  const fiscalBlockedReason = describeFiscalDocumentTypeBlockReason(fiscalResolverInput)
+  // Marketplace (Fase 3): decisão fiscal pendente — nenhum documento é
+  // oferecido na UI (o servidor também bloqueia em loadSaleFiscalContext).
+  const isMarketplaceSale = sale.sales_channel === 'mercadolivre'
+  const resolvedFiscalDocumentType = isMarketplaceSale ? 'blocked' as const : resolveFiscalDocumentType(fiscalResolverInput)
+  const fiscalBlockedReason = isMarketplaceSale
+    ? 'Venda Mercado Livre: decisão fiscal pendente para o canal — nenhuma emissão nesta fase.'
+    : describeFiscalDocumentTypeBlockReason(fiscalResolverInput)
   const customerCpf = sale.customers?.cpf ?? null
   const maskedCustomerCpf = customerCpf && validateCPF(customerCpf) ? maskCPF(customerCpf) : null
 
@@ -494,7 +516,9 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           )}
           {/* Só mostra Devolução se não tiver trocas parciais — evita dupla devolução */}
           {canReturn && !sale.hasExchanges && <ReturnButton saleId={sale.id} requiresAuth={requiresAuth} />}
-          {!isTerminal && <CancelSaleButton saleId={sale.id} requiresAuth={requiresAuth} />}
+          {/* Venda de marketplace é cancelada pelo pedido no canal (webhook) — cancelar
+              só no Qarvon deixaria o pedido ativo no Mercado Livre. */}
+          {!isTerminal && !isMarketplaceSale && <CancelSaleButton saleId={sale.id} requiresAuth={requiresAuth} />}
         </div>
       </div>
 
@@ -642,6 +666,8 @@ export default async function VendaDetalhePage({ params }: { params: { id: strin
           </div>
         </div>
       </Card>
+
+      {sale.channelOrder && <ChannelOrderCard order={sale.channelOrder} />}
 
       {/* Pagamentos detalhados (sale_payments) */}
       {sale.salePayments && sale.salePayments.length > 0 ? (

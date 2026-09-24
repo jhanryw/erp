@@ -39,6 +39,8 @@ export interface MercadoLivreRequestInput {
   query?: Record<string, string | number | boolean | undefined>
   body?: unknown
   timeoutMs?: number
+  /** Headers x-* de formato (ex.: x-format-new: true). */
+  headers?: Record<string, string>
   deps?: MercadoLivreRequestDeps
 }
 
@@ -66,6 +68,7 @@ export async function mercadoLivreRequest<T = unknown>(input: MercadoLivreReques
     accessToken,
     timeoutMs: input.timeoutMs,
     fetchImpl: deps.fetchImpl,
+    headers: input.headers,
   })
 
   const first = await getValidAccessToken(tokenInput)

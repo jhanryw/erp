@@ -189,3 +189,20 @@ Quando a busca não retorna tabelas: **Nenhuma tabela encontrada → [Criar tabe
 
 Criar tabela é escrita externa: mesma trava da publicação (só usuário TEST do ML, salvo `CHANNEL_LISTINGS_ALLOW_REAL_ACCOUNTS=true`).
 Endpoints: `POST /api/integrations/mercadolivre/size-charts/template`, `POST /api/integrations/mercadolivre/size-charts`.
+
+## 15. 1 variação → N ofertas (202609260900)
+
+Uma variação vendável (produto normal ou kit) pode ter N anúncios no MESMO
+canal/integração — ex.: ML Clássico R$ 39,90 + ML Premium R$ 44,90 + oferta
+`promo-4190`. Estoque pertence à variação (kit: disponibilidade derivada);
+preço, status e condições comerciais pertencem a cada anúncio.
+
+- `channel_listings.offer_key` — chave estável da oferta dentro da variação (idempotência). Padrão = `listing_type_id`; o usuário pode definir outra (slug) para duas ofertas do mesmo tipo.
+- `channel_listings.listing_type_id` — condição comercial (antes só em `metadata`).
+- Unicidade: `(integration_id, product_variation_id, offer_key)` entre vínculos vivos (antes: 1 por variação).
+- `rpc_begin_channel_listing_publish(..., p_offer_key, p_listing_type_id)` reserva POR OFERTA.
+- Reconciliação por SKU com N ofertas desempata pelo tipo de anúncio/categoria da oferta; nunca escolhe no chute.
+- Overview/UI: `listings[]` por variação; cada oferta com status, preço efetivo, quantidade enviada e ações próprias; botão **Nova oferta**.
+- Fan-out de estoque: todas as ofertas vivas da variação (e dos kits dependentes) recebem a mesma quantidade absoluta.
+- Vínculos existentes preservados: `offer_key` preenchido com o tipo de anúncio da publicação (ou `default`).
+- Política do ML: duas ofertas do MESMO tipo para o mesmo produto podem ser moderadas como duplicadas; Clássico × Premium é o uso previsto.

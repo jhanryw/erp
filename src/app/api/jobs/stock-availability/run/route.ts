@@ -6,13 +6,14 @@
  * PUBLIC_PATHS no middleware.
  *
  * A disponibilidade exibida no PDV/telas é SEMPRE calculada ao vivo — este
- * job não é necessário para vender corretamente; ele mantém o cache que o
- * futuro Marketplace Hub usará para saber o que mudou e publicar nos canais.
+ * job não é necessário para vender corretamente; ele mantém o cache e é o
+ * consumidor de stock.changed para os canais (Fase 3): variações alteradas
+ * → Nuvemshop; anúncios marcados stock_sync_pending → Mercado Livre.
  */
 
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
-import { processStockAvailabilityChanges } from '@/services/inventory/availability.service'
+import { runStockChannelFanout } from '@/services/channels/stockFanout.service'
 
 const BATCH_SIZE = (() => {
   const n = Number(process.env.STOCK_AVAILABILITY_BATCH_SIZE)
@@ -26,13 +27,14 @@ export async function POST(request: Request) {
   }
 
   const workerId = `cron-${randomUUID()}`
-  const result = await processStockAvailabilityChanges(BATCH_SIZE, workerId)
+  const result = await runStockChannelFanout(workerId, Math.max(1, Math.floor(BATCH_SIZE / 5)))
 
-  if (!result.ok) {
-    console.error('[jobs/stock-availability/run] falhou', { worker_id: workerId, error: result.error })
-    return NextResponse.json({ ok: false, error: result.error }, { status: 500 })
+  if (result.errors.length > 0) {
+    console.error('[jobs/stock-availability/run] com erros', { worker_id: workerId, errors: result.errors.slice(0, 10) })
   }
-
-  console.log('[jobs/stock-availability/run]', { worker_id: workerId, ...result.data })
-  return NextResponse.json({ ok: true, worker_id: workerId, ...result.data })
+  console.log('[jobs/stock-availability/run]', {
+    worker_id: workerId, changed: result.changedVariations, nuvemshop: result.nuvemshopPushed,
+    listings_synced: result.listingsSynced, listings_failed: result.listingsFailed,
+  })
+  return NextResponse.json({ ok: result.errors.length === 0, worker_id: workerId, ...result, errors: result.errors.length })
 }
