@@ -173,3 +173,207 @@ export function matchSizeChartRow(rows: SizeChartRow[], size: string | null | un
   const hits = rows.filter((r) => r.sizes.some((s) => normalizeSize(s) === target))
   return hits.length === 1 ? hits[0] : null
 }
+
+// ─── Criação de tabela SPECIFIC (POST /catalog/charts) ──────────────────────
+//
+// Doc "Gerenciar guia de tamanhos" + "Primeiros passos":
+//   - ficha técnica da TABELA: POST /domains/{domain_id}/technical_specs?section=grids
+//     com os atributos grid_template_required (ex.: gênero) no corpo;
+//   - atributos grid_filter/grid_template_required vão no nível GERAL da
+//     tabela (nunca nas linhas); BRAND também no nível geral;
+//   - nas LINHAS: só os atributos `required` + ao menos um
+//     `main_attribute_candidate` (o escolhido vira main_attribute);
+//   - TOPS/BOTTOMS: atributos com tag BODY_MEASURE ou CLOTHING_MEASURE; a
+//     tabela tem UM measure_type (não mistura);
+//   - names: até 60 caracteres, só letras, números e espaços;
+//   - domain_id SEM prefixo do site.
+
+export interface ChartTemplateAttribute {
+  id: string
+  name: string
+  value_type: string
+  tags: string[]
+  values: Array<{ id: string; name: string }>
+  units: string[]
+  default_unit: string | null
+  /** BODY_MEASURE | CLOTHING_MEASURE | null */
+  measure_type: 'BODY_MEASURE' | 'CLOTHING_MEASURE' | null
+}
+
+export interface ChartTemplate {
+  /** Nível geral (gênero, marca, estilo…): grid_filter/grid_template_required, não read_only. */
+  chart_attributes: ChartTemplateAttribute[]
+  /** Candidatos a atributo principal (tamanho) das linhas. */
+  main_attribute_candidates: ChartTemplateAttribute[]
+  /** Atributos obrigatórios nas linhas (filtrados depois pelo measure_type escolhido). */
+  row_attributes: ChartTemplateAttribute[]
+  /** Tipos de medida disponíveis (vazio = domínio sem essa distinção). */
+  measure_types: Array<'BODY_MEASURE' | 'CLOTHING_MEASURE'>
+}
+
+function collectTemplateAttributes(node: unknown, out: Map<string, ChartTemplateAttribute>): void {
+  if (Array.isArray(node)) { node.forEach((n) => collectTemplateAttributes(n, out)); return }
+  if (!node || typeof node !== 'object') return
+  const obj = node as Record<string, unknown>
+  if (Array.isArray(obj.attributes)) {
+    for (const a of obj.attributes as Array<Record<string, unknown>>) {
+      if (!a || typeof a.id !== 'string' || out.has(a.id)) continue
+      const tags = Array.isArray(a.tags) ? (a.tags as unknown[]).map(String) : []
+      out.set(a.id, {
+        id: a.id,
+        name: String(a.name ?? a.id),
+        value_type: String(a.value_type ?? 'string'),
+        tags,
+        values: Array.isArray(a.values) ? (a.values as Array<{ id: unknown; name: unknown }>).filter((v) => v?.name != null).map((v) => ({ id: String(v.id ?? ''), name: String(v.name) })) : [],
+        units: Array.isArray(a.units) ? (a.units as Array<{ id: unknown }>).map((u) => String(u.id)).filter(Boolean) : [],
+        default_unit: typeof a.default_unit_id === 'string' ? a.default_unit_id : null,
+        measure_type: tags.includes('BODY_MEASURE') ? 'BODY_MEASURE' : tags.includes('CLOTHING_MEASURE') ? 'CLOTHING_MEASURE' : null,
+      })
+    }
+  }
+  for (const [k, v] of Object.entries(obj)) if (k !== 'attributes' && v && typeof v === 'object') collectTemplateAttributes(v, out)
+}
+
+export function parseChartTemplate(spec: unknown): ChartTemplate {
+  const all = new Map<string, ChartTemplateAttribute>()
+  collectTemplateAttributes(spec, all)
+  const attrs = [...all.values()]
+  const isGeneral = (a: ChartTemplateAttribute) => a.tags.includes('grid_filter') || a.tags.includes('grid_template_required')
+  const chart_attributes = attrs.filter((a) => isGeneral(a) && !a.tags.includes('read_only'))
+  const main_attribute_candidates = attrs.filter((a) => !isGeneral(a) && a.tags.includes('main_attribute_candidate'))
+  const row_attributes = attrs.filter((a) => !isGeneral(a) && a.tags.includes('required') && !a.tags.includes('main_attribute_candidate'))
+  const measure_types = [...new Set(attrs.map((a) => a.measure_type).filter((m): m is 'BODY_MEASURE' | 'CLOTHING_MEASURE' => Boolean(m)))]
+  return { chart_attributes, main_attribute_candidates, row_attributes, measure_types }
+}
+
+/** Atributos de linha exigidos para o measure_type escolhido (os sem tag de medida valem para ambos). */
+export function rowAttributesFor(template: ChartTemplate, measureType: string | null): ChartTemplateAttribute[] {
+  return template.row_attributes.filter((a) => !a.measure_type || !measureType || a.measure_type === measureType)
+}
+
+export async function getChartTemplate(ctx: Ctx, domainId: string, templateAttributes: ChannelAttributeValue[]): Promise<ChartTemplate> {
+  const res = await mercadoLivreRequest<unknown>({
+    integrationId: ctx.integrationId, companyId: ctx.companyId, method: 'POST',
+    path: `/domains/${encodeURIComponent(domainId)}/technical_specs`, query: { section: 'grids' },
+    body: {
+      attributes: templateAttributes.map((a) => ({
+        id: a.id,
+        ...(a.value_id ? { value_id: a.value_id } : {}),
+        ...(a.value_name ? { value_name: a.value_name } : {}),
+        values: [{ ...(a.value_id ? { id: a.value_id } : {}), ...(a.value_name ? { name: a.value_name } : {}) }],
+      })),
+    },
+    deps: ctx.deps,
+  })
+  return parseChartTemplate(res.data)
+}
+
+/** Valor de célula informado pelo usuário: texto livre, opção de lista ou número (+unidade). */
+export interface ChartCellValue {
+  value_id?: string | null
+  value_name?: string | null
+}
+
+export interface NewSizeChartInput {
+  name: string
+  siteId: string
+  domainId: string
+  measureType: string | null
+  mainAttributeId: string
+  /** Nível geral (gênero, marca…). */
+  attributes: ChannelAttributeValue[]
+  /** Uma entrada por linha (tamanho): attributeId → valor. */
+  rows: Array<Record<string, ChartCellValue>>
+}
+
+export class SizeChartInputError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'SizeChartInputError'
+  }
+}
+
+/** Nome aceito pelo ML: ≤ 60, só letras, números e espaços. */
+export function sanitizeChartName(name: string): string {
+  return name.normalize('NFC').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60).trim()
+}
+
+function cellValue(def: ChartTemplateAttribute, cell: ChartCellValue | undefined): { id?: string; name?: string } | null {
+  const id = cell?.value_id?.toString().trim() || ''
+  let name = cell?.value_name?.toString().trim() || ''
+  if (def.value_type === 'list' || def.value_type === 'boolean') {
+    const opt = def.values.find((v) => (id && v.id === id) || (name && v.name.localeCompare(name, 'pt-BR', { sensitivity: 'base' }) === 0))
+    if (!opt) return null
+    return { ...(opt.id ? { id: opt.id } : {}), name: opt.name }
+  }
+  if (!name) return null
+  if (def.value_type === 'number_unit') {
+    // "82" → "82 cm" (unidade padrão da ficha); "82 cm" é mantido
+    if (/^-?\d+([.,]\d+)?$/.test(name)) {
+      if (!def.default_unit) return null
+      name = `${name.replace('.', ',')} ${def.default_unit}`
+    }
+  }
+  return { name }
+}
+
+/**
+ * Monta o corpo do POST /catalog/charts SÓ com o que a ficha da tabela
+ * define (qualquer atributo fora dela o ML recusa) e valida localmente os
+ * obrigatórios antes de chamar a API.
+ */
+export function buildSizeChartBody(template: ChartTemplate, input: NewSizeChartInput): Record<string, unknown> {
+  const name = sanitizeChartName(input.name)
+  if (!name) throw new SizeChartInputError('Informe o nome da tabela (letras, números e espaços).')
+
+  const main = template.main_attribute_candidates.find((a) => a.id === input.mainAttributeId)
+  if (!main) throw new SizeChartInputError(`Atributo principal ${input.mainAttributeId} não é candidato na ficha da tabela.`)
+  if (template.measure_types.length > 0 && !template.measure_types.includes(input.measureType as 'BODY_MEASURE')) {
+    throw new SizeChartInputError(`Escolha o tipo de medida: ${template.measure_types.join(' ou ')}.`)
+  }
+
+  const general: Array<{ id: string; values: Array<{ id?: string; name?: string }> }> = []
+  const byId = new Map(input.attributes.map((a) => [a.id.toUpperCase(), a]))
+  for (const def of template.chart_attributes) {
+    const v = cellValue(def, byId.get(def.id))
+    if (v) general.push({ id: def.id, values: [v] })
+    else if (def.tags.includes('required') || def.tags.includes('grid_template_required')) {
+      throw new SizeChartInputError(`Preencha ${def.name} (${def.id}) da tabela.`)
+    }
+  }
+
+  const rowDefs = rowAttributesFor(template, input.measureType)
+  if (input.rows.length === 0) throw new SizeChartInputError('Adicione ao menos uma linha (tamanho).')
+  const seen = new Set<string>()
+  const rows = input.rows.map((row, i) => {
+    const mainValue = cellValue(main, row[main.id])
+    if (!mainValue?.name) throw new SizeChartInputError(`Linha ${i + 1}: informe ${main.name}.`)
+    const key = mainValue.name.toUpperCase()
+    if (seen.has(key)) throw new SizeChartInputError(`Tamanho repetido: ${mainValue.name}.`)
+    seen.add(key)
+    const attributes: Array<{ id: string; values: Array<{ id?: string; name?: string }> }> = [{ id: main.id, values: [mainValue] }]
+    for (const def of rowDefs) {
+      const v = cellValue(def, row[def.id])
+      if (!v) throw new SizeChartInputError(`Tamanho ${mainValue.name}: preencha ${def.name}${def.default_unit ? ` (${def.default_unit})` : ''}.`)
+      attributes.push({ id: def.id, values: [v] })
+    }
+    return { attributes }
+  })
+
+  return {
+    names: { [input.siteId]: name },
+    domain_id: stripSitePrefix(input.domainId),
+    site_id: input.siteId,
+    ...(input.measureType && template.measure_types.length > 0 ? { measure_type: input.measureType } : {}),
+    main_attribute: { attributes: [{ site_id: input.siteId, id: main.id }] },
+    attributes: general,
+    rows,
+  }
+}
+
+export async function createSizeChart(ctx: Ctx, body: Record<string, unknown>, siteId?: string): Promise<SizeChart> {
+  const res = await mercadoLivreRequest<Record<string, unknown>>({
+    integrationId: ctx.integrationId, companyId: ctx.companyId, method: 'POST', path: '/catalog/charts', body, deps: ctx.deps,
+  })
+  return parseSizeChart(res.data, siteId)
+}

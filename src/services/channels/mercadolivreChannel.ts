@@ -7,10 +7,11 @@
  */
 
 import { fetchMe } from '@/lib/integrations/mercadolivre/users'
+import type { MercadoLivreRequestDeps } from '@/lib/integrations/mercadolivre/client'
 import { listingModelFromTags } from '@/lib/integrations/mercadolivre/adapter'
 import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
 import { createSupabaseMercadoLivreRepo } from '@/services/integrations/mercadolivre.service'
-import { CURRENCY_BY_SITE, ListingError, createSupabaseListingSource, type ChannelContext } from './listings.service'
+import { CURRENCY_BY_SITE, ListingError, assertPublishAllowed, createSupabaseListingSource, type ChannelContext } from './listings.service'
 import {
   checkConditionalAttributes,
   getCategoryAttributes,
@@ -20,10 +21,16 @@ import {
 } from '@/lib/integrations/mercadolivre/catalog'
 import { suggestAttributeValues } from '@/lib/integrations/mercadolivre/listingPayload'
 import {
+  SizeChartInputError,
+  buildSizeChartBody,
+  createSizeChart,
   detectSizeGrid,
+  getChartTemplate,
   getSizeChart,
   getSizeChartFilterSpec,
   searchSizeCharts,
+  type ChartCellValue,
+  type ChartTemplate,
   type SizeChart,
   type SizeChartSummary,
   type SizeGridAttributes,
@@ -181,4 +188,76 @@ export async function requiredAttributeIdsFor(
     // devolve o atributo faltante (erro tipado com a mensagem do ML).
   }
   return [...ids]
+}
+
+/** Valores de atributos (grid_template_required) exigidos pela ficha da tabela, vindos do formulário. */
+function templateAttributesFrom(requiredIds: string[], attributes: ChannelAttributeValue[]): ChannelAttributeValue[] {
+  const byId = new Map(attributes.map((a) => [a.id.toUpperCase(), a]))
+  const missing = requiredIds.filter((id) => {
+    const a = byId.get(id)
+    return !(a && ((a.value_name ?? '').toString().trim() || (a.value_id ?? '').toString().trim()))
+  })
+  if (missing.length) throw new ListingError('missing_attributes', `Preencha ${missing.join(', ')} antes de criar a tabela de medidas.`)
+  return requiredIds.map((id) => byId.get(id)!)
+}
+
+/**
+ * Ficha técnica da TABELA para o domínio (campos gerais, candidatos a
+ * atributo principal, atributos de linha, tipos de medida) — base do
+ * formulário de criação. Nada é fixo: vem de
+ * POST /domains/{domain_id}/technical_specs?section=grids.
+ */
+export async function getMercadoLivreSizeChartTemplate(
+  companyId: number,
+  domainId: string,
+  attributes: ChannelAttributeValue[],
+): Promise<ChartTemplate> {
+  const { integrationId } = await getConnectedMercadoLivreIntegration(companyId)
+  const ctx = { integrationId, companyId }
+  const spec = await getSizeChartFilterSpec(ctx, domainId)
+  return getChartTemplate(ctx, domainId, templateAttributesFrom(spec.required, attributes))
+}
+
+export interface CreateSizeChartInput {
+  domainId: string
+  name: string
+  measureType: string | null
+  mainAttributeId: string
+  attributes: ChannelAttributeValue[]
+  rows: Array<Record<string, ChartCellValue>>
+}
+
+/**
+ * Cria uma tabela SPECIFIC para o seller conectado (POST /catalog/charts).
+ * Escrita externa → mesma trava da publicação: só em usuário TEST do ML
+ * (tag test_user ao vivo) salvo liberação explícita. O corpo é montado e
+ * validado no SERVIDOR a partir da ficha da tabela recém-consultada.
+ */
+export async function createMercadoLivreSizeChart(companyId: number, input: CreateSizeChartInput): Promise<SizeChart> {
+  return createSizeChartForChannel(await resolveMercadoLivreChannel(companyId), input)
+}
+
+/** Núcleo testável: trava TEST → ficha da tabela → corpo validado → POST → leitura. */
+export async function createSizeChartForChannel(
+  channel: ChannelContext,
+  input: CreateSizeChartInput,
+  deps?: MercadoLivreRequestDeps,
+): Promise<SizeChart> {
+  assertPublishAllowed(channel)
+  const ctx = { integrationId: channel.integrationId, companyId: channel.companyId, deps }
+  const spec = await getSizeChartFilterSpec(ctx, input.domainId)
+  const template = await getChartTemplate(ctx, input.domainId, templateAttributesFrom(spec.required, input.attributes))
+  let body: Record<string, unknown>
+  try {
+    body = buildSizeChartBody(template, {
+      name: input.name, siteId: channel.siteId, domainId: input.domainId, measureType: input.measureType,
+      mainAttributeId: input.mainAttributeId, attributes: input.attributes, rows: input.rows,
+    })
+  } catch (err) {
+    if (err instanceof SizeChartInputError) throw new ListingError('missing_attributes', err.message)
+    throw err
+  }
+  const created = await createSizeChart(ctx, body, channel.siteId)
+  // A resposta do POST já traz as linhas; se vier sem, lê a tabela criada.
+  return created.rows.length ? created : getSizeChart(ctx, created.id, channel.siteId)
 }

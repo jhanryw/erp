@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
 import type { ChannelProductOverview, ListingView } from '@/services/channels/listings.service'
-import type { SizeChart, SizeChartSummary } from '@/lib/integrations/mercadolivre/sizeCharts'
+import type { ChartCellValue, ChartTemplate, ChartTemplateAttribute, SizeChart, SizeChartSummary } from '@/lib/integrations/mercadolivre/sizeCharts'
 import type { MercadoLivrePublishForm } from '@/services/channels/mercadolivreChannel'
 import type { AttributeDefinition, CategorySuggestion } from '@/lib/integrations/mercadolivre/catalog'
 import type { ChannelAttributeValue } from '@/lib/channels/types'
@@ -312,6 +312,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
   const [loadingCharts, setLoadingCharts] = useState(false)
   /** O ML informou que o domínio não usa tabela de medidas (domain_not_active): não bloqueia. */
   const [gridInactive, setGridInactive] = useState(false)
+  const [creatingChart, setCreatingChart] = useState(false)
 
   async function searchCategory() {
     const res = await fetch(`/api/integrations/mercadolivre/categories/search?q=${encodeURIComponent(query)}`)
@@ -368,10 +369,10 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
   const variationSize = (v: ChannelProductOverview['variations'][number]) =>
     (perVariation[v.id]?.SIZE?.value_name ?? v.size ?? '').toString()
 
-  async function findCharts() {
-    if (!form?.size_grid) return
+  async function findCharts(): Promise<SizeChartSummary[] | null> {
+    if (!form?.size_grid) return null
     const domainId = category?.domain_id
-    if (!domainId) { toast.error('Domínio da categoria desconhecido: escolha a categoria pela sugestão.'); return }
+    if (!domainId) { toast.error('Domínio da categoria desconhecido: escolha a categoria pela sugestão.'); return null }
     setLoadingCharts(true)
     try {
       const res = await fetch('/api/integrations/mercadolivre/size-charts/search', {
@@ -380,23 +381,27 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
       })
       const json = await res.json()
       if (!res.ok) {
-        if (/domain_not_active/.test(String(json.error ?? ''))) { setGridInactive(true); setCharts([]); return }
-        toast.error('Tabela de medidas', { description: json.error }); return
+        if (/domain_not_active/.test(String(json.error ?? ''))) { setGridInactive(true); setCharts([]); return [] }
+        toast.error('Tabela de medidas', { description: json.error }); return null
       }
       setGridInactive(false)
       setCharts(json.charts ?? [])
+      return json.charts ?? []
     } finally {
       setLoadingCharts(false)
     }
   }
 
-  async function chooseChart(id: string) {
+  async function chooseChart(id: string, preloaded?: SizeChart) {
     setChart(null); setRowByVariation({})
     if (!id) return
-    const res = await fetch(`/api/integrations/mercadolivre/size-charts/${id}`)
-    const json = await res.json()
-    if (!res.ok) { toast.error('Tabela de medidas', { description: json.error }); return }
-    const ch = json.chart as SizeChart
+    let ch = preloaded
+    if (!ch) {
+      const res = await fetch(`/api/integrations/mercadolivre/size-charts/${id}`)
+      const json = await res.json()
+      if (!res.ok) { toast.error('Tabela de medidas', { description: json.error }); return }
+      ch = json.chart as SizeChart
+    }
     setChart(ch)
     // Casa o SIZE de cada variação com a linha da tabela (o ML exige igualdade).
     const norm = (x: string) => x.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, '').replace(/,/g, '.')
@@ -407,6 +412,17 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
       if (hits.length === 1) auto[v.id] = hits[0].id
     }
     setRowByVariation(auto)
+  }
+
+  /** Tabela recém-criada: busca de novo, seleciona automaticamente e casa as linhas. */
+  async function onChartCreated(created: SizeChart) {
+    setCreatingChart(false)
+    toast.success(`Tabela de medidas ${created.id} criada com ${created.rows.length} tamanho(s).`)
+    const list = (await findCharts()) ?? []
+    if (!list.some((c) => c.id === created.id)) {
+      setCharts([{ id: created.id, name: created.name, type: created.type, main_attribute_id: created.main_attribute_id }, ...list])
+    }
+    await chooseChart(created.id, created)
   }
 
   const gridMissing = form?.size_grid && !gridInactive
@@ -515,7 +531,7 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase text-text-muted">Tabela de medidas (exigida pela categoria)</p>
               <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" variant="secondary" onClick={findCharts} loading={loadingCharts}>Buscar tabelas</Button>
+                <Button size="sm" variant="secondary" onClick={() => { findCharts() }} loading={loadingCharts}>Buscar tabelas</Button>
                 {charts && charts.length > 0 && (
                   <select className="input-base h-9 max-w-md text-sm" value={chart?.id ?? ''} onChange={(e) => chooseChart(e.target.value)} aria-label="Tabela de medidas">
                     <option value="">Escolha a tabela…</option>
@@ -524,8 +540,24 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
                 )}
               </div>
               {gridInactive && <p className="text-xs text-text-muted">O Mercado Livre informou que este domínio não usa tabela de medidas — pode publicar sem ela.</p>}
-              {charts && charts.length === 0 && !gridInactive && (
-                <p className="text-xs text-warning">Nenhuma tabela encontrada para estes filtros (gênero/marca). Crie uma tabela de medidas para esta conta no Mercado Livre e busque de novo.</p>
+              {charts && charts.length === 0 && !gridInactive && !creatingChart && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-xs text-warning">Nenhuma tabela encontrada.</p>
+                  <Button size="sm" onClick={() => setCreatingChart(true)}>Criar tabela de medidas</Button>
+                </div>
+              )}
+              {charts && charts.length > 0 && !creatingChart && (
+                <button type="button" className="text-xs text-brand hover:underline" onClick={() => setCreatingChart(true)}>Criar outra tabela de medidas</button>
+              )}
+              {creatingChart && category?.domain_id && (
+                <CreateSizeChartForm
+                  domainId={category.domain_id}
+                  productName={familyName || overview.product.name}
+                  commonValues={Object.values(common)}
+                  sizes={[...new Set(candidates.filter((v) => selected.has(v.id)).map(variationSize).filter(Boolean))]}
+                  onCancel={() => setCreatingChart(false)}
+                  onCreated={onChartCreated}
+                />
               )}
               {!charts && <p className="text-xs text-text-muted">Preencha os atributos da categoria (ex.: gênero e marca) e busque as tabelas disponíveis para esta conta.</p>}
             </div>
@@ -585,6 +617,184 @@ function PublishFlow({ overview, candidates, onCancel, onDone }: {
         </>
       )}
       {!form && <div className="flex justify-end"><Button variant="secondary" onClick={onCancel}>Cancelar</Button></div>}
+    </div>
+  )
+}
+
+// ─── Criação de tabela de medidas (SPECIFIC) ─────────────────────────────────
+
+function ChartCellInput({ def, value, onChange }: {
+  def: ChartTemplateAttribute
+  value: ChartCellValue | undefined
+  onChange: (v: ChartCellValue) => void
+}) {
+  if (def.values.length > 0 && (def.value_type === 'list' || def.value_type === 'boolean')) {
+    return (
+      <select className="input-base h-8 text-xs" aria-label={def.name} value={value?.value_id ?? ''}
+        onChange={(e) => { const o = def.values.find((x) => x.id === e.target.value); onChange({ value_id: o?.id ?? null, value_name: o?.name ?? null }) }}>
+        <option value="">—</option>
+        {def.values.map((o) => <option key={o.id || o.name} value={o.id}>{o.name}</option>)}
+      </select>
+    )
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <input className="input-base h-8 text-xs" aria-label={def.name}
+        inputMode={def.value_type === 'number_unit' ? 'decimal' : undefined}
+        value={value?.value_name ?? ''} onChange={(e) => onChange({ value_name: e.target.value })}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.preventDefault() }} />
+      {def.value_type === 'number_unit' && def.default_unit && <span className="text-xs text-text-muted">{def.default_unit}</span>}
+    </div>
+  )
+}
+
+/**
+ * Formulário DINÂMICO: campos gerais, atributo principal, tipo de medida e
+ * colunas das linhas vêm da ficha técnica da tabela do domínio. Linhas
+ * iniciais = tamanhos das variações selecionadas (P, M, G, GG…).
+ */
+function CreateSizeChartForm({ domainId, productName, commonValues, sizes, onCancel, onCreated }: {
+  domainId: string
+  productName: string
+  commonValues: ChannelAttributeValue[]
+  sizes: string[]
+  onCancel: () => void
+  onCreated: (chart: SizeChart) => void
+}) {
+  const [template, setTemplate] = useState<ChartTemplate | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [name, setName] = useState('')
+  const [measureType, setMeasureType] = useState<string | null>(null)
+  const [mainId, setMainId] = useState('')
+  const [general, setGeneral] = useState<Record<string, ChartCellValue>>({})
+  const [rows, setRows] = useState<Array<Record<string, ChartCellValue>>>([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const res = await fetch('/api/integrations/mercadolivre/size-charts/template', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ domain_id: domainId, attributes: commonValues }),
+        })
+        const json = await res.json()
+        if (!alive) return
+        if (!res.ok) { setError(json.error ?? 'Falha ao ler a ficha da tabela.'); return }
+        const t = json.template as ChartTemplate
+        setTemplate(t)
+        setMeasureType(t.measure_types[0] ?? null)
+        const main = t.main_attribute_candidates.find((a) => a.value_type === 'string') ?? t.main_attribute_candidates[0]
+        setMainId(main?.id ?? '')
+        const byId = new Map(commonValues.map((a) => [a.id, a]))
+        setGeneral(Object.fromEntries(t.chart_attributes.map((d) => [d.id, { value_id: byId.get(d.id)?.value_id ?? null, value_name: byId.get(d.id)?.value_name ?? null }])))
+        // nome sugerido: produto + valor do filtro obrigatório da ficha (ex.: gênero)
+        const tmplAttr = t.chart_attributes.find((d) => d.tags.includes('grid_template_required'))
+        const tmplValue = tmplAttr ? byId.get(tmplAttr.id)?.value_name : null
+        setName([productName, tmplValue].filter(Boolean).join(' ').replace(/[^\p{L}\p{N} ]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 60))
+        const initial = sizes.length ? sizes : ['P', 'M', 'G', 'GG']
+        setRows(initial.map((sz) => (main ? { [main.id]: { value_name: sz } } : {})))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const main = template?.main_attribute_candidates.find((a) => a.id === mainId)
+  const rowDefs = template ? template.row_attributes.filter((a) => !a.measure_type || !measureType || a.measure_type === measureType) : []
+
+  function setCell(i: number, id: string, v: ChartCellValue) {
+    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, [id]: v } : r)))
+  }
+
+  function changeMain(id: string) {
+    // mantém os tamanhos digitados ao trocar o atributo principal
+    setRows((rs) => rs.map((r) => { const cur = mainId ? r[mainId] : undefined; const { [mainId]: _old, ...rest } = r; return cur ? { ...rest, [id]: cur } : rest }))
+    setMainId(id)
+  }
+
+  async function save() {
+    setSaving(true)
+    try {
+      const res = await fetch('/api/integrations/mercadolivre/size-charts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          domain_id: domainId, name, measure_type: measureType, main_attribute_id: mainId,
+          attributes: Object.entries(general).map(([id, v]) => ({ id, value_id: v.value_id ?? null, value_name: v.value_name ?? null })),
+          rows,
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) { toast.error('Não foi possível criar a tabela', { description: json.error }); return }
+      onCreated(json.chart as SizeChart)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3">
+      <p className="text-sm font-medium">Criar tabela de medidas (específica desta conta)</p>
+      {loading && <p className="flex items-center gap-2 text-xs text-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin" /> Lendo a ficha técnica da tabela…</p>}
+      {error && <p className="text-xs text-error">{error}</p>}
+      {template && (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block text-xs text-text-muted">Nome da tabela * (até 60, sem símbolos)
+              <input className="input-base mt-0.5 h-9 text-sm" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            {template.measure_types.length > 0 && (
+              <label className="block text-xs text-text-muted">Tipo de medida *
+                <select className="input-base mt-0.5 h-9 text-sm" value={measureType ?? ''} onChange={(e) => setMeasureType(e.target.value || null)}>
+                  {template.measure_types.map((m) => <option key={m} value={m}>{m === 'BODY_MEASURE' ? 'Medidas do corpo' : 'Medidas da peça'}</option>)}
+                </select>
+              </label>
+            )}
+            <label className="block text-xs text-text-muted">Atributo principal (tamanho) *
+              <select className="input-base mt-0.5 h-9 text-sm" value={mainId} onChange={(e) => changeMain(e.target.value)}>
+                {template.main_attribute_candidates.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </label>
+            {template.chart_attributes.map((def) => (
+              <label key={def.id} className="block text-xs text-text-muted">
+                {def.name}{def.tags.includes('required') || def.tags.includes('grid_template_required') ? ' *' : ''}
+                <ChartCellInput def={def} value={general[def.id]} onChange={(v) => setGeneral((g) => ({ ...g, [def.id]: v }))} />
+              </label>
+            ))}
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="text-xs">
+              <thead>
+                <tr className="text-left text-text-muted">
+                  <th className="py-1 pr-2">{main?.name ?? 'Tamanho'} *</th>
+                  {rowDefs.map((d) => <th key={d.id} className="py-1 pr-2">{d.name} *</th>)}
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i}>
+                    <td className="py-1 pr-2">{main && <ChartCellInput def={main} value={r[main.id]} onChange={(v) => setCell(i, main.id, v)} />}</td>
+                    {rowDefs.map((d) => <td key={d.id} className="py-1 pr-2"><ChartCellInput def={d} value={r[d.id]} onChange={(v) => setCell(i, d.id, v)} /></td>)}
+                    <td><button type="button" className="text-error hover:underline" onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}>remover</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <button type="button" className="mt-1 text-xs text-brand hover:underline" onClick={() => setRows((rs) => [...rs, {}])}>+ tamanho</button>
+          </div>
+
+          <p className="text-xs text-text-muted">O tamanho de cada variação precisa ser idêntico ao tamanho da linha (o Mercado Livre confere na publicação).</p>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="secondary" onClick={onCancel} disabled={saving}>Cancelar</Button>
+            <Button size="sm" onClick={save} loading={saving} disabled={!name.trim() || !mainId || rows.length === 0}>Criar tabela</Button>
+          </div>
+        </>
+      )}
+      {!template && !loading && <div className="flex justify-end"><Button size="sm" variant="secondary" onClick={onCancel}>Fechar</Button></div>}
     </div>
   )
 }

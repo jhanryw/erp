@@ -24,6 +24,8 @@ import { setMercadoLivreLogSink } from '@/lib/integrations/mercadolivre/log'
 import { FakeMlDb, TEST_CONFIG, setTestCipherEnv } from '@/lib/integrations/mercadolivre/fakeMercadoLivre.testutil'
 import { FakeMlMarket } from '@/lib/integrations/mercadolivre/fakeMlMarket.testutil'
 import type { ChannelListingSnapshot } from '@/lib/channels/types'
+import { createSizeChartForChannel } from './mercadolivreChannel'
+import { matchSizeChartRow, searchSizeCharts } from '@/lib/integrations/mercadolivre/sizeCharts'
 
 beforeAll(() => setTestCipherEnv())
 
@@ -504,6 +506,74 @@ describe('retry após falha: estado republicável e reconciliação', () => {
     const item = api.item(repo.rows[0].external_listing_id!)!
     expect(item.attributes).toEqual(expect.arrayContaining([{ id: 'SIZE_GRID_ID', value_name: '5001' }, { id: 'SIZE_GRID_ROW_ID', value_name: '5001:2' }]))
     expect(repo.rows).toHaveLength(1)
+  })
+})
+
+describe('tabela de medidas criada no fluxo → publicação', () => {
+  const mlDeps = () => ({ config: TEST_CONFIG, store: db.store(), fetchImpl: api.fetch, sleep: async () => {} })
+  const chartInput = {
+    domainId: 'MLB-BRAS', name: 'Item de Teste ML Feminino', measureType: 'BODY_MEASURE', mainAttributeId: 'SIZE',
+    attributes: [{ id: 'GENDER', value_name: 'Feminino' }, { id: 'BRAND', value_name: 'TEST' }],
+    rows: ['P', 'M', 'G', 'GG'].map((sz, i) => ({ SIZE: { value_name: sz }, BUST_CIRCUMFERENCE_FROM: { value_name: String(80 + i * 4) }, FILTRABLE_SIZE: { value_name: sz } })),
+  }
+
+  beforeEach(() => {
+    api.requireSizeGrid = true
+    api.sizeCharts = {} // conta TEST sem nenhuma tabela
+    products[0].variations = [
+      { id: 11, sku: 'TEST-ML-NORMAL-01-P', price_override: null, active: true, color: 'Preto', size: 'P' },
+      { id: 12, sku: 'TEST-ML-NORMAL-01-GG', price_override: null, active: true, color: 'Preto', size: 'GG' },
+    ]
+    availability.set(12, { sellable_quantity: 3, manual_enabled: true })
+  })
+
+  it('conta real: criação de tabela bloqueada (mesma trava da publicação), nada enviado ao ML', async () => {
+    await expect(createSizeChartForChannel({ ...channel(), isTestAccount: false }, chartInput, mlDeps())).rejects.toMatchObject({ code: 'real_account_blocked' })
+    expect(api.chartCreates).toHaveLength(0)
+  })
+
+  it('sem tabela → cria P/M/G/GG → busca acha → linhas por variação → validate → publica com SIZE_GRID_ID + SIZE_GRID_ROW_ID', async () => {
+    const ctxMl = { integrationId, companyId: COMPANY, deps: mlDeps() }
+    expect(await searchSizeCharts(ctxMl, { domainId: 'MLB-BRAS', siteId: 'MLB', sellerId: '555', attributes: [{ id: 'GENDER', value_name: 'Feminino' }] })).toEqual([])
+
+    // falta de dado exigido pela ficha → erro de formulário, nada criado
+    await expect(createSizeChartForChannel(channel(), { ...chartInput, attributes: [{ id: 'GENDER', value_name: 'Feminino' }] }, mlDeps()))
+      .rejects.toMatchObject({ code: 'missing_attributes' })
+    expect(api.chartCreates).toHaveLength(0)
+
+    const chart = await createSizeChartForChannel(channel(), chartInput, mlDeps())
+    expect(chart.rows).toHaveLength(4)
+    const found = await searchSizeCharts(ctxMl, { domainId: 'MLB-BRAS', siteId: 'MLB', sellerId: '555', attributes: [{ id: 'GENDER', value_name: 'Feminino' }] })
+    expect(found.map((c) => c.id)).toEqual([chart.id])
+
+    const rowP = matchSizeChartRow(chart.rows, 'P')!
+    const rowGG = matchSizeChartRow(chart.rows, 'GG')!
+    const { results } = await publishListings(session, {
+      productId: 1, categoryId: 'MLB1234', domainId: 'MLB-BRAS', requiredAttributeIds: ['BRAND', 'MODEL'],
+      commonAttributes: [...attrs, { id: 'SIZE_GRID_ID', value_name: chart.id }],
+      variations: [
+        { productVariationId: 11, attributes: [{ id: 'SIZE', value_name: 'P' }, { id: 'SIZE_GRID_ROW_ID', value_name: rowP.id }] },
+        { productVariationId: 12, attributes: [{ id: 'SIZE', value_name: 'GG' }, { id: 'SIZE_GRID_ROW_ID', value_name: rowGG.id }] },
+      ],
+    }, deps())
+    expect(results.map((r) => r.status)).toEqual(['published', 'published'])
+    // validate rodou antes de cada POST /items, com os atributos da tabela
+    const validates = api.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/items/validate'))
+    expect(validates).toHaveLength(2)
+    expect(JSON.parse(validates[1].body!).attributes).toEqual(expect.arrayContaining([{ id: 'SIZE_GRID_ID', value_name: chart.id }, { id: 'SIZE_GRID_ROW_ID', value_name: rowGG.id }]))
+    const item = api.item(repo.rows.find((r) => r.product_variation_id === 12)!.external_listing_id!)!
+    expect(item.attributes).toEqual(expect.arrayContaining([{ id: 'SIZE_GRID_ROW_ID', value_name: rowGG.id }, { id: 'SELLER_SKU', value_name: 'TEST-ML-NORMAL-01-GG' }]))
+  })
+
+  it('linha trocada (SIZE ≠ linha) → só aviso, publica e registra', async () => {
+    const chart = await createSizeChartForChannel(channel(), chartInput, mlDeps())
+    const { results } = await publishListings(session, {
+      productId: 1, categoryId: 'MLB1234', requiredAttributeIds: ['BRAND'],
+      commonAttributes: [...attrs, { id: 'SIZE_GRID_ID', value_name: chart.id }],
+      variations: [{ productVariationId: 11, attributes: [{ id: 'SIZE', value_name: 'P' }, { id: 'SIZE_GRID_ROW_ID', value_name: matchSizeChartRow(chart.rows, 'M')!.id }] }],
+    }, deps())
+    expect(results[0].status).toBe('published')
+    expect(repo.rows[0].last_error).toMatch(/Attribute \[SIZE\] is not valid/)
   })
 })
 

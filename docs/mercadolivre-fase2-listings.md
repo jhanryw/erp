@@ -174,3 +174,18 @@ Doc ML "Guia de tamanhos" (primeiros passos / gerenciar / validações):
 6. `domain_not_active` na busca = domínio não usa tabela → não bloqueia. Nenhuma tabela encontrada → criar a tabela da conta no ML (criação via API `POST /catalog/charts` não implementada nesta fase).
 
 Endpoints: `POST /api/integrations/mercadolivre/size-charts/search`, `GET /api/integrations/mercadolivre/size-charts/{chartId}` (gerente+, empresa da sessão).
+
+### 14.1 Criação de tabela SPECIFIC no fluxo de publicação
+
+Quando a busca não retorna tabelas: **Nenhuma tabela encontrada → [Criar tabela de medidas]**.
+
+1. `domain_id` vem do preditor de categoria (guardado no vínculo para retry).
+2. Filtros obrigatórios da ficha do domínio (`grid_template_required`, ex.: gênero) → `POST /domains/{domain_id}/technical_specs?section=grids` devolve a ficha da TABELA.
+3. Formulário montado da ficha: campos gerais (`grid_filter`/`grid_template_required`, sem `read_only`), atributo principal (`main_attribute_candidate`), tipo de medida (tags `BODY_MEASURE`/`CLOTHING_MEASURE`, quando existirem) e colunas das linhas (`required` do tipo escolhido; listas como seleção; `number_unit` com a unidade padrão da ficha).
+4. Linhas iniciais = tamanhos das variações selecionadas (ex.: P, M, G, GG), editáveis.
+5. `POST /catalog/charts` (nome ≤ 60 só letras/números/espaços; domínio sem prefixo; gerais fora das linhas). Corpo montado e validado **no servidor** a partir da ficha recém-consultada.
+6. Após criar: nova busca, seleção automática da tabela criada e casamento de cada variação com seu `SIZE_GRID_ROW_ID`.
+7. Publicar: `/items/validate` com `SIZE_GRID_ID` + `SIZE_GRID_ROW_ID` e, só se aprovado, `POST /items`.
+
+Criar tabela é escrita externa: mesma trava da publicação (só usuário TEST do ML, salvo `CHANNEL_LISTINGS_ALLOW_REAL_ACCOUNTS=true`).
+Endpoints: `POST /api/integrations/mercadolivre/size-charts/template`, `POST /api/integrations/mercadolivre/size-charts`.

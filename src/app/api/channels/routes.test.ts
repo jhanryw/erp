@@ -11,7 +11,7 @@ const listings = vi.hoisted(() => ({
   activateListing: vi.fn(),
   reconcileListing: vi.fn(),
 }))
-const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn(), searchMercadoLivreSizeCharts: vi.fn(), getMercadoLivreSizeChart: vi.fn() }))
+const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn(), searchMercadoLivreSizeCharts: vi.fn(), getMercadoLivreSizeChart: vi.fn(), getMercadoLivreSizeChartTemplate: vi.fn(), createMercadoLivreSizeChart: vi.fn() }))
 
 vi.mock('@/lib/supabase/session', async () => {
   const { NextResponse } = await import('next/server')
@@ -39,6 +39,8 @@ import { POST as pause } from './listings/[id]/pause/route'
 import { GET as categoryForm } from '../integrations/mercadolivre/categories/[categoryId]/route'
 import { POST as searchCharts } from '../integrations/mercadolivre/size-charts/search/route'
 import { GET as getChart } from '../integrations/mercadolivre/size-charts/[chartId]/route'
+import { POST as chartTemplate } from '../integrations/mercadolivre/size-charts/template/route'
+import { POST as createChart } from '../integrations/mercadolivre/size-charts/route'
 import { ListingError } from '@/services/channels/listings.service'
 
 const base = 'https://erp.example.com'
@@ -113,5 +115,33 @@ describe('rotas de canais', () => {
     listings.publishListings.mockResolvedValue({ channel: { model: 'user_products', accountLabel: 'T', sellerId: '1', isTestAccount: true }, results: [] })
     await publish(post({ ...body, domain_id: 'MLB-BRAS' }))
     expect(listings.publishListings.mock.calls[0][1]).toMatchObject({ domainId: 'MLB-BRAS' })
+  })
+
+  it('criar tabela: validação do corpo, empresa da sessão, 201; conta real → 403; usuário comum → 403', async () => {
+    const req = (b: unknown) => new Request(`${base}/x`, { method: 'POST', body: JSON.stringify(b) })
+    const good = {
+      domain_id: 'MLB-BRAS', name: 'Tabela TEST', measure_type: 'BODY_MEASURE', main_attribute_id: 'SIZE',
+      attributes: [{ id: 'GENDER', value_name: 'Feminino' }], rows: [{ SIZE: { value_name: 'P' } }], company_id: 999,
+    }
+    ml.getMercadoLivreSizeChartTemplate.mockResolvedValue({ chart_attributes: [], main_attribute_candidates: [], row_attributes: [], measure_types: [] })
+    expect((await chartTemplate(req({ domain_id: 'MLB-BRAS', attributes: [] }))).status).toBe(200)
+    expect(ml.getMercadoLivreSizeChartTemplate).toHaveBeenCalledWith(1, 'MLB-BRAS', [])
+
+    expect((await createChart(req({ ...good, rows: [] }))).status).toBe(422)
+    expect((await createChart(req({ ...good, main_attribute_id: 'size;drop' }))).status).toBe(422)
+    expect((await createChart(req({ ...good, measure_type: 'OTHER' }))).status).toBe(422)
+    expect(ml.createMercadoLivreSizeChart).not.toHaveBeenCalled()
+
+    ml.createMercadoLivreSizeChart.mockResolvedValue({ id: '7001', rows: [{ id: '7001:1' }] })
+    const res = await createChart(req(good))
+    expect(res.status).toBe(201)
+    expect(ml.createMercadoLivreSizeChart.mock.calls[0][0]).toBe(1)
+    expect(ml.createMercadoLivreSizeChart.mock.calls[0][1]).toMatchObject({ domainId: 'MLB-BRAS', mainAttributeId: 'SIZE', rows: [{ SIZE: { value_name: 'P' } }] })
+
+    ml.createMercadoLivreSizeChart.mockRejectedValue(new ListingError('real_account_blocked', 'bloqueado'))
+    expect((await createChart(req(good))).status).toBe(403)
+
+    session.current = { id: 'u', role: 'usuario', company_id: 1 }
+    expect((await createChart(req(good))).status).toBe(403)
   })
 })

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import {
-  detectSizeGrid, getSizeChart, getSizeChartFilterSpec, matchSizeChartRow, parseGridFilterSpec, parseSizeChart,
-  searchSizeCharts, stripSitePrefix,
+  SizeChartInputError, buildSizeChartBody, createSizeChart, detectSizeGrid, getChartTemplate, getSizeChart,
+  getSizeChartFilterSpec, matchSizeChartRow, parseChartTemplate, parseGridFilterSpec, parseSizeChart, rowAttributesFor,
+  sanitizeChartName, searchSizeCharts, stripSitePrefix, type ChartTemplate, type NewSizeChartInput,
 } from './sizeCharts'
 import { clearMercadoLivreCatalogCache, getCategoryAttributes } from './catalog'
 import { createMercadoLivreAdapter } from './adapter'
@@ -115,5 +116,76 @@ describe('tabela de medidas — API (ML simulado)', () => {
       expect(w.ok).toBe(true)
       expect(w.warnings.map((x) => x.code)).toEqual(['invalid.fashion_grid.size.values'])
     })
+  })
+})
+
+describe('criação de tabela SPECIFIC', () => {
+  const template = async (): Promise<ChartTemplate> => getChartTemplate(ctx(), 'MLB-BRAS', [{ id: 'GENDER', value_name: 'Feminino' }])
+  const baseInput: NewSizeChartInput = {
+    name: 'Item de Teste ML (Feminino)!', siteId: 'MLB', domainId: 'MLB-BRAS', measureType: 'BODY_MEASURE', mainAttributeId: 'SIZE',
+    attributes: [{ id: 'GENDER', value_name: 'Feminino' }, { id: 'BRAND', value_name: 'TEST' }],
+    rows: ['P', 'M', 'G', 'GG'].map((sz, i) => ({ SIZE: { value_name: sz }, BUST_CIRCUMFERENCE_FROM: { value_name: String(80 + i * 4) }, FILTRABLE_SIZE: { value_name: sz } })),
+  }
+
+  it('ficha da tabela (section=grids) → campos gerais, candidatos, linhas e tipos de medida — tudo da ficha', async () => {
+    const t = await template()
+    const call = api.calls.find((c) => c.url.includes('/technical_specs') && c.url.includes('section=grids'))!
+    expect(call.method).toBe('POST')
+    expect(JSON.parse(call.body!).attributes[0]).toMatchObject({ id: 'GENDER', values: [{ name: 'Feminino' }] })
+    expect(t.chart_attributes.map((a) => a.id)).toEqual(['GENDER', 'BRAND']) // AGE_GROUP é read_only
+    expect(t.main_attribute_candidates.map((a) => a.id)).toEqual(['SIZE', 'MANUFACTURER_SIZE', 'BR_SIZE'])
+    expect(t.measure_types).toEqual(['BODY_MEASURE', 'CLOTHING_MEASURE'])
+    expect(rowAttributesFor(t, 'BODY_MEASURE').map((a) => a.id)).toEqual(['BUST_CIRCUMFERENCE_FROM', 'FILTRABLE_SIZE'])
+    expect(rowAttributesFor(t, 'CLOTHING_MEASURE').map((a) => a.id)).toEqual(['GARMENT_WIDTH_FROM', 'FILTRABLE_SIZE'])
+  })
+
+  it('ficha sem o filtro obrigatório → erro do ML (chart_tech_specs_not_found)', async () => {
+    await expect(getChartTemplate(ctx(), 'MLB-BRAS', [])).rejects.toMatchObject({ kind: 'not_found' })
+  })
+
+  it('corpo do POST /catalog/charts segue a doc: nome saneado, domínio sem prefixo, geral × linhas, unidade padrão, lista por id', async () => {
+    const body = buildSizeChartBody(await template(), baseInput)
+    expect(body).toMatchObject({
+      names: { MLB: 'Item de Teste ML Feminino' }, domain_id: 'BRAS', site_id: 'MLB', measure_type: 'BODY_MEASURE',
+      main_attribute: { attributes: [{ site_id: 'MLB', id: 'SIZE' }] },
+      attributes: [{ id: 'GENDER', values: [{ name: 'Feminino' }] }, { id: 'BRAND', values: [{ name: 'TEST' }] }],
+    })
+    const rows = body.rows as Array<{ attributes: Array<{ id: string; values: unknown[] }> }>
+    expect(rows).toHaveLength(4)
+    expect(rows[3].attributes).toEqual([
+      { id: 'SIZE', values: [{ name: 'GG' }] },
+      { id: 'BUST_CIRCUMFERENCE_FROM', values: [{ name: '92 cm' }] },
+      { id: 'FILTRABLE_SIZE', values: [{ id: '9004', name: 'GG' }] },
+    ])
+    // nenhum atributo geral (grid_filter) dentro das linhas
+    expect(rows.flatMap((r) => r.attributes.map((a) => a.id))).not.toContain('GENDER')
+    expect(sanitizeChartName('  Sutiã (TEST) - P/M  ')).toBe('Sutiã TEST P M')
+  })
+
+  it('validação local: marca, medida, tamanho repetido, principal inválido, tipo de medida', async () => {
+    const t = await template()
+    const bad = (over: Partial<typeof baseInput>) => () => buildSizeChartBody(t, { ...baseInput, ...over })
+    expect(bad({ attributes: [{ id: 'GENDER', value_name: 'Feminino' }] })).toThrow(/Marca/)
+    expect(bad({ rows: [{ SIZE: { value_name: 'P' }, FILTRABLE_SIZE: { value_name: 'P' } }] })).toThrow(/P: preencha Busto desde \(cm\)/)
+    expect(bad({ rows: [baseInput.rows[0], baseInput.rows[0]] })).toThrow(/repetido/)
+    expect(bad({ mainAttributeId: 'BUST_CIRCUMFERENCE_FROM' })).toThrow(SizeChartInputError)
+    expect(bad({ measureType: null })).toThrow(/tipo de medida/)
+  })
+
+  it('cria (P, M, G, GG) → lê a tabela criada → busca encontra → cada variação casa com sua linha', async () => {
+    const created = await createSizeChart(ctx(), buildSizeChartBody(await template(), baseInput), 'MLB')
+    expect(created.type).toBe('SPECIFIC')
+    expect(created.rows.map((r) => [r.id, r.sizes[0]])).toEqual([[`${created.id}:1`, 'P'], [`${created.id}:2`, 'M'], [`${created.id}:3`, 'G'], [`${created.id}:4`, 'GG']])
+    const read = await getSizeChart(ctx(), created.id, 'MLB')
+    expect(read.rows.map((r) => r.id)).toEqual(created.rows.map((r) => r.id))
+    const found = await searchSizeCharts(ctx(), { domainId: 'MLB-BRAS', siteId: 'MLB', sellerId: '555', attributes: [{ id: 'GENDER', value_name: 'Feminino' }] })
+    expect(found.map((c) => c.id)).toContain(created.id)
+    expect(['P', 'M', 'G', 'GG'].map((sz) => matchSizeChartRow(read.rows, sz)?.id)).toEqual(read.rows.map((r) => r.id))
+  })
+
+  it('ML recusa atributo principal inválido → erro tipado com o código da doc', async () => {
+    const body = buildSizeChartBody(await template(), baseInput)
+    ;(body.main_attribute as { attributes: Array<{ id: string }> }).attributes[0].id = 'BUST_CIRCUMFERENCE_FROM'
+    await expect(createSizeChart(ctx(), body)).rejects.toMatchObject({ kind: 'bad_request' })
   })
 })

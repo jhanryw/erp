@@ -45,6 +45,20 @@ export class FakeMlMarket extends FakeMlApi {
     '5001': { name: 'Tabela Sutias Feminino TEST', type: 'SPECIFIC', gender: 'Feminino', rows: { '5001:1': 'P', '5001:2': 'M', '5001:3': 'G' } },
   }
   chartSearches: Array<Record<string, unknown>> = []
+  chartCreates: Array<Record<string, unknown>> = []
+  chartCounter = 7000
+  /** Ficha da tabela (section=grids) do domínio de teste — formato da doc oficial. */
+  gridTemplate: Array<Record<string, unknown>> = [
+    { id: 'GENDER', name: 'Gênero', value_type: 'string', tags: ['grid_template_required', 'grid_filter', 'fixed', 'required'], values: [{ id: '339665', name: 'Feminino' }] },
+    { id: 'BRAND', name: 'Marca', value_type: 'string', tags: ['grid_filter', 'required'] },
+    { id: 'AGE_GROUP', name: 'Idade', value_type: 'string', tags: ['hidden', 'read_only', 'grid_filter'] },
+    { id: 'SIZE', name: 'Tamanho', value_type: 'string', tags: ['main_attribute_candidate', 'required'] },
+    { id: 'MANUFACTURER_SIZE', name: 'Tamanho da marca', value_type: 'string', tags: ['unique', 'main_attribute_candidate'] },
+    { id: 'BR_SIZE', name: 'BR', value_type: 'number_unit', tags: ['main_attribute_candidate'], default_unit_id: 'BR', units: [{ id: 'BR' }] },
+    { id: 'BUST_CIRCUMFERENCE_FROM', name: 'Busto desde', value_type: 'number_unit', tags: ['BODY_MEASURE', 'required'], default_unit_id: 'cm', units: [{ id: 'cm' }, { id: '"' }] },
+    { id: 'GARMENT_WIDTH_FROM', name: 'Largura da peça desde', value_type: 'number_unit', tags: ['CLOTHING_MEASURE', 'required'], default_unit_id: 'cm', units: [{ id: 'cm' }] },
+    { id: 'FILTRABLE_SIZE', name: 'Tamanho padrão', value_type: 'list', tags: ['hidden', 'required'], values: [{ id: '9001', name: 'P' }, { id: '9002', name: 'M' }, { id: '9003', name: 'G' }, { id: '9004', name: 'GG' }] },
+  ]
   itemCounter = 0
   categoryAttributes: Array<Record<string, unknown>> = [
     { id: 'BRAND', name: 'Marca', value_type: 'string', tags: { required: true } },
@@ -104,6 +118,55 @@ export class FakeMlMarket extends FakeMlApi {
         { component: 'COMBO', attributes: [{ id: 'GENDER', tags: ['grid_template_required', 'grid_filter', 'required'] }] },
         { component: 'GRID_ROW_INPUT', attributes: [{ id: 'SIZE_GRID_ROW_ID', value_type: 'grid_row_id', tags: ['hidden'] }] },
       ] }] }, output: {} })
+    }
+    if (method === 'POST' && path === '/domains/MLB-BRAS/technical_specs' && url.searchParams.get('section') === 'grids') {
+      const sent = ((payload.attributes as Array<{ id: string }>) ?? []).map((a) => a.id)
+      if (!sent.includes('GENDER')) return json(404, { error: 'chart_tech_specs_not_found', message: 'Chart technical specification not found', status: 404 })
+      return json(200, { input: { groups: [{ id: 'SIZE_CHART', section: 'GRIDS', components: [{ component: 'GRID', components: this.gridTemplate.map((a) => ({ component: 'TEXT_INPUT', attributes: [a] })) }] }] }, output: {} })
+    }
+    if (method === 'POST' && path === '/catalog/charts') {
+      this.chartCreates.push(payload)
+      const err = (message: string, code = 'bad_request') => json(400, { error: code, message, status: 400 })
+      const names = (payload.names ?? {}) as Record<string, string>
+      const name = names.MLB ?? ''
+      if (!name || name.length > 60 || /[^\p{L}\p{N} ]/u.test(name)) return err('Chart name must be at most 60 characters and contain only letters, numbers and spaces')
+      if (String(payload.domain_id).includes('-')) return err('Invalid domain_id')
+      const main = ((payload.main_attribute as { attributes?: Array<{ id: string }> })?.attributes ?? [])[0]?.id
+      if (!main) return err('Main attribute for site MLB is missing.', 'main_attribute_missing_error')
+      const def = (id: string) => this.gridTemplate.find((a) => a.id === id)
+      if (!(def(main)?.tags as string[] | undefined)?.includes('main_attribute_candidate')) return json(400, { code: 'invalid_main_attribute_id', message: `Chart main attribute with ID ${main} is invalid.` })
+      const general = (payload.attributes as Array<{ id: string; values: Array<{ name?: string }> }>) ?? []
+      if (!general.some((a) => a.id === 'GENDER')) return err('GENDER is required')
+      if (!general.some((a) => a.id === 'BRAND')) return err('BRAND is required')
+      const measure = payload.measure_type as string | undefined
+      const rows = (payload.rows as Array<{ attributes: Array<{ id: string; values: Array<{ id?: string; name?: string }> }> }>) ?? []
+      const requiredRow = this.gridTemplate.filter((a) => {
+        const t = a.tags as string[]
+        const m = t.includes('BODY_MEASURE') ? 'BODY_MEASURE' : t.includes('CLOTHING_MEASURE') ? 'CLOTHING_MEASURE' : null
+        return t.includes('required') && !t.includes('grid_filter') && !t.includes('grid_template_required') && !t.includes('main_attribute_candidate') && (!m || m === (measure ?? 'BODY_MEASURE'))
+      }).map((a) => a.id as string)
+      for (const r of rows) {
+        const ids = r.attributes.map((a) => a.id)
+        const mainName = r.attributes.find((a) => a.id === main)?.values?.[0]?.name ?? '?'
+        for (const id of ids) {
+          if (!def(id)) return err('Attribute not found in technical spec')
+          const t = def(id)!.tags as string[]
+          if (t.includes('grid_filter')) return json(400, { code: 'invalid_row_attribute', message: `Attribute ${id} found in row ${main} ${mainName} is not valid and should not be present in the chart rows.` })
+        }
+        for (const id of [main, ...requiredRow]) {
+          if (!ids.includes(id)) return json(400, { code: 'required_row_attribute_not_found', message: `Required attribute ${id} was not found in row ${main} ${mainName}.` })
+        }
+      }
+      const id = String(++this.chartCounter)
+      const gender = general.find((a) => a.id === 'GENDER')?.values?.[0]?.name ?? ''
+      const rowMap: Record<string, string> = {}
+      rows.forEach((r, i) => { rowMap[`${id}:${i + 1}`] = r.attributes.find((a) => a.id === main)?.values?.[0]?.name ?? '' })
+      this.sizeCharts[id] = { name, type: 'SPECIFIC', gender, rows: rowMap }
+      return json(201, {
+        id, names, domain_id: payload.domain_id, site_id: 'MLB', type: 'SPECIFIC', seller_id: this.me.id, main_attribute_id: main,
+        attributes: general,
+        rows: rows.map((r, i) => ({ id: `${id}:${i + 1}`, attributes: [{ id: 'SIZE', name: 'Tamanho', values: [{ name: rowMap[`${id}:${i + 1}`] }] }, ...r.attributes] })),
+      })
     }
     if (method === 'POST' && path === '/catalog/charts/search') {
       this.chartSearches.push(payload)
