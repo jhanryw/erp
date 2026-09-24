@@ -159,6 +159,8 @@ export interface PublishVariationInput {
 export interface PublishInput {
   productId: number
   categoryId: string
+  /** Domínio do canal (ML: domain_id do preditor) — guardado p/ tabela de medidas e retry. */
+  domainId?: string | null
   listingTypeId?: string
   /** Nome genérico (ML UP: family_name). Padrão: nome do produto. */
   familyName?: string | null
@@ -201,6 +203,43 @@ function errorText(err: unknown): string {
   if (err instanceof ListingError) return err.message
   if (isMercadoLivreError(err)) return `${err.kind}${err.httpStatus ? ` (${err.httpStatus})` : ''}: ${err.message}`
   return err instanceof Error ? err.message : 'erro inesperado'
+}
+
+/** Etapa em que a tentativa de publicação parou (auditoria + decisão de retry). */
+export type AttemptStage = 'validate' | 'create_rejected' | 'create_unknown' | 'reconcile'
+
+export interface AttemptRecord {
+  at: string
+  stage: AttemptStage
+  error: string
+  price: number | null
+  quantity: number | null
+  category_id: string | null
+}
+
+const MAX_ATTEMPT_HISTORY = 10
+
+/**
+ * Registra a tentativa em metadata (last_attempt + attempts[]) e decide o
+ * estado local: se é CERTO que nada foi criado no canal → 'draft'
+ * (republicável); se é incerto → mantém 'error' (exige reconciliação).
+ */
+async function recordAttempt(
+  repo: ListingsRepo, companyId: number, listingId: number, attempt: AttemptRecord, nothingCreated: boolean,
+): Promise<void> {
+  const row = await repo.get(companyId, listingId)
+  if (!row) return
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const history = Array.isArray(meta.attempts) ? (meta.attempts as AttemptRecord[]) : []
+  await repo.update(companyId, listingId, {
+    ...(nothingCreated && !row.external_listing_id && row.local_status === 'error' ? { local_status: 'draft' as const } : {}),
+    metadata: { ...meta, last_attempt: attempt, attempts: [...history, attempt].slice(-MAX_ATTEMPT_HISTORY) },
+  })
+}
+
+/** Falha no POST /items que garante que o anúncio NÃO foi criado (rejeição explícita do canal). */
+function isDefinitiveRejection(err: unknown): boolean {
+  return isMercadoLivreError(err) && ['bad_request', 'forbidden', 'unauthorized', 'reauth_required', 'not_found'].includes(err.kind)
 }
 
 function channelLog(ctx: Pick<ChannelContext, 'provider' | 'companyId' | 'integrationId'>, event: string, fields: MercadoLivreLogFields = {}): void {
@@ -313,13 +352,26 @@ async function publishOne(
     channelOptions: { listing_type_id: input.listingTypeId ?? 'gold_special', condition: 'new' },
   }
 
+  // Vínculo em 'error' sem id externo = a tentativa anterior PODE ter criado o
+  // anúncio (timeout/5xx no POST). Nunca republica às cegas: reconcilia por SKU
+  // antes (vincula se achar; se não achar, a linha volta a 'draft' e segue).
+  const existing = (await d.repo.listByProduct(session.companyId, product.id))
+    .find((r) => r.product_variation_id === pvid && r.integration_id === ctx.integrationId && r.local_status !== 'closed')
+  if (existing && !existing.external_listing_id && existing.local_status === 'error') {
+    const rec = await reconcileListing(session.companyId, existing.id, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
+    if (rec.outcome === 'attached') {
+      return { productVariationId: pvid, status: 'reconciled', listingId: existing.id, externalListingId: rec.externalListingId!, warnings: [] }
+    }
+    if (rec.outcome !== 'not_found') return fail('needs_reconciliation', rec.message, existing.id)
+  }
+
   const attemptId = randomUUID()
   const begin = await d.repo.begin({
     companyId: session.companyId, integrationId: ctx.integrationId, provider: ctx.provider,
     productId: product.id, productVariationId: pvid, sellerSku: variation.sku, attemptId,
     leaseSeconds: d.leaseSeconds, channelPrice: vInput.channelPrice ?? null,
     metadata: {
-      category_id: input.categoryId, listing_type_id: draft.channelOptions.listing_type_id, family_name: productName,
+      category_id: input.categoryId, domain_id: input.domainId ?? null, listing_type_id: draft.channelOptions.listing_type_id, family_name: productName,
       description: input.description ?? null, attributes, model: ctx.model,
     },
     userId: session.userId,
@@ -344,6 +396,10 @@ async function publishOne(
   if (begin.result !== 'claimed') return fail('channel_error', `Resultado de reserva inesperado: ${begin.result}`)
   const listingId = begin.listing_id
   channelLog(ctx, 'publish_started', { listing_id: listingId, product_variation_id: pvid, quantity })
+  let stage: 'validate' | 'create' = 'validate'
+  const attemptOf = (st: AttemptStage, error: string): AttemptRecord => ({
+    at: new Date().toISOString(), stage: st, error, price, quantity, category_id: input.categoryId,
+  })
   try {
     // Validação no canal ANTES de criar (ML: POST /items/validate). Erro → nada é publicado.
     const validationWarnings: string[] = []
@@ -352,11 +408,14 @@ async function publishOne(
       validationWarnings.push(...v.warnings.map((w) => w.message))
       if (!v.ok) {
         const message = `Reprovado na validação do canal: ${v.errors.map((e) => (e.code ? `${e.code}: ${e.message}` : e.message)).join(' | ')}`
-        await d.repo.fail(session.companyId, listingId, attemptId, message)
+        if (await d.repo.fail(session.companyId, listingId, attemptId, message)) {
+          await recordAttempt(d.repo, session.companyId, listingId, attemptOf('validate', message), true)
+        }
         channelLog(ctx, 'publish_failed', { listing_id: listingId, product_variation_id: pvid, reason: 'validation_failed' })
         return fail('validation_failed', message, listingId)
       }
     }
+    stage = 'create'
     const snap = await adapter.publishListing(draft)
     snap.warnings = [...validationWarnings, ...snap.warnings]
     const warning = snap.warnings.length ? `aviso: ${snap.warnings.join(' | ')}` : null
@@ -370,7 +429,14 @@ async function publishOne(
     return { productVariationId: pvid, status: 'published', listingId, externalListingId: snap.externalListingId, warnings: snap.warnings }
   } catch (err) {
     const message = errorText(err)
-    await d.repo.fail(session.companyId, listingId, attemptId, message)
+    // Antes do POST /items (validação) ou rejeição explícita do POST: nada foi
+    // criado → republicável. Timeout/5xx/rede no POST: pode ter sido criado →
+    // continua 'error' e exige reconciliação por SKU.
+    const nothingCreated = stage === 'validate' || isDefinitiveRejection(err)
+    if (await d.repo.fail(session.companyId, listingId, attemptId, message)) {
+      await recordAttempt(d.repo, session.companyId, listingId,
+        attemptOf(stage === 'validate' ? 'validate' : nothingCreated ? 'create_rejected' : 'create_unknown', message), nothingCreated)
+    }
     channelLog(ctx, 'publish_failed', {
       listing_id: listingId, product_variation_id: pvid,
       http_status: isMercadoLivreError(err) ? err.httpStatus : null,
@@ -514,8 +580,31 @@ export async function reconcileListing(companyId: number, listingId: number, dep
     return { outcome: 'attached', externalListingId: snap.externalListingId, message: `Vinculado ao anúncio ${snap.externalListingId}.` }
   }
   if (candidates.length === 0) {
-    await d.repo.fail(companyId, listingId, null, 'Reconciliação: nenhum anúncio com este SKU no canal — pode publicar novamente.')
-    if (row.local_status === 'error') await d.repo.update(companyId, listingId, { last_error: 'Reconciliação: nenhum anúncio com este SKU no canal — pode publicar novamente.' })
+    // Nada no canal com este SKU: o vínculo volta a ser republicável ('draft')
+    // na MESMA linha (preserva idempotência). Ids externos são limpos; o erro
+    // anterior fica em metadata.last_attempt/attempts para auditoria.
+    const note = 'Reconciliação: nenhum anúncio com este SKU no canal — pode publicar novamente.'
+    if (row.local_status === 'publishing') {
+      const released = await d.repo.fail(companyId, listingId, null, note) // só com lease vencido (fencing)
+      if (!released) throw new ListingError('in_progress', 'Publicação em andamento; aguarde antes de reconciliar.')
+    }
+    const meta = (row.metadata ?? {}) as Record<string, unknown>
+    const history = Array.isArray(meta.attempts) ? (meta.attempts as AttemptRecord[]) : []
+    const rec: AttemptRecord = { at: new Date().toISOString(), stage: 'reconcile', error: note, price: null, quantity: null, category_id: null }
+    await d.repo.update(companyId, listingId, {
+      local_status: 'draft',
+      external_listing_id: null, external_variant_id: null, external_product_id: null, external_group_id: null,
+      external_ids: {}, external_status: null, external_sub_status: null, permalink: null,
+      publish_lease_until: null,
+      last_error: note,
+      metadata: {
+        ...meta,
+        // last_attempt continua sendo a última tentativa de PUBLICAÇÃO (o erro original)
+        last_attempt: meta.last_attempt ?? (row.last_error ? { ...rec, stage: 'create_unknown', error: row.last_error } : undefined),
+        attempts: [...history, rec].slice(-MAX_ATTEMPT_HISTORY),
+        reconcile_candidates: undefined,
+      },
+    })
     channelLog(ctx, 'reconciled', { listing_id: listingId, reason: 'not_found' })
     return { outcome: 'not_found', message: 'Nenhum anúncio com este SKU no canal; a variação pode ser publicada novamente.' }
   }
@@ -546,9 +635,28 @@ export interface ListingView {
   synced_quantity: number | null
   last_synced_at: string | null
   last_error: string | null
+  /** Sem id externo e sem risco de duplicar: UI mostra "Publicar novamente". */
+  can_publish: boolean
+  /** Sem id externo, mas a última tentativa pode ter criado o anúncio: UI mostra "Reconciliar". */
+  needs_reconciliation: boolean
+  /** Última tentativa de publicação (histórico; nunca bloqueia nova tentativa). */
+  last_attempt: { at: string; stage: string; error: string; price: number | null } | null
+  /** Dados usados na última tentativa, para pré-preencher o formulário. */
+  previous_input: {
+    category_id: string | null
+    domain_id: string | null
+    family_name: string | null
+    description: string | null
+    listing_type_id: string | null
+    attributes: ChannelAttributeValue[]
+  } | null
 }
 
 export function toListingView(row: ListingRow): ListingView {
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const la = meta.last_attempt as AttemptRecord | undefined
+  const unlinked = !row.external_listing_id
+  const leaseAlive = row.local_status === 'publishing' && row.publish_lease_until != null && new Date(row.publish_lease_until).getTime() > Date.now()
   return {
     id: row.id,
     product_variation_id: row.product_variation_id,
@@ -565,6 +673,19 @@ export function toListingView(row: ListingRow): ListingView {
     synced_quantity: row.synced_quantity,
     last_synced_at: row.last_synced_at,
     last_error: row.last_error,
+    can_publish: unlinked && row.local_status === 'draft',
+    needs_reconciliation: unlinked && (row.local_status === 'error' || (row.local_status === 'publishing' && !leaseAlive)),
+    last_attempt: la ? { at: la.at, stage: la.stage, error: la.error, price: la.price ?? null } : null,
+    previous_input: meta.category_id
+      ? {
+          category_id: (meta.category_id as string) ?? null,
+          domain_id: (meta.domain_id as string) ?? null,
+          family_name: (meta.family_name as string) ?? null,
+          description: (meta.description as string) ?? null,
+          listing_type_id: (meta.listing_type_id as string) ?? null,
+          attributes: Array.isArray(meta.attributes) ? (meta.attributes as ChannelAttributeValue[]) : [],
+        }
+      : null,
   }
 }
 
@@ -581,11 +702,24 @@ export interface ChannelProductOverview {
     picture_count: number
     picture_problems: string[]
     listing: ListingView | null
+    /** O que mudou desde a última tentativa que falhou (o erro exibido é histórico). */
+    attempt_outdated: string[]
   }>
   product: { id: number; name: string; brand: string | null; model: string | null; is_kit: boolean }
 }
 
 /** Visão do produto para a seção "Canais de venda" (sem nada sensível). */
+function outdatedReasons(listing: ListingRow | undefined, currentPrice: number, info: AvailabilityInfo | undefined): string[] {
+  if (!listing || listing.external_listing_id) return []
+  const la = (listing.metadata as Record<string, unknown> | null)?.last_attempt as AttemptRecord | undefined
+  if (!la) return []
+  const reasons: string[] = []
+  if (la.price != null && Math.abs(Number(la.price) - currentPrice) > 0.009) reasons.push(`preço mudou (${la.price} → ${currentPrice})`)
+  const qty = resolveListingQuantity(info)
+  if (la.quantity != null && la.quantity !== qty) reasons.push(`quantidade mudou (${la.quantity} → ${qty})`)
+  return reasons
+}
+
 export async function getChannelProductOverview(companyId: number, productId: number, deps?: ListingsServiceDeps): Promise<ChannelProductOverview> {
   const d = resolveDeps(deps)
   const product = await d.source.loadProduct(companyId, productId)
@@ -612,6 +746,7 @@ export async function getChannelProductOverview(companyId: number, productId: nu
       picture_count: pics.valid.length,
       picture_problems: pics.invalid.map((i) => i.reason),
       listing: listing ? toListingView(listing) : null,
+      attempt_outdated: outdatedReasons(listing, resolveListingPrice(product, v, listing?.channel_price), info),
     }
   }))
   return { product: { id: product.id, name: product.name, brand: product.brand, model: product.model, is_kit: product.is_kit }, variations }

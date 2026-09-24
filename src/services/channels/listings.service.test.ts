@@ -3,6 +3,8 @@ import {
   ListingError,
   activateListing,
   assertPublishAllowed,
+  getChannelProductOverview,
+  toListingView,
   pauseListing,
   publishListings,
   reconcileListing,
@@ -264,7 +266,7 @@ describe('publicação', () => {
     await repo.begin({ companyId: COMPANY, integrationId, provider: 'mercadolivre', productId: 1, productVariationId: 11, sellerSku: 'SUT-PRETO-M', attemptId: 'a1', leaseSeconds: 10, channelPrice: null, metadata: {}, userId: USER })
     repo.rows[0].publish_lease_until = new Date(Date.now() - 1000).toISOString()
     expect((await reconcileListing(COMPANY, repo.rows[0].id, d)).outcome).toBe('not_found')
-    expect(repo.rows[0].local_status).toBe('error')
+    expect(repo.rows[0].local_status).toBe('draft')
 
     const adapter = d.adapterFor!(channel())
     const draft = { sellerSku: 'SUT-PRETO-M', productName: 'X', title: 'X', description: null, categoryId: 'MLB1234', price: 10, currencyId: 'BRL', quantity: 1, pictureUrls: [JPG], attributes: [{ id: 'BRAND', value_name: 'X' }, { id: 'MODEL', value_name: 'Y' }, { id: 'SIZE', value_name: 'M' }], channelOptions: {} }
@@ -346,13 +348,13 @@ describe('validação prévia no ML (POST /items/validate)', () => {
     expect(repo.rows[0].last_error).toBeNull()
   })
 
-  it('V2. payload inválido (categoria inválida) → validation_failed, vínculo em error, NENHUM POST /items', async () => {
+  it('V2. payload inválido (categoria inválida) → validation_failed, vínculo republicável (draft), NENHUM POST /items', async () => {
     const { results } = await publishListings(session, { ...publishInput(1, [11]), categoryId: 'MLB9999' }, deps())
     expect(results[0]).toMatchObject({ status: 'failed', reason: 'validation_failed' })
     expect((results[0] as { message: string }).message).toMatch(/item\.category_id\.invalid/)
     expect(createCalls()).toHaveLength(0)
     expect(api.items.size).toBe(0)
-    expect(repo.rows[0]).toMatchObject({ local_status: 'error', external_listing_id: null })
+    expect(repo.rows[0]).toMatchObject({ local_status: 'draft', external_listing_id: null })
     expect(repo.rows[0].last_error).toMatch(/Reprovado na validação/)
   })
 
@@ -397,7 +399,7 @@ describe('validação prévia no ML (POST /items/validate)', () => {
     const { results } = await publishListings(session, publishInput(1, [11]), deps())
     expect(results[0]).toMatchObject({ status: 'failed', reason: 'channel_error' })
     expect(createCalls()).toHaveLength(0)
-    expect(repo.rows[0].local_status).toBe('error')
+    expect(repo.rows[0].local_status).toBe('draft') // validação nunca cria nada → republicável
   })
 
   it('V8. kit também passa pela validação e não expõe componentes', async () => {
@@ -406,6 +408,102 @@ describe('validação prévia no ML (POST /items/validate)', () => {
     expect(body.attributes).toContainEqual({ id: 'SELLER_SKU', value_name: 'KIT-3CAL' })
     expect(body.available_quantity).toBe(4)
     expect(JSON.stringify(body)).not.toMatch(/SUT-|component/i)
+  })
+})
+
+describe('retry após falha: estado republicável e reconciliação', () => {
+  const createCalls = () => api.calls.filter((c) => c.method === 'POST' && c.url.endsWith('/items'))
+  const view = () => toListingView(repo.rows[0])
+
+  it('R1. falha antes do POST /items (validate reprova) → reconcile não acha SKU → Publicar novamente na MESMA linha', async () => {
+    const first = await publishListings(session, { ...publishInput(1, [11]), categoryId: 'MLB9999', domainId: 'MLB-BRAS' }, deps())
+    expect(first.results[0]).toMatchObject({ status: 'failed', reason: 'validation_failed' })
+    expect(view()).toMatchObject({ local_status: 'draft', can_publish: true, needs_reconciliation: false })
+    expect(view().last_attempt).toMatchObject({ stage: 'validate', price: 49.9 })
+    expect(view().previous_input).toMatchObject({ category_id: 'MLB9999', domain_id: 'MLB-BRAS' })
+
+    const rec = await reconcileListing(COMPANY, repo.rows[0].id, deps())
+    expect(rec.outcome).toBe('not_found')
+    expect(view()).toMatchObject({ local_status: 'draft', can_publish: true, external_listing_id: null, external_product_id: null, permalink: null })
+    // histórico preservado, sem bloquear
+    expect(view().last_attempt?.error).toMatch(/Reprovado na validação/)
+    expect((repo.rows[0].metadata.attempts as unknown[]).length).toBe(2)
+
+    const again = await publishListings(session, publishInput(1, [11]), deps())
+    expect(again.results[0]).toMatchObject({ status: 'published', listingId: repo.rows[0].id })
+    expect(repo.rows).toHaveLength(1)
+    expect(createCalls()).toHaveLength(1)
+    expect(view()).toMatchObject({ local_status: 'active', can_publish: false, needs_reconciliation: false })
+  })
+
+  it('R2. erro de validação do ML (atributo obrigatório) → republicável direto, sem reconciliar', async () => {
+    api.requiredAttributes = ['BRAND', 'MODEL', 'SIZE', 'SIZE_GRID_ID']
+    const first = await publishListings(session, publishInput(1, [11]), deps())
+    expect(first.results[0]).toMatchObject({ status: 'failed', reason: 'validation_failed' })
+    expect(view()).toMatchObject({ local_status: 'draft', can_publish: true })
+    api.requiredAttributes = ['BRAND', 'MODEL', 'SIZE']
+    const again = await publishListings(session, publishInput(1, [11]), deps())
+    expect(again.results[0].status).toBe('published')
+    expect(repo.rows).toHaveLength(1)
+    expect(api.calls.filter((c) => c.url.includes('/items/search'))).toHaveLength(0) // nada a reconciliar
+  })
+
+  it('R3. POST /items recusado explicitamente (400) → nada criado → republicável', async () => {
+    api.overrides.push({ match: (m, u) => m === 'POST' && u.pathname === '/items', once: true,
+      response: () => new Response(JSON.stringify({ message: 'x', status: 400, cause: [{ type: 'error', code: 'item.price.invalid', message: 'preço mínimo' }] }), { status: 400 }) })
+    await publishListings(session, publishInput(1, [11]), deps())
+    expect(view()).toMatchObject({ local_status: 'draft', can_publish: true })
+    expect(view().last_attempt).toMatchObject({ stage: 'create_rejected' })
+  })
+
+  it('R4. POST /items sem resposta (5xx) → exige reconciliação; republicar reconcilia antes e nunca duplica', async () => {
+    api.overrides.push({ match: (m, u) => m === 'POST' && u.pathname === '/items', once: true, response: () => new Response('{}', { status: 504 }) })
+    await publishListings(session, publishInput(1, [11]), deps())
+    expect(view()).toMatchObject({ local_status: 'error', can_publish: false, needs_reconciliation: true })
+    expect(view().last_attempt).toMatchObject({ stage: 'create_unknown' })
+
+    // o ML tinha criado o item apesar do 504:
+    const adapter = deps().adapterFor!(channel())
+    await adapter.publishListing({ sellerSku: 'SUT-PRETO-M', productName: 'X', title: 'X', description: null, categoryId: 'MLB1234', price: 49.9, currencyId: 'BRL', quantity: 7, pictureUrls: [JPG], attributes: [{ id: 'BRAND', value_name: 'X' }, { id: 'MODEL', value_name: 'Y' }, { id: 'SIZE', value_name: 'M' }], channelOptions: {} })
+    const again = await publishListings(session, publishInput(1, [11]), deps())
+    expect(again.results[0]).toMatchObject({ status: 'reconciled' })
+    expect(api.items.size).toBe(1)
+    expect(view()).toMatchObject({ local_status: 'active' })
+  })
+
+  it('R5. POST /items 5xx e o item NÃO existe → publicar de novo reconcilia (0) e publica na mesma linha', async () => {
+    api.overrides.push({ match: (m, u) => m === 'POST' && u.pathname === '/items', once: true, response: () => new Response('{}', { status: 502 }) })
+    await publishListings(session, publishInput(1, [11]), deps())
+    const again = await publishListings(session, publishInput(1, [11]), deps())
+    expect(again.results[0].status).toBe('published')
+    expect(repo.rows).toHaveLength(1)
+    expect(api.items.size).toBe(1)
+  })
+
+  it('R6. erro obsoleto: overview indica o que mudou desde a tentativa (preço/quantidade)', async () => {
+    await publishListings(session, { ...publishInput(1, [11]), categoryId: 'MLB9999' }, deps())
+    products[0].base_price = 59.9
+    availability.set(11, { sellable_quantity: 3, manual_enabled: true })
+    const ov = await getChannelProductOverview(COMPANY, 1, deps())
+    const v11 = ov.variations.find((v) => v.id === 11)!
+    expect(v11.listing?.last_attempt?.stage).toBe('validate')
+    expect(v11.attempt_outdated).toEqual(['preço mudou (49.9 → 59.9)', 'quantidade mudou (7 → 3)'])
+    expect(ov.variations.find((v) => v.id === 12)!.attempt_outdated).toEqual([])
+  })
+  it('R7. categoria de moda: SIZE_GRID_ID (comum) + SIZE_GRID_ROW_ID (por variação) chegam ao validate e publicam', async () => {
+    api.requireSizeGrid = true
+    const miss = await publishListings(session, publishInput(1, [11]), deps())
+    expect((miss.results[0] as { message: string }).message).toMatch(/missing\.fashion_grid\.grid_id/)
+    expect(toListingView(repo.rows[0]).can_publish).toBe(true)
+    const ok = await publishListings(session, {
+      ...publishInput(1, [11]),
+      commonAttributes: [...attrs, { id: 'SIZE_GRID_ID', value_name: '5001' }],
+      variations: [{ productVariationId: 11, attributes: [{ id: 'SIZE', value_name: 'M' }, { id: 'SIZE_GRID_ROW_ID', value_name: '5001:2' }] }],
+    }, deps())
+    expect(ok.results[0].status).toBe('published')
+    const item = api.item(repo.rows[0].external_listing_id!)!
+    expect(item.attributes).toEqual(expect.arrayContaining([{ id: 'SIZE_GRID_ID', value_name: '5001' }, { id: 'SIZE_GRID_ROW_ID', value_name: '5001:2' }]))
+    expect(repo.rows).toHaveLength(1)
   })
 })
 

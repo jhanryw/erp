@@ -11,7 +11,7 @@ const listings = vi.hoisted(() => ({
   activateListing: vi.fn(),
   reconcileListing: vi.fn(),
 }))
-const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn() }))
+const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn(), searchMercadoLivreSizeCharts: vi.fn(), getMercadoLivreSizeChart: vi.fn() }))
 
 vi.mock('@/lib/supabase/session', async () => {
   const { NextResponse } = await import('next/server')
@@ -37,6 +37,8 @@ import { GET as getListings, POST as publish } from './listings/route'
 import { POST as sync } from './listings/[id]/sync/route'
 import { POST as pause } from './listings/[id]/pause/route'
 import { GET as categoryForm } from '../integrations/mercadolivre/categories/[categoryId]/route'
+import { POST as searchCharts } from '../integrations/mercadolivre/size-charts/search/route'
+import { GET as getChart } from '../integrations/mercadolivre/size-charts/[chartId]/route'
 import { ListingError } from '@/services/channels/listings.service'
 
 const base = 'https://erp.example.com'
@@ -95,5 +97,21 @@ describe('rotas de canais', () => {
     expect(json.channels.mercadolivre).toEqual({ state: 'connected', nickname: 'TESTUSER', site_id: 'MLB', is_test_user: true })
     expect(JSON.stringify(json)).not.toMatch(/token|secret/i)
     expect(listings.getChannelProductOverview).toHaveBeenCalledWith(1, 1)
+  })
+
+  it('tabela de medidas: empresa da sessão, domínio/tabela validados, domain_id repassado à publicação', async () => {
+    ml.searchMercadoLivreSizeCharts.mockResolvedValue({ charts: [{ id: '5001' }], filter_attribute_ids: ['GENDER'] })
+    const ok = await searchCharts(new Request(`${base}/x`, { method: 'POST', body: JSON.stringify({ domain_id: 'MLB-BRAS', attributes: [{ id: 'GENDER', value_name: 'Feminino' }], company_id: 999 }) }))
+    expect(ok.status).toBe(200)
+    expect(ml.searchMercadoLivreSizeCharts).toHaveBeenCalledWith(1, 'MLB-BRAS', [{ id: 'GENDER', value_name: 'Feminino' }])
+    expect((await searchCharts(new Request(`${base}/x`, { method: 'POST', body: JSON.stringify({ domain_id: '../x' }) }))).status).toBe(422)
+    expect((await getChart(new Request(`${base}/x`), { params: { chartId: 'abc' } })).status).toBe(400)
+    ml.getMercadoLivreSizeChart.mockResolvedValue({ id: '5001', rows: [] })
+    expect((await getChart(new Request(`${base}/x`), { params: { chartId: '5001' } })).status).toBe(200)
+    expect(ml.getMercadoLivreSizeChart).toHaveBeenCalledWith(1, '5001')
+
+    listings.publishListings.mockResolvedValue({ channel: { model: 'user_products', accountLabel: 'T', sellerId: '1', isTestAccount: true }, results: [] })
+    await publish(post({ ...body, domain_id: 'MLB-BRAS' }))
+    expect(listings.publishListings.mock.calls[0][1]).toMatchObject({ domainId: 'MLB-BRAS' })
   })
 })

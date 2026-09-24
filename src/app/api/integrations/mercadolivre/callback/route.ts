@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { auditLog } from '@/lib/audit/log'
 import { completeMercadoLivreOAuth } from '@/services/integrations/mercadolivre.service'
 import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
-import { INTEGRATION_PAGE_PATH, requireIntegrationAdmin, safeRedirect } from '../_shared'
+import { integrationPageLocation, requireIntegrationAdmin, safeRedirect } from '../_shared'
 
 /**
  * GET /api/integrations/mercadolivre/callback — redirect_uri FIXA cadastrada
@@ -14,31 +14,31 @@ import { INTEGRATION_PAGE_PATH, requireIntegrationAdmin, safeRedirect } from '..
  *
  * Exige sessão admin: o navegador que volta do Mercado Livre é o mesmo que
  * iniciou o fluxo. NÃO está em PUBLIC_PATHS.
+ *
+ * O destino do redirect vem SEMPRE da origem pública (APP_URL); da
+ * requisição só se leem os parâmetros de query.
  */
 export async function GET(request: Request) {
-  const page = new URL(INTEGRATION_PAGE_PATH, request.url)
   const { user, response } = await requireIntegrationAdmin()
   if (response) {
-    page.searchParams.set('ml', 'error')
-    page.searchParams.set('reason', response.status === 403 ? 'forbidden' : 'session')
-    return safeRedirect(page)
+    return safeRedirect(integrationPageLocation({ ml: 'error', reason: response.status === 403 ? 'forbidden' : 'session' }))
   }
 
   const params = new URL(request.url).searchParams
+  let result: Record<string, string>
   try {
-    const result = await completeMercadoLivreOAuth(
+    const outcome = await completeMercadoLivreOAuth(
       { userId: user.id, companyId: user.company_id },
       { code: params.get('code'), state: params.get('state'), error: params.get('error') },
     )
     auditLog({
-      userId: user.id, userRole: user.role, action: result.reconnected ? 'update' : 'create',
-      resource: 'company_integration', resourceId: result.integrationId,
-      detail: `mercadolivre: conta ${result.sellerId} ${result.reconnected ? 'reconectada' : 'conectada'}`,
+      userId: user.id, userRole: user.role, action: outcome.reconnected ? 'update' : 'create',
+      resource: 'company_integration', resourceId: outcome.integrationId,
+      detail: `mercadolivre: conta ${outcome.sellerId} ${outcome.reconnected ? 'reconectada' : 'conectada'}`,
     })
-    page.searchParams.set('ml', result.reconnected ? 'reconnected' : 'connected')
+    result = { ml: outcome.reconnected ? 'reconnected' : 'connected' }
   } catch (err) {
-    page.searchParams.set('ml', 'error')
-    page.searchParams.set('reason', isMercadoLivreError(err) ? err.kind : 'internal')
+    result = { ml: 'error', reason: isMercadoLivreError(err) ? err.kind : 'internal' }
   }
-  return safeRedirect(page)
+  return safeRedirect(integrationPageLocation(result))
 }

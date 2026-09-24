@@ -13,6 +13,7 @@ export const publishListingsSchema = z.object({
   provider: z.literal('mercadolivre'),
   product_id: z.coerce.number().int().positive(),
   category_id: z.string().trim().regex(/^[A-Z]{3}\d+$/, 'Categoria inválida.'),
+  domain_id: z.string().trim().regex(/^([A-Z]{3}-)?[A-Z0-9_]{2,80}$/, 'Domínio inválido.').nullable().optional(),
   listing_type_id: z.string().trim().max(40).optional(),
   family_name: z.string().trim().max(120).nullable().optional(),
   description: z.string().trim().max(50000).nullable().optional(),

@@ -50,6 +50,7 @@ export async function POST(request: Request) {
       {
         productId: b.product_id,
         categoryId: b.category_id,
+        domainId: b.domain_id ?? null,
         listingTypeId: b.listing_type_id,
         familyName: b.family_name ?? null,
         description: b.description ?? null,

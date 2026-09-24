@@ -148,3 +148,29 @@ Registrar para cada passo: ID do item, user_product_id/family_id, status/sub_sta
 - Sincronização é **manual** nesta fase (sem job/evento de estoque para canais).
 - `updateListing` (título/imagens/atributos) existe no adaptador, mas não tem botão na UI.
 - Produto sem campo de descrição/GTIN no Qarvon: informados no formulário e guardados em `metadata`.
+
+## 13. Retry após falha (estado republicável)
+
+| Onde falhou | Nada criado no ML? | Estado local | Ação na UI |
+|---|---|---|---|
+| validação local / `POST /items/validate` (erro ou 5xx) | sim | `draft` | **Publicar novamente** |
+| `POST /items` recusado (400/401/403/404) | sim | `draft` | **Publicar novamente** |
+| `POST /items` sem resposta (timeout/5xx/rede) | incerto | `error` | **Reconciliar** (e publicar reconcilia antes, nunca duplica) |
+| reconciliação sem anúncio com o SKU | sim | `draft` (ids externos limpos) | **Publicar novamente** |
+
+- A linha nunca é apagada (idempotência); a nova tentativa reaproveita a mesma linha.
+- `metadata.last_attempt` + `metadata.attempts[]` (últimas 10) guardam etapa, erro, preço e quantidade da tentativa — histórico, nunca bloqueia.
+- A UI mostra o erro como **"Tentativa anterior (data)"** e, se preço/quantidade mudaram desde então, avisa que ele pode não se aplicar mais. "Publicar novamente" pré-preenche categoria/atributos da tentativa anterior.
+
+## 14. Tabela de medidas (SIZE_GRID_ID) — dinâmica
+
+Doc ML "Guia de tamanhos" (primeiros passos / gerenciar / validações):
+
+1. A categoria usa tabela quando tem atributo `value_type: grid_id` (SIZE_GRID_ID) e `grid_row_id` (SIZE_GRID_ROW_ID) — detectado pelos tipos, sem lista de categorias; esses atributos saem do formulário digitável.
+2. Filtros da busca = atributos `grid_template_required`/`grid_filter` da ficha técnica do domínio (`GET /domains/{domain_id}/technical_specs`), com os valores preenchidos (ex.: GENDER, BRAND).
+3. `POST /catalog/charts/search` {domain_id sem prefixo do site, site_id, seller_id, attributes} → tabelas BRAND/STANDARD/SPECIFIC da conta.
+4. `GET /catalog/charts/{id}` → linhas; cada variação é casada pela igualdade de tamanho (SIZE/atributo principal), com escolha manual quando não há correspondência única.
+5. Publicação: SIZE_GRID_ID no nível do item e SIZE_GRID_ROW_ID por variação; o `/items/validate` confere (erros `missing/invalid.fashion_grid.*` bloqueiam; SIZE diferente da linha é warning).
+6. `domain_not_active` na busca = domínio não usa tabela → não bloqueia. Nenhuma tabela encontrada → criar a tabela da conta no ML (criação via API `POST /catalog/charts` não implementada nesta fase).
+
+Endpoints: `POST /api/integrations/mercadolivre/size-charts/search`, `GET /api/integrations/mercadolivre/size-charts/{chartId}` (gerente+, empresa da sessão).

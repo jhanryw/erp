@@ -19,6 +19,15 @@ import {
   type CategoryDetails,
 } from '@/lib/integrations/mercadolivre/catalog'
 import { suggestAttributeValues } from '@/lib/integrations/mercadolivre/listingPayload'
+import {
+  detectSizeGrid,
+  getSizeChart,
+  getSizeChartFilterSpec,
+  searchSizeCharts,
+  type SizeChart,
+  type SizeChartSummary,
+  type SizeGridAttributes,
+} from '@/lib/integrations/mercadolivre/sizeCharts'
 import type { ChannelAttributeValue } from '@/lib/channels/types'
 
 export async function resolveMercadoLivreChannel(companyId: number): Promise<ChannelContext> {
@@ -58,14 +67,14 @@ export async function resolveMercadoLivreChannel(companyId: number): Promise<Cha
 }
 
 /** Conta conectada sem chamada externa (para consultas de catálogo). */
-export async function getConnectedMercadoLivreIntegration(companyId: number): Promise<{ integrationId: number; siteId: string }> {
+export async function getConnectedMercadoLivreIntegration(companyId: number): Promise<{ integrationId: number; siteId: string; sellerId: string }> {
   const row = await createSupabaseMercadoLivreRepo().getIntegration(companyId)
   if (!row || row.status === 'inactive' || row.status === 'pending' || !row.external_account_id) {
     throw new ListingError('not_connected', 'Mercado Livre não está conectado nesta empresa.')
   }
   if (row.status === 'needs_reauth') throw new ListingError('needs_reauth', 'A conexão com o Mercado Livre precisa ser reautorizada.')
   const siteId = (((row.settings ?? {}) as { site_id?: string }).site_id ?? 'MLB').toUpperCase()
-  return { integrationId: row.id, siteId }
+  return { integrationId: row.id, siteId, sellerId: row.external_account_id }
 }
 
 // ─── Formulário de publicação (categoria + atributos dinâmicos) ──────────────
@@ -80,6 +89,11 @@ export interface MercadoLivrePublishForm {
     common: ChannelAttributeValue[]
     by_variation: Record<number, ChannelAttributeValue[]>
   }
+  /**
+   * Categoria de moda com tabela de medidas: ids dos atributos de tabela e
+   * de linha (resolvidos pela busca de tabelas, não digitados). null = não usa.
+   */
+  size_grid: SizeGridAttributes | null
 }
 
 /**
@@ -99,8 +113,12 @@ export async function getMercadoLivrePublishForm(
     throw new ListingError('missing_attributes', 'Escolha uma categoria final (folha) que aceite anúncios.')
   }
 
-  const variationAttrs = attributes.filter((a) => a.varies_by_variation)
-  const commonAttrs = attributes.filter((a) => !a.varies_by_variation)
+  // Atributos de tabela de medidas não são digitados: vêm da busca de tabelas.
+  const sizeGrid = detectSizeGrid(attributes)
+  const gridIds = new Set(sizeGrid ? [sizeGrid.grid_attribute_id, sizeGrid.row_attribute_id] : [])
+  const fillable = attributes.filter((a) => !gridIds.has(a.id) && a.value_type !== 'grid_id' && a.value_type !== 'grid_row_id')
+  const variationAttrs = fillable.filter((a) => a.varies_by_variation)
+  const commonAttrs = fillable.filter((a) => !a.varies_by_variation)
   const suggestions: MercadoLivrePublishForm['suggestions'] = { common: [], by_variation: {} }
 
   if (productId) {
@@ -112,7 +130,38 @@ export async function getMercadoLivrePublishForm(
     }
   }
 
-  return { category, common_attributes: commonAttrs, variation_attributes: variationAttrs, suggestions }
+  return { category, common_attributes: commonAttrs, variation_attributes: variationAttrs, suggestions, size_grid: sizeGrid }
+}
+
+// ─── Tabela de medidas (moda) ────────────────────────────────────────────────
+
+/**
+ * Busca tabelas aplicáveis ao domínio com os filtros que a ficha técnica do
+ * domínio exige (grid_template_required/grid_filter), usando os valores que o
+ * usuário preencheu no formulário (ex.: gênero, marca).
+ */
+export async function searchMercadoLivreSizeCharts(
+  companyId: number,
+  domainId: string,
+  attributes: ChannelAttributeValue[],
+): Promise<{ charts: SizeChartSummary[]; filter_attribute_ids: string[] }> {
+  const { integrationId, siteId, sellerId } = await getConnectedMercadoLivreIntegration(companyId)
+  const ctx = { integrationId, companyId }
+  const spec = await getSizeChartFilterSpec(ctx, domainId)
+  const byId = new Map(attributes.map((a) => [a.id.toUpperCase(), a]))
+  const filled = (id: string) => { const a = byId.get(id); return Boolean(a && ((a.value_name ?? '').toString().trim() || (a.value_id ?? '').toString().trim())) }
+  const missing = spec.required.filter((id) => !filled(id))
+  if (missing.length) {
+    throw new ListingError('missing_attributes', `Preencha ${missing.join(', ')} antes de buscar a tabela de medidas.`)
+  }
+  const filters = spec.accepted.filter(filled).map((id) => byId.get(id)!)
+  const charts = await searchSizeCharts(ctx, { domainId, siteId, sellerId, attributes: filters })
+  return { charts, filter_attribute_ids: spec.accepted }
+}
+
+export async function getMercadoLivreSizeChart(companyId: number, chartId: string): Promise<SizeChart> {
+  const { integrationId, siteId } = await getConnectedMercadoLivreIntegration(companyId)
+  return getSizeChart({ integrationId, companyId }, chartId, siteId)
 }
 
 /** Ids obrigatórios da categoria, calculados no SERVIDOR (não confia no cliente). */

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireSession, type SessionUser } from '@/lib/supabase/session'
 import { hasMinRole } from '@/types/roles'
 import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
+import { publicAppUrl } from '@/lib/app/publicOrigin'
 
 /**
  * Conectar/reautorizar/desconectar integração = mesmo nível das demais
@@ -41,9 +42,20 @@ export function errorResponse(err: unknown): NextResponse {
   return NextResponse.json({ error: 'Erro interno.' }, { status: 500 })
 }
 
-/** Redirect que não vaza o callback (com `code`) via Referer. */
-export function safeRedirect(url: URL): NextResponse {
-  const res = NextResponse.redirect(url, { status: 303 })
+/**
+ * URL da tela da integração com o resultado (?ml=…&reason=…), sempre na
+ * origem PÚBLICA do Qarvon (APP_URL) — nunca derivada da requisição, que
+ * atrás do proxy chega como http://<container>:80.
+ */
+export function integrationPageLocation(params: Record<string, string>): string {
+  const query = new URLSearchParams(params).toString()
+  return publicAppUrl(`${INTEGRATION_PAGE_PATH}${query ? `?${query}` : ''}`)
+}
+
+/** Redirect 303 que não vaza o callback (com `code`) via Referer. Aceita Location relativo. */
+export function safeRedirect(location: string): NextResponse {
+  const res = new NextResponse(null, { status: 303 })
+  res.headers.set('Location', location)
   res.headers.set('Referrer-Policy', 'no-referrer')
   res.headers.set('Cache-Control', 'no-store')
   return res
