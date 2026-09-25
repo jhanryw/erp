@@ -10,8 +10,11 @@ const listings = vi.hoisted(() => ({
   pauseListing: vi.fn(),
   activateListing: vi.fn(),
   reconcileListing: vi.fn(),
+  updateListingPrice: vi.fn(),
+  estimateListingOfferFee: vi.fn(),
+  estimateOfferFee: vi.fn(),
 }))
-const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn(), searchMercadoLivreSizeCharts: vi.fn(), getMercadoLivreSizeChart: vi.fn(), getMercadoLivreSizeChartTemplate: vi.fn(), createMercadoLivreSizeChart: vi.fn() }))
+const ml = vi.hoisted(() => ({ requiredAttributeIdsFor: vi.fn(), getMercadoLivrePublishForm: vi.fn(), getConnectedMercadoLivreIntegration: vi.fn(), searchMercadoLivreSizeCharts: vi.fn(), getMercadoLivreSizeChart: vi.fn(), getMercadoLivreSizeChartTemplate: vi.fn(), createMercadoLivreSizeChart: vi.fn(), getMercadoLivreListingTypes: vi.fn() }))
 
 vi.mock('@/lib/supabase/session', async () => {
   const { NextResponse } = await import('next/server')
@@ -50,6 +53,10 @@ import { POST as createChart } from '../integrations/mercadolivre/size-charts/ro
 import { GET as listOrders } from './orders/route'
 import { POST as reprocess } from './orders/[id]/reprocess/route'
 import { ChannelOrderError } from '@/services/channels/channelOrders.service'
+import { POST as setPrice } from './listings/[id]/price/route'
+import { GET as offerFee } from './listings/[id]/fee-estimate/route'
+import { GET as listingTypes } from '../integrations/mercadolivre/listing-types/route'
+import { GET as newOfferFee } from '../integrations/mercadolivre/fee-estimate/route'
 import { ListingError } from '@/services/channels/listings.service'
 
 const base = 'https://erp.example.com'
@@ -169,5 +176,36 @@ describe('rotas de canais', () => {
     session.current = { id: 'u', role: 'usuario', company_id: 1 }
     expect((await listOrders(new NextRequest(`${base}/api/channels/orders`))).status).toBe(403)
     expect((await reprocess(new Request(`${base}/x`, { method: 'POST' }), { params: { id: '5' } })).status).toBe(403)
+  })
+
+  it('Fase 4: preço por oferta (validação, 409 quando o canal não aplica, empresa da sessão), tarifa estimada e tipos', async () => {
+    const req = (b: unknown) => new Request(`${base}/x`, { method: 'POST', body: JSON.stringify(b) })
+    expect((await setPrice(req({ price: 0 }), { params: { id: '5' } })).status).toBe(422)
+    expect((await setPrice(req({ price: 'abc' }), { params: { id: '5' } })).status).toBe(422)
+    listings.updateListingPrice.mockResolvedValue({ result: 'applied', message: null, row: { id: 5, product_id: 1, offer_key: 'gold_pro', external_sub_status: [], metadata: {} } })
+    expect((await setPrice(req({ price: 44.9, company_id: 999 }), { params: { id: '5' } })).status).toBe(200)
+    expect(listings.updateListingPrice).toHaveBeenCalledWith(1, 5, 44.9, 'user-a')
+    listings.updateListingPrice.mockResolvedValue({ result: 'not_applied', message: 'não aplicou', row: { id: 5, product_id: 1, offer_key: 'gold_pro', external_sub_status: [], metadata: {} } })
+    expect((await setPrice(req({ price: 44.9 }), { params: { id: '5' } })).status).toBe(409)
+    listings.updateListingPrice.mockRejectedValue(new ListingError('not_found', 'x'))
+    expect((await setPrice(req({ price: 44.9 }), { params: { id: '6' } })).status).toBe(404)
+
+    listings.estimateListingOfferFee.mockResolvedValue({ sale_fee_amount: 5 })
+    expect((await offerFee(new NextRequest(`${base}/x?price=-1`), { params: { id: '5' } })).status).toBe(400)
+    expect((await offerFee(new NextRequest(`${base}/x?price=39.9`), { params: { id: '5' } })).status).toBe(200)
+    expect(listings.estimateListingOfferFee).toHaveBeenCalledWith(1, 5, 39.9)
+
+    expect((await newOfferFee(new NextRequest(`${base}/x?category_id=MLB1&listing_type_id=gold_pro&price=0`))).status).toBe(400)
+    listings.estimateOfferFee.mockResolvedValue({ sale_fee_amount: 5 })
+    expect((await newOfferFee(new NextRequest(`${base}/x?category_id=MLB1&listing_type_id=gold_pro&price=10`))).status).toBe(200)
+    expect(listings.estimateOfferFee).toHaveBeenCalledWith(1, { price: 10, categoryId: 'MLB1', listingTypeId: 'gold_pro' })
+
+    expect((await listingTypes(new NextRequest(`${base}/x?category_id=../x`))).status).toBe(400)
+    ml.getMercadoLivreListingTypes.mockResolvedValue([{ id: 'gold_pro', name: 'Premium' }])
+    expect((await listingTypes(new NextRequest(`${base}/x?category_id=MLB1234`))).status).toBe(200)
+    expect(ml.getMercadoLivreListingTypes).toHaveBeenCalledWith(1, 'MLB1234')
+
+    session.current = { id: 'u', role: 'usuario', company_id: 1 }
+    expect((await setPrice(req({ price: 44.9 }), { params: { id: '5' } })).status).toBe(403)
   })
 })

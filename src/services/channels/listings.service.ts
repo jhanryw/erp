@@ -35,6 +35,7 @@ import { validatePictureUrls } from '@/lib/integrations/mercadolivre/listingPayl
 import { getVariationAvailability } from '@/services/inventory/availability.service'
 import { listMediaByEntity } from '@/services/media.service'
 import { createMercadoLivreAdapter } from '@/lib/integrations/mercadolivre/adapter'
+import { estimateListingFee, type ListingFeeEstimate } from '@/lib/integrations/mercadolivre/catalog'
 import { resolveMercadoLivreChannel } from './mercadolivreChannel'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
@@ -150,6 +151,10 @@ export interface ListingsServiceDeps {
   resolveChannel?: (companyId: number) => Promise<ChannelContext>
   adapterFor?: (ctx: ChannelContext) => ChannelAdapter
   leaseSeconds?: number
+  /** Tarifa ESTIMADA do canal (pré-venda). Nunca usada no financeiro. */
+  estimateFee?: (ctx: ChannelContext, input: { price: number; categoryId: string; listingTypeId: string }) => Promise<ListingFeeEstimate | null>
+  /** Itens de pedidos importados do produto (métricas por oferta). */
+  loadOrderItems?: (companyId: number, productId: number) => Promise<OfferSaleRow[]>
 }
 
 export interface PublishVariationInput {
@@ -274,6 +279,8 @@ function resolveDeps(deps: ListingsServiceDeps = {}) {
     resolveChannel: deps.resolveChannel ?? defaultResolveChannel,
     adapterFor: deps.adapterFor ?? defaultAdapterFor,
     leaseSeconds: deps.leaseSeconds ?? 120,
+    estimateFee: deps.estimateFee ?? defaultEstimateFee,
+    loadOrderItems: deps.loadOrderItems ?? defaultLoadOrderItems,
   }
 }
 
@@ -508,6 +515,7 @@ export async function syncListing(
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
   const ctx = await d.resolveChannel(companyId)
+  assertPublishAllowed(ctx)
   if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const adapter = d.adapterFor(ctx)
 
@@ -550,10 +558,188 @@ export async function pauseListing(companyId: number, listingId: number, deps?: 
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
   const ctx = await d.resolveChannel(companyId)
+  assertPublishAllowed(ctx)
   const snap = await d.adapterFor(ctx).pauseListing(refOf(row))
   await d.repo.update(companyId, listingId, { ...snapshotPatch(row, snap, 'paused'), last_error: null })
   channelLog(ctx, 'paused', { listing_id: listingId, external_listing_id: row.external_listing_id })
   return (await d.repo.get(companyId, listingId))!
+}
+
+// ─── Preço por oferta (Fase 4) ────────────────────────────────────────────────
+
+export interface PriceHistoryEntry {
+  at: string
+  previous: number | null
+  requested: number
+  result: 'applied' | 'not_applied' | 'failed'
+  channel_price_after: number | null
+  error: string | null
+  user_id: string | null
+}
+
+const MAX_PRICE_HISTORY = 20
+const MAX_OFFER_PRICE = 1_000_000
+
+function pushPriceHistory(row: ListingRow, entry: PriceHistoryEntry): Record<string, unknown> {
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const hist = Array.isArray(meta.price_history) ? (meta.price_history as PriceHistoryEntry[]) : []
+  return { ...meta, price_history: [...hist, entry].slice(-MAX_PRICE_HISTORY) }
+}
+
+/**
+ * Preço próprio de UMA oferta. Não mexe no preço-base do produto, em outras
+ * ofertas, na Nuvemshop nem no PDV. Estado local só vira sucesso depois da
+ * CONFIRMAÇÃO do canal (preço devolvido = preço pedido); caso contrário fica
+ * registrado como falha/não aplicado, com o erro, no histórico da oferta.
+ */
+export async function updateListingPrice(
+  companyId: number,
+  listingId: number,
+  price: number,
+  userId: string | null,
+  deps?: ListingsServiceDeps,
+): Promise<{ row: ListingRow; result: PriceHistoryEntry['result']; message: string | null }> {
+  const d = resolveDeps(deps)
+  const requested = Math.round(Number(price) * 100) / 100
+  if (!Number.isFinite(requested) || requested <= 0 || requested > MAX_OFFER_PRICE || Math.abs(requested - Number(price)) > 0.0001) {
+    throw new ListingError('invalid_price', 'Preço inválido (maior que zero, até 2 casas decimais).')
+  }
+  const row = await loadPublished(d, companyId, listingId)
+  const ctx = await d.resolveChannel(companyId)
+  assertPublishAllowed(ctx)
+  if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
+  const previous = row.channel_price ?? row.last_sent_price
+  const base = { at: new Date().toISOString(), previous: previous == null ? null : Number(previous), requested, user_id: userId }
+
+  let snap: ChannelListingSnapshot
+  try {
+    snap = await d.adapterFor(ctx).updatePrice(refOf(row), requested)
+  } catch (err) {
+    const message = errorText(err)
+    await d.repo.update(companyId, listingId, {
+      last_error: `Preço não atualizado: ${message}`,
+      metadata: pushPriceHistory(row, { ...base, result: 'failed', channel_price_after: row.channel_price, error: message }),
+    })
+    channelLog(ctx, 'sync_failed', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: 'price_failed' })
+    throw err
+  }
+
+  const confirmed = snap.price != null && Math.abs(snap.price - requested) <= 0.009
+  if (!confirmed) {
+    const message = `O canal não aplicou o preço (atual ${snap.price ?? '—'}).${snap.warnings.length ? ` ${snap.warnings.join(' | ')}` : ''}`
+    await d.repo.update(companyId, listingId, {
+      ...snapshotPatch(row, snap),
+      last_sent_price: snap.price ?? row.last_sent_price,
+      last_error: message,
+      metadata: pushPriceHistory(row, { ...base, result: 'not_applied', channel_price_after: row.channel_price, error: message }),
+    })
+    return { row: (await d.repo.get(companyId, listingId))!, result: 'not_applied', message }
+  }
+
+  await d.repo.update(companyId, listingId, {
+    ...snapshotPatch(row, snap),
+    channel_price: requested,
+    last_sent_price: requested,
+    last_synced_at: new Date().toISOString(),
+    last_error: null,
+    metadata: pushPriceHistory(row, { ...base, result: 'applied', channel_price_after: requested, error: null }),
+  })
+  channelLog(ctx, 'synced', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: 'price_updated' })
+  return { row: (await d.repo.get(companyId, listingId))!, result: 'applied', message: null }
+}
+
+/** Tarifa ESTIMADA pré-venda (canal). Só leitura — nada é gravado no financeiro nem no anúncio. */
+export async function estimateOfferFee(
+  companyId: number,
+  input: { price: number; categoryId: string; listingTypeId: string },
+  deps?: ListingsServiceDeps,
+): Promise<ListingFeeEstimate | null> {
+  const d = resolveDeps(deps)
+  if (!(input.price > 0)) throw new ListingError('invalid_price', 'Preço inválido.')
+  const ctx = await d.resolveChannel(companyId)
+  return d.estimateFee(ctx, input)
+}
+
+/** Idem, para uma oferta existente (categoria/tipo da própria oferta; preço informado ou o efetivo). */
+export async function estimateListingOfferFee(
+  companyId: number,
+  listingId: number,
+  price: number | null,
+  deps?: ListingsServiceDeps,
+): Promise<ListingFeeEstimate | null> {
+  const d = resolveDeps(deps)
+  const row = await d.repo.get(companyId, listingId)
+  if (!row) throw new ListingError('not_found', 'Anúncio não encontrado.')
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const categoryId = row.external_category_id ?? (meta.category_id as string | undefined) ?? null
+  const listingTypeId = row.listing_type_id ?? (meta.listing_type_id as string | undefined) ?? null
+  if (!categoryId || !listingTypeId) return null
+  let effective = price
+  if (effective == null) {
+    const product = await d.source.loadProduct(companyId, row.product_id)
+    const variation = product?.variations.find((v) => v.id === row.product_variation_id)
+    if (!product || !variation) throw new ListingError('not_found', 'Produto/variação do anúncio não encontrado.')
+    effective = resolveListingPrice(product, variation, row.channel_price)
+  }
+  return estimateOfferFee(companyId, { price: effective, categoryId, listingTypeId }, deps)
+}
+
+// ─── Métricas por oferta (Fase 4) ─────────────────────────────────────────────
+
+/** Uma linha de item de pedido IMPORTADO (venda ativa) com os totais do pedido. */
+export interface OfferSaleRow {
+  channel_order_id: number
+  channel_listing_id: number | null
+  product_variation_id: number
+  quantity: number
+  unit_price: number
+  sale_fee: number | null
+  order_gross: number | null
+  order_fees: number | null
+  order_shipping: number | null
+  order_other: number | null
+}
+
+export interface OfferMetrics {
+  units: number
+  orders: number
+  gross: number
+  fees: number
+  shipping_and_costs: number
+  net: number
+  avg_ticket: number | null
+}
+
+/**
+ * Agrega por oferta usando SÓ custos reais do pedido: tarifa da linha
+ * (sale_fee) ou, sem ela, a tarifa do pedido rateada pelo bruto; frete e
+ * outros custos rateados pelo bruto. Pedidos cancelados não entram.
+ * Chave null = vendas cuja oferta exata não foi identificada.
+ */
+export function aggregateOfferMetrics(rows: OfferSaleRow[]): Map<number | null, OfferMetrics> {
+  const r2 = (n: number) => Math.round(n * 100) / 100
+  const acc = new Map<number | null, { units: number; orders: Set<number>; gross: number; fees: number; costs: number }>()
+  for (const row of rows) {
+    const lineGross = row.unit_price * row.quantity
+    const share = row.order_gross && row.order_gross > 0 ? lineGross / row.order_gross : 0
+    const fee = row.sale_fee != null ? Number(row.sale_fee) : (row.order_fees ?? 0) * share
+    const costs = ((row.order_shipping ?? 0) + (row.order_other ?? 0)) * share
+    const a = acc.get(row.channel_listing_id) ?? { units: 0, orders: new Set<number>(), gross: 0, fees: 0, costs: 0 }
+    a.units += row.quantity
+    a.orders.add(row.channel_order_id)
+    a.gross += lineGross
+    a.fees += fee
+    a.costs += costs
+    acc.set(row.channel_listing_id, a)
+  }
+  const out = new Map<number | null, OfferMetrics>()
+  for (const [k, a] of acc) {
+    out.set(k, {
+      units: a.units, orders: a.orders.size, gross: r2(a.gross), fees: r2(a.fees), shipping_and_costs: r2(a.costs),
+      net: r2(a.gross - a.fees - a.costs), avg_ticket: a.orders.size ? r2(a.gross / a.orders.size) : null,
+    })
+  }
+  return out
 }
 
 /**
@@ -564,6 +750,7 @@ export async function activateListing(companyId: number, listingId: number, deps
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
   const ctx = await d.resolveChannel(companyId)
+  assertPublishAllowed(ctx)
   const product = await d.source.loadProduct(companyId, row.product_id)
   const variation = product?.variations.find((v) => v.id === row.product_variation_id)
   if (!product || !variation || !product.active || !variation.active) {
@@ -738,6 +925,10 @@ export interface ChannelOfferView extends ListingView {
   effective_price: number
   /** O que mudou desde a última tentativa que falhou (o erro exibido é histórico). */
   attempt_outdated: string[]
+  /** Vendas reais desta oferta (pedidos importados, não cancelados). */
+  metrics: OfferMetrics | null
+  /** Últimas alterações de preço (auditoria). */
+  price_history: PriceHistoryEntry[]
 }
 
 export interface ChannelProductOverview {
@@ -754,6 +945,7 @@ export interface ChannelProductOverview {
     picture_problems: string[]
     /** TODAS as ofertas vivas da variação neste canal (1 variação → N anúncios). */
     listings: ChannelOfferView[]
+    unidentified_offer_metrics: OfferMetrics | null
   }>
   product: { id: number; name: string; brand: string | null; model: string | null; is_kit: boolean }
 }
@@ -774,10 +966,14 @@ export async function getChannelProductOverview(companyId: number, productId: nu
   const d = resolveDeps(deps)
   const product = await d.source.loadProduct(companyId, productId)
   if (!product) throw new ListingError('not_found', 'Produto não encontrado.')
-  const [availability, listings] = await Promise.all([
+  const [availability, listings, saleRows] = await Promise.all([
     d.availability(companyId, product.variations.map((v) => v.id)),
     d.repo.listByProduct(companyId, productId),
+    d.loadOrderItems(companyId, productId).catch(() => [] as OfferSaleRow[]),
   ])
+  const metricsByListing = aggregateOfferMetrics(saleRows)
+  const unidentifiedByVariation = new Map<number, OfferSaleRow[]>()
+  for (const r of saleRows) if (r.channel_listing_id == null) unidentifiedByVariation.set(r.product_variation_id, [...(unidentifiedByVariation.get(r.product_variation_id) ?? []), r])
   const live = listings.filter((l) => l.local_status !== 'closed')
 
   const variations = await Promise.all(product.variations.map(async (v) => {
@@ -788,7 +984,11 @@ export async function getChannelProductOverview(companyId: number, productId: nu
       .sort((a, b) => a.id - b.id)
       .map((l) => {
         const effective = resolveListingPrice(product, v, l.channel_price)
-        return { ...toListingView(l), effective_price: effective, attempt_outdated: outdatedReasons(l, effective, info) }
+        return {
+          ...toListingView(l), effective_price: effective, attempt_outdated: outdatedReasons(l, effective, info),
+          metrics: metricsByListing.get(l.id) ?? null,
+          price_history: (((l.metadata ?? {}) as Record<string, unknown>).price_history as PriceHistoryEntry[] | undefined)?.slice(-5) ?? [],
+        }
       })
     return {
       id: v.id,
@@ -802,6 +1002,8 @@ export async function getChannelProductOverview(companyId: number, productId: nu
       picture_count: pics.valid.length,
       picture_problems: pics.invalid.map((i) => i.reason),
       listings: offers,
+      /** Vendas desta variação sem oferta exata identificada (listing_resolution ambígua). */
+      unidentified_offer_metrics: unidentifiedByVariation.has(v.id) ? aggregateOfferMetrics(unidentifiedByVariation.get(v.id)!).get(null) ?? null : null,
     }
   }))
   return { product: { id: product.id, name: product.name, brand: product.brand, model: product.model, is_kit: product.is_kit }, variations }
@@ -815,6 +1017,29 @@ async function defaultAvailability(companyId: number, variationIds: number[]): P
   const out = new Map<number, AvailabilityInfo>()
   for (const [id, a] of res.data) out.set(id, { sellable_quantity: a.sellable_quantity, manual_enabled: a.manual_enabled })
   return out
+}
+
+async function defaultEstimateFee(ctx: ChannelContext, input: { price: number; categoryId: string; listingTypeId: string }): Promise<ListingFeeEstimate | null> {
+  return estimateListingFee({ integrationId: ctx.integrationId, companyId: ctx.companyId }, ctx.siteId, input)
+}
+
+async function defaultLoadOrderItems(companyId: number, productId: number): Promise<OfferSaleRow[]> {
+  const admin = createAdminClient() as any
+  const { data: vars } = await admin.from('product_variations').select('id, products!inner(company_id)').eq('product_id', productId).eq('products.company_id', companyId)
+  const ids = ((vars ?? []) as Array<{ id: number }>).map((v) => v.id)
+  if (ids.length === 0) return []
+  const { data, error } = await admin.from('channel_order_items')
+    .select('channel_order_id, channel_listing_id, product_variation_id, quantity, unit_price, sale_fee, channel_orders!inner(processing_state, gross_amount, marketplace_fees, shipping_cost_seller, other_costs)')
+    .eq('company_id', companyId).in('product_variation_id', ids).eq('channel_orders.processing_state', 'imported')
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as Array<Record<string, any>>).map((r) => ({
+    channel_order_id: r.channel_order_id, channel_listing_id: r.channel_listing_id, product_variation_id: r.product_variation_id,
+    quantity: Number(r.quantity), unit_price: Number(r.unit_price), sale_fee: r.sale_fee == null ? null : Number(r.sale_fee),
+    order_gross: r.channel_orders?.gross_amount == null ? null : Number(r.channel_orders.gross_amount),
+    order_fees: r.channel_orders?.marketplace_fees == null ? null : Number(r.channel_orders.marketplace_fees),
+    order_shipping: r.channel_orders?.shipping_cost_seller == null ? null : Number(r.channel_orders.shipping_cost_seller),
+    order_other: r.channel_orders?.other_costs == null ? null : Number(r.channel_orders.other_costs),
+  }))
 }
 
 async function defaultResolveChannel(companyId: number): Promise<ChannelContext> {

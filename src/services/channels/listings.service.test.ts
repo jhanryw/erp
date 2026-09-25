@@ -11,6 +11,10 @@ import {
   resolveListingPrice,
   resolveListingQuantity,
   syncListing,
+  updateListingPrice,
+  estimateListingOfferFee,
+  aggregateOfferMetrics,
+  type OfferSaleRow,
   type AvailabilityInfo,
   type BeginResult,
   type ChannelContext,
@@ -25,6 +29,7 @@ import { FakeMlDb, TEST_CONFIG, setTestCipherEnv } from '@/lib/integrations/merc
 import { FakeMlMarket } from '@/lib/integrations/mercadolivre/fakeMlMarket.testutil'
 import type { ChannelListingSnapshot } from '@/lib/channels/types'
 import { createSizeChartForChannel } from './mercadolivreChannel'
+import { estimateListingFee } from '@/lib/integrations/mercadolivre/catalog'
 import { matchSizeChartRow, searchSizeCharts } from '@/lib/integrations/mercadolivre/sizeCharts'
 
 beforeAll(() => setTestCipherEnv())
@@ -648,6 +653,133 @@ describe('1 variação → N ofertas no mesmo canal', () => {
     const v11 = ov.variations.find((v) => v.id === 11)!
     expect(v11.listings.map((l) => [l.offer_key, l.effective_price])).toEqual([['gold_special', 49.9], ['gold_pro', 44.9]])
     expect(v11.price).toBe(49.9)
+  })
+})
+
+describe('Fase 4 — gestão comercial por oferta', () => {
+  const mlDeps = () => ({ config: TEST_CONFIG, store: db.store(), fetchImpl: api.fetch, sleep: async () => {} })
+  const withFees = () => deps({ estimateFee: (ctx, input) => estimateListingFee({ integrationId: ctx.integrationId, companyId: ctx.companyId, deps: mlDeps() }, ctx.siteId, input) })
+  async function twoOffers() {
+    await publishListings(session, publishInput(1, [11]), deps())
+    await publishListings(session, { ...publishInput(1, [11]), listingTypeId: 'gold_pro',
+      variations: [{ productVariationId: 11, channelPrice: 44.9, attributes: [{ id: 'SIZE', value_name: 'M' }] }] }, deps())
+    return { a: repo.rows[0], b: repo.rows[1] }
+  }
+  const itemOf = (row: { external_listing_id: string | null }) => api.item(row.external_listing_id!)!
+
+  it('F1. preço independente: muda só a oferta A (produto, oferta B intactos); só depois da confirmação do canal', async () => {
+    const { a, b } = await twoOffers()
+    const r = await updateListingPrice(COMPANY, a.id, 39.9, USER, deps())
+    expect(r.result).toBe('applied')
+    expect(repo.rows[0]).toMatchObject({ channel_price: 39.9, last_sent_price: 39.9, last_error: null })
+    expect(itemOf(a).price).toBe(39.9)
+    expect(repo.rows[1]).toMatchObject({ channel_price: 44.9, last_sent_price: 44.9 })
+    expect(itemOf(b).price).toBe(44.9)
+    expect(products[0].base_price).toBe(49.9)
+    const hist = (repo.rows[0].metadata.price_history as Array<Record<string, unknown>>)
+    expect(hist).toEqual([expect.objectContaining({ previous: 49.9, requested: 39.9, result: 'applied', channel_price_after: 39.9, error: null, user_id: USER })])
+    // sync posterior mantém o preço da oferta (não volta ao do produto)
+    await syncListing(COMPANY, a.id, deps())
+    expect(itemOf(a).price).toBe(39.9)
+  })
+
+  it('F2. canal não aplica o preço (automação) → não vira sucesso local; histórico e erro registrados', async () => {
+    const { a } = await twoOffers()
+    api.priceAutomation = true
+    const r = await updateListingPrice(COMPANY, a.id, 35, USER, deps())
+    expect(r.result).toBe('not_applied')
+    expect(repo.rows[0].channel_price).toBeNull()
+    expect(repo.rows[0].last_error).toMatch(/não aplicou o preço/)
+    expect((repo.rows[0].metadata.price_history as Array<Record<string, unknown>>).at(-1)).toMatchObject({ result: 'not_applied', requested: 35 })
+  })
+
+  it('F3. erro do canal → propaga; channel_price inalterado; falha no histórico', async () => {
+    const { a } = await twoOffers()
+    api.overrides.push({ match: (m, u) => m === 'PUT' && u.pathname.startsWith('/items/'), once: true, response: () => new Response('{"message":"boom"}', { status: 503 }) })
+    await expect(updateListingPrice(COMPANY, a.id, 41.9, USER, deps())).rejects.toMatchObject({ name: 'MercadoLivreError' })
+    expect(repo.rows[0].channel_price).toBeNull()
+    expect((repo.rows[0].metadata.price_history as Array<Record<string, unknown>>).at(-1)).toMatchObject({ result: 'failed', requested: 41.9 })
+  })
+
+  it('F4. preço inválido é recusado antes de chamar o canal', async () => {
+    const { a } = await twoOffers()
+    const puts = () => api.calls.filter((c) => c.method === 'PUT').length
+    const before = puts()
+    await expect(updateListingPrice(COMPANY, a.id, 0, USER, deps())).rejects.toMatchObject({ code: 'invalid_price' })
+    await expect(updateListingPrice(COMPANY, a.id, 10.123, USER, deps())).rejects.toMatchObject({ code: 'invalid_price' })
+    expect(puts()).toBe(before)
+  })
+
+  it('F5. pausar e reativar uma oferta não afeta a outra', async () => {
+    const { a, b } = await twoOffers()
+    await pauseListing(COMPANY, b.id, deps())
+    expect(repo.rows.map((x) => x.local_status)).toEqual(['active', 'paused'])
+    expect(itemOf(a).status).toBe('active')
+    await activateListing(COMPANY, b.id, deps())
+    expect(repo.rows.map((x) => x.local_status)).toEqual(['active', 'active'])
+    expect(itemOf(b).status).toBe('active')
+  })
+
+  it('F6. estoque compartilhado: nova disponibilidade vai igual para TODAS as ofertas', async () => {
+    const { a, b } = await twoOffers()
+    availability.set(11, { sellable_quantity: 5, manual_enabled: true })
+    for (const row of [a, b]) await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    expect([itemOf(a).available_quantity, itemOf(b).available_quantity]).toEqual([5, 5])
+    expect(repo.rows.map((x) => x.synced_quantity)).toEqual([5, 5])
+  })
+
+  it('F7. tarifa ESTIMADA vem da API por tipo/categoria/preço e não grava nada (nem anúncio, nem financeiro)', async () => {
+    const { a, b } = await twoOffers()
+    const snapshot = JSON.stringify(repo.rows)
+    const estA = await estimateListingOfferFee(COMPANY, a.id, null, withFees())
+    const estB = await estimateListingOfferFee(COMPANY, b.id, 60, withFees())
+    expect(estA).toMatchObject({ listing_type_id: 'gold_special', price: 49.9, sale_fee_amount: 12.24, estimated_net: 37.66, percentage_fee: 12, fixed_fee: 6.25 })
+    expect(estB).toMatchObject({ listing_type_id: 'gold_pro', price: 60, sale_fee_amount: 16.45, financing_add_on_fee: 5 })
+    expect(JSON.stringify(repo.rows)).toBe(snapshot)
+    const call = api.calls.find((c) => c.url.includes('/listing_prices'))!
+    expect(new URL(call.url).searchParams.get('category_id')).toBe('MLB1234')
+  })
+
+  it('F8. conta REAL: edição de preço/pausa bloqueadas (mesma trava da publicação)', async () => {
+    const { a } = await twoOffers()
+    const real = deps({ resolveChannel: async () => ({ ...channel(), isTestAccount: false }) })
+    await expect(updateListingPrice(COMPANY, a.id, 30, USER, real)).rejects.toMatchObject({ code: 'real_account_blocked' })
+    await expect(pauseListing(COMPANY, a.id, real)).rejects.toMatchObject({ code: 'real_account_blocked' })
+    expect(itemOf(a).price).toBe(49.9)
+  })
+
+  it('F9. tenant: outra empresa não edita preço nem estima oferta alheia', async () => {
+    const { a } = await twoOffers()
+    await expect(updateListingPrice(OTHER, a.id, 30, USER, deps())).rejects.toMatchObject({ code: 'not_found' })
+    await expect(estimateListingOfferFee(OTHER, a.id, null, withFees())).rejects.toMatchObject({ code: 'not_found' })
+  })
+
+  it('F10. renomear produto/variação/título e divergir o SKU NÃO quebra sync nem vínculo (ids persistidos)', async () => {
+    const { a } = await twoOffers()
+    products[0].name = 'Nome Totalmente Novo'
+    products[0].variations[0].sku = 'SKU-RENOMEADO'
+    products[0].variations[0].color = 'Grafite'
+    itemOf(a).title = 'Título alterado no ML'
+    availability.set(11, { sellable_quantity: 2, manual_enabled: true })
+    await syncListing(COMPANY, a.id, deps(), { quantityOnly: true })
+    expect(itemOf(a).available_quantity).toBe(2)
+    expect(repo.rows[0]).toMatchObject({ external_listing_id: a.external_listing_id, product_variation_id: 11, seller_sku: 'SUT-PRETO-M' })
+  })
+
+  it('F11. métricas por oferta com custos REAIS; vendas sem oferta identificada ficam à parte', async () => {
+    const { a, b } = await twoOffers()
+    const rows: OfferSaleRow[] = [
+      { channel_order_id: 1, channel_listing_id: a.id, product_variation_id: 11, quantity: 2, unit_price: 39.9, sale_fee: 9.58, order_gross: 79.8, order_fees: 9.58, order_shipping: 6, order_other: 0 },
+      { channel_order_id: 2, channel_listing_id: b.id, product_variation_id: 11, quantity: 1, unit_price: 44.9, sale_fee: null, order_gross: 44.9, order_fees: 7.63, order_shipping: 0, order_other: 0 },
+      { channel_order_id: 3, channel_listing_id: null, product_variation_id: 11, quantity: 1, unit_price: 50, sale_fee: 8.5, order_gross: 50, order_fees: 8.5, order_shipping: 0, order_other: 0 },
+    ]
+    const m = aggregateOfferMetrics(rows)
+    expect(m.get(a.id)).toEqual({ units: 2, orders: 1, gross: 79.8, fees: 9.58, shipping_and_costs: 6, net: 64.22, avg_ticket: 79.8 })
+    expect(m.get(b.id)).toMatchObject({ units: 1, fees: 7.63, net: 37.27 })
+    const ov = await getChannelProductOverview(COMPANY, 1, deps({ loadOrderItems: async () => rows }))
+    const v11 = ov.variations.find((v) => v.id === 11)!
+    expect(v11.listings.map((l) => l.metrics?.units)).toEqual([2, 1])
+    expect(v11.unidentified_offer_metrics).toMatchObject({ units: 1, gross: 50 })
   })
 })
 

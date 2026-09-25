@@ -364,6 +364,55 @@ BEGIN
   PERFORM pg_temp.eq(r->'changed_variation_ids' @> to_jsonb(pg_temp.c('v_n')::int), true, '10. processador devolve variações alteradas');
 END $$;
 
+-- ─── 15. Venda pela oferta A e pela B; kit com 2 ofertas; convergência inversa ───
+DO $$
+DECLARE co bigint; r jsonb; classic bigint; kit_pro bigint; sid int; before_main int; before_a int; before_b int;
+BEGIN
+  SELECT id INTO classic FROM channel_listings WHERE external_listing_id = 'MLB100';
+  before_main := pg_temp.qty(pg_temp.c('v_n')::int, pg_temp.c('main_a')::int);
+  co := pg_temp.upsert(pg_temp.order_json('2000017', 50, 8.5, 0),
+          jsonb_build_array(pg_temp.item_json('MLB100', 'TEST-ML-NORMAL-01', 1, 50, 8.5, pg_temp.c('v_n')::int, classic)));
+  r := public.rpc_import_channel_order(pg_temp.c('a')::int, co, pg_temp.c('ua')::uuid, pg_temp.pay(50, 'credit_card', 'PAY-17'));
+  PERFORM pg_temp.eq(r->>'result', 'imported', '15. venda pela oferta A (Clássico) com a B (Premium) viva');
+  PERFORM pg_temp.eq((SELECT channel_listing_id FROM channel_order_items WHERE channel_order_id = co), classic, '15. pedido aponta para a oferta A');
+  PERFORM pg_temp.eq(pg_temp.qty(pg_temp.c('v_n')::int, pg_temp.c('main_a')::int), before_main - 1, '15. mesma variação baixada UMA vez');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM stock_movements WHERE reference_id = (r->>'sale_id')), 1, '15. uma única movimentação');
+
+  -- kit com 2 ofertas: vende pela Premium do kit
+  INSERT INTO channel_listings (company_id, integration_id, provider, product_id, product_variation_id, seller_sku, external_listing_id, local_status, offer_key, listing_type_id, channel_price)
+  SELECT company_id, integration_id, provider, product_id, product_variation_id, seller_sku, 'MLB201', 'active', 'gold_pro', 'gold_pro', 89.9
+  FROM channel_listings WHERE external_listing_id = 'MLB200' RETURNING id INTO kit_pro;
+  before_a := pg_temp.qty(pg_temp.c('v_ca')::int, pg_temp.c('main_a')::int);
+  before_b := pg_temp.qty(pg_temp.c('v_cb')::int, pg_temp.c('main_a')::int);
+  co := pg_temp.upsert(pg_temp.order_json('2000018', 89.9, 15.28, 0),
+          jsonb_build_array(pg_temp.item_json('MLB201', 'TEST-ML-KIT-01', 1, 89.9, 15.28, pg_temp.c('v_kit')::int, kit_pro)));
+  r := public.rpc_import_channel_order(pg_temp.c('a')::int, co, pg_temp.c('ua')::uuid, pg_temp.pay(89.9, 'credit_card', 'PAY-18'));
+  sid := (r->>'sale_id')::int;
+  PERFORM pg_temp.eq(r->>'result', 'imported', '15. kit vendido pela 2ª oferta');
+  PERFORM pg_temp.eq((SELECT channel_listing_id FROM channel_order_items WHERE channel_order_id = co), kit_pro, '15. pedido do kit aponta para a oferta Premium do kit');
+  PERFORM pg_temp.eq((SELECT count(*)::int || '|' || min(product_variation_id) FROM sale_items WHERE sale_id = sid), '1|' || pg_temp.c('v_kit'), '15. comercialmente 1 KIT');
+  PERFORM pg_temp.eq(pg_temp.qty(pg_temp.c('v_ca')::int, pg_temp.c('main_a')::int), before_a - 1, '15. componente A −1');
+  PERFORM pg_temp.eq(pg_temp.qty(pg_temp.c('v_cb')::int, pg_temp.c('main_a')::int), before_b - 2, '15. componente B −2');
+
+  -- convergência: as 2 ofertas do kit e as 2 da variação normal ficam pendentes de sincronização
+  UPDATE channel_listings SET stock_sync_pending = false;
+  PERFORM public.rpc_process_stock_availability_changes(1000, 'teste-15');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM channel_listings WHERE stock_sync_pending AND product_variation_id IN (pg_temp.c('v_kit')::int, pg_temp.c('v_n')::int)), 4,
+    '15. todas as ofertas (normal e kit) recebem a nova disponibilidade');
+
+  -- cancelamento → estoque volta e as ofertas convergem de novo
+  r := public.rpc_cancel_channel_order(pg_temp.c('a')::int, co, pg_temp.c('ua')::uuid, 'teste');
+  PERFORM pg_temp.eq(r->>'result', 'cancelled', '15. cancelamento do pedido do kit');
+  PERFORM pg_temp.eq(pg_temp.qty(pg_temp.c('v_ca')::int, pg_temp.c('main_a')::int) || '|' || pg_temp.qty(pg_temp.c('v_cb')::int, pg_temp.c('main_a')::int),
+    before_a || '|' || before_b, '15. componentes exatos devolvidos');
+  UPDATE channel_listings SET stock_sync_pending = false;
+  PERFORM public.rpc_process_stock_availability_changes(1000, 'teste-15b');
+  PERFORM pg_temp.eq((SELECT bool_and(stock_sync_pending) FROM channel_listings WHERE product_variation_id = pg_temp.c('v_kit')::int), true,
+    '15. convergência inversa: as 2 ofertas do kit remarcadas após o cancelamento');
+  PERFORM pg_temp.eq(public.rpc_cancel_channel_order(pg_temp.c('a')::int, co, pg_temp.c('ua')::uuid)->>'result', 'already_cancelled', '15. 2º cancelamento é NO-OP');
+  PERFORM pg_temp.eq((SELECT count(*)::int FROM stock_movements WHERE reference_id = sid::text AND movement_type = 'cancel'), 2, '15. devolução registrada uma única vez (2 componentes)');
+END $$;
+
 -- ─── 11. Multi-tenant ──────────────────────────────────────────────────────
 DO $$
 DECLARE ok boolean;

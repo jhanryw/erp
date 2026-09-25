@@ -73,6 +73,12 @@ describe('mapOrderItems — só pelos vínculos da Fase 2', () => {
     expect(mapOrderItems([item({ external_item_id: 'MLB-X', external_user_product_id: 'MLBU1' })], [listing()])[0])
       .toMatchObject({ channel_listing_id: 1, listing_resolution: 'user_product_id' })
   })
+  it('rename: título/nome/SKU do pedido diferentes → vínculo exato pelo item_id continua (SKU só avisa)', () => {
+    const r = mapOrderItems([item({ title: 'Título NOVO no ML', seller_sku: 'SKU-NOVO-DIVERGENTE' })], [listing({ seller_sku: 'TEST-ML-NORMAL-01' })])[0]
+    expect(r).toMatchObject({ channel_listing_id: 1, product_variation_id: 11, listing_resolution: 'exact', mapping_status: 'mapped', title: 'Título NOVO no ML' })
+    expect(r.mapping_note).toMatch(/^aviso/)
+  })
+
   it('kit: vínculo do kit mapeia para a variação do KIT (componentes nunca aparecem)', () => {
     const r = mapOrderItems([item({ external_item_id: 'MLB200', seller_sku: 'TEST-ML-KIT-01' })], [listing({ id: 5, external_listing_id: 'MLB200', seller_sku: 'TEST-ML-KIT-01', product_variation_id: 77 })])
     expect(r[0]).toMatchObject({ mapping_status: 'mapped', product_variation_id: 77 })

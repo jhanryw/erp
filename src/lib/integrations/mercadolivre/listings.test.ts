@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { buildItemBody, normalizeAttributes, parseItem, suggestAttributeValues, validatePictureUrls } from './listingPayload'
-import { clearMercadoLivreCatalogCache, getCategoryAttributes, getCategoryDetails, missingRequiredAttributes, normalizeAttribute, searchCategories, checkConditionalAttributes } from './catalog'
+import { clearMercadoLivreCatalogCache, estimateListingFee, getAvailableListingTypes, parseListingPrices, getCategoryAttributes, getCategoryDetails, missingRequiredAttributes, normalizeAttribute, searchCategories, checkConditionalAttributes } from './catalog'
 import { createMercadoLivreAdapter, listingModelFromTags } from './adapter'
 import { setMercadoLivreLogSink } from './log'
 import { FakeMlDb, TEST_CONFIG, setTestCipherEnv } from './fakeMercadoLivre.testutil'
@@ -248,3 +248,30 @@ describe('MercadoLivreAdapter', () => {
     await expect(adapter().publishListing(draft({ pictureUrls: ['https://cdn.example.com/a.webp'] }))).rejects.toMatchObject({ name: 'MercadoLivreError' })
   })
 })
+
+describe('Fase 4 — tipos de anúncio e tarifa estimada (API)', () => {
+  it('tipos disponíveis vêm da conta + categoria (nada fixo); cache 1 h', async () => {
+    api.availableListingTypes = [{ site_id: 'MLB', id: 'gold_pro', name: 'Premium', remaining_listings: null }, { site_id: 'MLB', id: 'free', name: 'Grátis', remaining_listings: 3 }]
+    const t = await getAvailableListingTypes(ctx(), '555', 'MLB1234')
+    expect(t).toEqual([{ id: 'gold_pro', name: 'Premium', remaining_listings: null }, { id: 'free', name: 'Grátis', remaining_listings: 3 }])
+    const call = api.calls.find((c) => c.url.includes('available_listing_types'))!
+    expect(new URL(call.url).searchParams.get('category_id')).toBe('MLB1234')
+    const before = api.calls.length
+    await getAvailableListingTypes(ctx(), '555', 'MLB1234')
+    expect(api.calls.length).toBe(before)
+  })
+
+  it('tarifa estimada: sale_fee_amount + detalhes; líquido = preço − tarifa', async () => {
+    const e = await estimateListingFee(ctx(), 'MLB', { price: 100, categoryId: 'MLB1234', listingTypeId: 'gold_pro' })
+    expect(e).toMatchObject({ sale_fee_amount: 23.25, percentage_fee: 17, fixed_fee: 6.25, financing_add_on_fee: 5, estimated_net: 76.75, source: 'GET /sites/{site}/listing_prices' })
+  })
+
+  it('parseListingPrices aceita lista ou objeto; tipo ausente → null (sem inventar)', () => {
+    const row = { listing_type_id: 'gold_special', sale_fee_amount: 10, sale_fee_details: { percentage_fee: 10, fixed_fee: 0 } }
+    expect(parseListingPrices([row], 'gold_special', 100)?.estimated_net).toBe(90)
+    expect(parseListingPrices(row, 'gold_special', 100)?.sale_fee_amount).toBe(10)
+    expect(parseListingPrices([row], 'gold_pro', 100)).toBeNull()
+    expect(parseListingPrices(null, 'gold_pro', 100)).toBeNull()
+  })
+})
+

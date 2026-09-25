@@ -206,3 +206,23 @@ preço, status e condições comerciais pertencem a cada anúncio.
 - Fan-out de estoque: todas as ofertas vivas da variação (e dos kits dependentes) recebem a mesma quantidade absoluta.
 - Vínculos existentes preservados: `offer_key` preenchido com o tipo de anúncio da publicação (ou `default`).
 - Política do ML: duas ofertas do MESMO tipo para o mesmo produto podem ser moderadas como duplicadas; Clássico × Premium é o uso previsto.
+
+## 16. Fase 4 — gestão comercial por oferta
+
+Sem migration: tudo sobre `channel_listings` (genérico) + adapter/metadata do ML.
+
+| Recurso | Implementação |
+|---|---|
+| Preço por oferta | `POST /api/channels/listings/{id}/price {price}` → `updateListingPrice`: valida (> 0, 2 casas) → `PUT /items/{id}` → **só com o preço devolvido = pedido** grava `channel_price`/`last_sent_price`; senão `not_applied`/`failed` com erro. Não mexe em preço-base, outras ofertas, Nuvemshop ou PDV. |
+| Histórico de preço | `channel_listings.metadata.price_history` (últimos 20): anterior, pedido, horário, resultado (`applied`/`not_applied`/`failed`), erro do canal, usuário. |
+| Tipos de anúncio | `GET /api/integrations/mercadolivre/listing-types?category_id=` → `GET /users/{seller}/available_listing_types?category_id=` (nada fixo; cache 1 h). |
+| Tarifa estimada | `GET /api/channels/listings/{id}/fee-estimate?price=` e `GET /api/integrations/mercadolivre/fee-estimate?category_id=&listing_type_id=&price=` → `GET /sites/{site}/listing_prices` (`sale_fee_amount`, `percentage_fee`, `fixed_fee`, `financing_add_on_fee`); líquido estimado = preço − tarifa (sem frete). **Só leitura; nunca entra no financeiro** (o financeiro usa a tarifa real do pedido). |
+| Métricas por oferta | overview agrega `channel_order_items` × `channel_orders` importados (não cancelados) por `channel_listing_id`: unidades, pedidos, bruto, tarifa real (linha ou rateio), frete/custos rateados, líquido, ticket médio; vendas com oferta ambígua ficam à parte. |
+| Estoque | continua da variação (camada central); todas as ofertas recebem a mesma quantidade; sem quantidade manual por oferta. |
+| Segurança | toda escrita em anúncio (preço, sync, pausa, reativação, publicação, tabela de medidas) exige usuário TEST salvo `CHANNEL_LISTINGS_ALLOW_REAL_ACCOUNTS=true`. |
+
+UI (Canais de venda): por variação "Estoque disponível no Qarvon"; por oferta
+tipo, preço (próprio ou herdado), quantidade sincronizada, status, tarifa
+estimada sob demanda, vendas reais, última alteração de preço e ações
+**Editar preço · Sincronizar · Pausar/Reativar · Abrir**; "Nova oferta" com
+tipos da API e tarifa estimada ao vivo.

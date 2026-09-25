@@ -47,6 +47,16 @@ export class FakeMlMarket extends FakeMlApi {
   }
   chartSearches: Array<Record<string, unknown>> = []
   chartCreates: Array<Record<string, unknown>> = []
+  /** Tipos disponíveis para a conta/categoria e tabela de tarifas (Fase 4). */
+  availableListingTypes: Array<{ site_id: string; id: string; name: string; remaining_listings: number | null }> = [
+    { site_id: 'MLB', id: 'gold_pro', name: 'Premium', remaining_listings: null },
+    { site_id: 'MLB', id: 'gold_special', name: 'Clássico', remaining_listings: null },
+  ]
+  feeRates: Record<string, { pct: number; fixed: number; financing: number }> = {
+    gold_special: { pct: 12, fixed: 6.25, financing: 0 },
+    gold_pro: { pct: 17, fixed: 6.25, financing: 5 },
+  }
+  feeCalls = 0
   /** Pedidos/envios/custos/faturamento simulados (Fase 3). */
   orders = new Map<string, Record<string, unknown>>()
   shipments = new Map<string, Record<string, unknown>>()
@@ -93,7 +103,7 @@ export class FakeMlMarket extends FakeMlApi {
     const url = new URL(input)
     const method = init?.method ?? 'GET'
     const path = url.pathname
-    const isMarket = /^\/(items|user-products|sites|categories|domains|catalog|orders|shipments|billing)\b/.test(path) || /^\/users\/\d+\/items\/search$/.test(path)
+    const isMarket = /^\/(items|user-products|sites|categories|domains|catalog|orders|shipments|billing)\b/.test(path) || /^\/users\/\d+\/available_listing_types$/.test(path) || /^\/users\/\d+\/items\/search$/.test(path)
     if (!isMarket || this.overrides.some((o) => o.match(method, url))) return this.baseFetch(input, init)
 
     const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]))
@@ -103,6 +113,22 @@ export class FakeMlMarket extends FakeMlApi {
     const token = (headers.authorization ?? '').replace(/^Bearer /, '')
     if (!this.validAccess.has(token)) return json(401, { message: 'invalid access token', status: 401 })
     const payload = body ? JSON.parse(body) as Record<string, unknown> : {}
+
+    // ── tipos de anúncio / custos por vender (Fase 4)
+    if (method === 'GET' && /^\/users\/\d+\/available_listing_types$/.test(path)) {
+      return json(200, { category_id: url.searchParams.get('category_id'), available: this.availableListingTypes })
+    }
+    if (method === 'GET' && path === '/sites/MLB/listing_prices') {
+      const price = Number(url.searchParams.get('price'))
+      const type = url.searchParams.get('listing_type_id')
+      const rows = Object.entries(this.feeRates).map(([id, r]) => ({
+        currency_id: 'BRL', listing_type_id: id, listing_type_name: id === 'gold_pro' ? 'Premium' : 'Clássico', listing_fee_amount: 0,
+        sale_fee_amount: Math.round((price * r.pct / 100 + r.fixed) * 100) / 100,
+        sale_fee_details: { fixed_fee: r.fixed, percentage_fee: r.pct, financing_add_on_fee: r.financing, gross_amount: price * r.pct / 100 },
+      }))
+      this.feeCalls++
+      return json(200, type ? rows.find((x) => x.listing_type_id === type) ?? [] : rows)
+    }
 
     // ── pedidos / envios / faturamento (Fase 3)
     if (method === 'GET') {

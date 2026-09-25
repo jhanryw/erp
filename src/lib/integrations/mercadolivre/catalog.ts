@@ -221,3 +221,85 @@ export function missingRequiredAttributes(
   if (required.has('GTIN') && filled.has('EMPTY_GTIN_REASON')) required.delete('GTIN')
   return [...required].filter((id) => id !== 'SELLER_SKU' && !filled.has(id)).sort()
 }
+
+// ─── Tipos de anúncio e custo estimado (Fase 4) ─────────────────────────────
+//
+// Docs oficiais: "Tipos de publicação" (GET /users/{id}/available_listing_types
+// ?category_id=) e "Custos por vender" (GET /sites/{site}/listing_prices
+// ?price=&category_id=&listing_type_id=). Nada fixo no código: os tipos vêm
+// da conta + categoria; a tarifa estimada vem da API.
+
+export interface AvailableListingType {
+  id: string
+  name: string
+  remaining_listings: number | null
+}
+
+/** Tipos de anúncio que ESTA conta pode usar nesta categoria. Cache 1 h. */
+export async function getAvailableListingTypes(ctx: Ctx, sellerId: string, categoryId: string): Promise<AvailableListingType[]> {
+  return cached(`listing_types:${sellerId}:${categoryId}`, async () => {
+    const res = await mercadoLivreRequest<{ available?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>>({
+      integrationId: ctx.integrationId, companyId: ctx.companyId, method: 'GET',
+      path: `/users/${encodeURIComponent(sellerId)}/available_listing_types`, query: { category_id: categoryId }, deps: ctx.deps,
+    })
+    const list = Array.isArray(res.data) ? res.data : (res.data?.available ?? [])
+    return list
+      .filter((t) => typeof t.id === 'string')
+      .map((t) => ({ id: String(t.id), name: String(t.name ?? t.id), remaining_listings: t.remaining_listings == null ? null : Number(t.remaining_listings) }))
+  })
+}
+
+export interface ListingFeeEstimate {
+  listing_type_id: string
+  listing_type_name: string | null
+  price: number
+  currency_id: string | null
+  /** Tarifa de venda ESTIMADA (não é custo real — o real vem do pedido). */
+  sale_fee_amount: number
+  fixed_fee: number | null
+  percentage_fee: number | null
+  financing_add_on_fee: number | null
+  listing_fee_amount: number | null
+  /** preço − tarifa estimada (frete não incluído). */
+  estimated_net: number
+  source: 'GET /sites/{site}/listing_prices'
+}
+
+export function parseListingPrices(raw: unknown, listingTypeId: string, price: number): ListingFeeEstimate | null {
+  const rows = (Array.isArray(raw) ? raw : raw && typeof raw === 'object' ? [raw] : []) as Array<Record<string, unknown>>
+  const row = rows.find((r) => r.listing_type_id === listingTypeId)
+  if (!row) return null
+  const det = (row.sale_fee_details ?? {}) as Record<string, unknown>
+  const n = (v: unknown) => (v == null || !Number.isFinite(Number(v)) ? null : Number(v))
+  const fee = Math.round((n(row.sale_fee_amount) ?? 0) * 100) / 100
+  return {
+    listing_type_id: listingTypeId,
+    listing_type_name: (row.listing_type_name as string) ?? null,
+    price,
+    currency_id: (row.currency_id as string) ?? null,
+    sale_fee_amount: fee,
+    fixed_fee: n(det.fixed_fee),
+    percentage_fee: n(det.percentage_fee),
+    financing_add_on_fee: n(det.financing_add_on_fee),
+    listing_fee_amount: n(row.listing_fee_amount),
+    estimated_net: Math.round((price - fee) * 100) / 100,
+    source: 'GET /sites/{site}/listing_prices',
+  }
+}
+
+/** Custo ESTIMADO pré-venda para preço × categoria × tipo. Nunca entra no financeiro. */
+export async function estimateListingFee(
+  ctx: Ctx,
+  siteId: string,
+  input: { price: number; categoryId: string; listingTypeId: string },
+): Promise<ListingFeeEstimate | null> {
+  const price = Math.round(input.price * 100) / 100
+  return cached(`fee:${siteId}:${input.categoryId}:${input.listingTypeId}:${price}`, async () => {
+    const res = await mercadoLivreRequest<unknown>({
+      integrationId: ctx.integrationId, companyId: ctx.companyId, method: 'GET',
+      path: `/sites/${encodeURIComponent(siteId)}/listing_prices`,
+      query: { price, category_id: input.categoryId, listing_type_id: input.listingTypeId }, deps: ctx.deps,
+    })
+    return parseListingPrices(res.data, input.listingTypeId, price)
+  })
+}

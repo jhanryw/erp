@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { ExternalLink, Loader2, PauseCircle, PlayCircle, RefreshCw, Search, ShoppingBag, Wrench } from 'lucide-react'
+import { ExternalLink, Loader2, PauseCircle, Pencil, PlayCircle, RefreshCw, Search, ShoppingBag, Wrench } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatCurrency } from '@/lib/utils/currency'
@@ -157,11 +157,21 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
                     <td className="py-2 pr-3 tabular-nums">{v.sellable_quantity}</td>
                     <td className="py-2 pr-3" colSpan={2}>
                       <div className="space-y-2">
+                        <p className="text-xs text-text-muted">
+                          Estoque disponível no Qarvon: <strong className="tabular-nums text-text-primary">{v.sellable_quantity}</strong>
+                          {v.listings.length > 1 && ' · todas as ofertas recebem esta quantidade'}
+                        </p>
                         {v.listings.length === 0 && <span className="text-text-muted">Não publicado</span>}
+                        {v.unidentified_offer_metrics && (
+                          <p className="text-xs text-warning">
+                            {v.unidentified_offer_metrics.units} un vendida(s) sem oferta exata identificada ({formatCurrency(v.unidentified_offer_metrics.gross)}).
+                          </p>
+                        )}
                         {v.listings.map((l) => (
                           <OfferBlock key={l.id} offer={l} busy={busy}
                             canRepublish={!publishing && connected && v.manual_enabled && v.picture_count > 0}
                             onAction={action}
+                            onChanged={load}
                             onRepublish={() => setPublishing({ variationIds: [v.id], retry: l })} />
                         ))}
                         {connected && !publishing && v.manual_enabled && v.picture_count > 0 && (
@@ -192,17 +202,103 @@ export function ChannelListingsPanel({ productId }: { productId: number }) {
   )
 }
 
+interface FeeEstimateView {
+  sale_fee_amount: number
+  estimated_net: number
+  percentage_fee: number | null
+  fixed_fee: number | null
+  financing_add_on_fee: number | null
+  source: string
+}
+
+/** Busca a tarifa estimada (debounce) para um preço digitado. */
+function useFeeEstimate(url: string | null): { estimate: FeeEstimateView | null; loading: boolean } {
+  const [estimate, setEstimate] = useState<FeeEstimateView | null>(null)
+  const [loading, setLoading] = useState(false)
+  useEffect(() => {
+    if (!url) { setEstimate(null); return }
+    let alive = true
+    setLoading(true)
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(url)
+        const json = await res.json()
+        if (alive) setEstimate(res.ok ? json.estimate ?? null : null)
+      } catch {
+        if (alive) setEstimate(null)
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }, 400)
+    return () => { alive = false; clearTimeout(t) }
+  }, [url])
+  return { estimate, loading }
+}
+
+/** Preço próprio da oferta: só atualiza o Qarvon depois da confirmação do canal. */
+function PriceEditor({ offer, onClose, onSaved }: { offer: ChannelOfferView; onClose: () => void; onSaved: () => void }) {
+  const [value, setValue] = useState(String(offer.effective_price).replace('.', ','))
+  const [saving, setSaving] = useState(false)
+  const price = Number(value.replace(/\./g, '').replace(',', '.'))
+  const valid = Number.isFinite(price) && price > 0 && Math.round(price * 100) === price * 100
+  const { estimate, loading } = useFeeEstimate(valid ? `/api/channels/listings/${offer.id}/fee-estimate?price=${price}` : null)
+  async function save() {
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/channels/listings/${offer.id}/price`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ price }),
+      })
+      const json = await res.json()
+      if (res.ok) { toast.success('Preço aplicado no Mercado Livre.'); onSaved() }
+      else { toast.error('Preço não aplicado', { description: json.message ?? json.error }); onSaved() }
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="mt-1 space-y-1 rounded-md bg-bg-overlay p-2 text-xs">
+      <label className="flex items-center gap-2">Preço desta oferta (R$)
+        <input className="input-base h-8 w-28 text-sm" inputMode="decimal" value={value} onChange={(e) => setValue(e.target.value)} aria-label="Preço da oferta" />
+      </label>
+      <p className="text-text-muted">
+        {!valid ? 'Informe um preço válido.' : loading ? 'Calculando tarifa estimada…' : estimate
+          ? `Tarifa estimada ${formatCurrency(estimate.sale_fee_amount)}${estimate.percentage_fee != null ? ` (${estimate.percentage_fee}%` : ''}${estimate.fixed_fee ? ` + fixo ${formatCurrency(estimate.fixed_fee)}` : ''}${estimate.percentage_fee != null ? ')' : ''} · líquido estimado ${formatCurrency(estimate.estimated_net)} (sem frete). Estimativa — o financeiro usa a tarifa real do pedido.`
+          : 'Tarifa estimada indisponível para esta oferta.'}
+      </p>
+      <p className="text-text-muted">Altera só esta oferta: preço do produto, outras ofertas, Nuvemshop e PDV não mudam.</p>
+      <div className="flex gap-1">
+        <Button size="sm" onClick={save} loading={saving} disabled={!valid}>Aplicar no Mercado Livre</Button>
+        <Button size="sm" variant="secondary" onClick={onClose} disabled={saving}>Cancelar</Button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Uma oferta (anúncio) da variação ────────────────────────────────────────
 
 const LISTING_TYPE_LABEL: Record<string, string> = { gold_special: 'Clássico', gold_pro: 'Premium' }
 
-function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish }: {
+function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish, onChanged }: {
   offer: ChannelOfferView
   busy: string | null
   canRepublish: boolean
   onAction: (l: ListingView, kind: 'sync' | 'pause' | 'activate' | 'reconcile') => void
   onRepublish: () => void
+  onChanged: () => void
 }) {
+  const [editing, setEditing] = useState(false)
+  const [estimate, setEstimate] = useState<FeeEstimateView | null | 'loading'>(null)
+  async function loadEstimate() {
+    setEstimate('loading')
+    try {
+      const res = await fetch(`/api/channels/listings/${l.id}/fee-estimate`)
+      const json = await res.json()
+      setEstimate(res.ok ? json.estimate ?? null : null)
+      if (!res.ok) toast.error('Tarifa estimada indisponível', { description: json.error })
+    } catch {
+      setEstimate(null)
+    }
+  }
   const st = LOCAL_STATUS[l.local_status] ?? LOCAL_STATUS.draft
   const typeLabel = l.listing_type_id ? (LISTING_TYPE_LABEL[l.listing_type_id] ?? l.listing_type_id) : null
   return (
@@ -211,8 +307,38 @@ function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish }: {
         <Badge variant={st.variant}>{st.label}</Badge>
         {typeLabel && <span className="text-xs font-medium">{typeLabel}</span>}
         {l.offer_key !== l.listing_type_id && <span className="font-mono text-xs text-text-muted">{l.offer_key}</span>}
-        <span className="text-xs tabular-nums">{formatCurrency(l.effective_price)}{l.channel_price != null ? ' (preço do canal)' : ''}</span>
+        <span className="text-xs tabular-nums">{formatCurrency(l.effective_price)}{l.channel_price != null ? ' (preço da oferta)' : ' (herda o preço do Qarvon)'}</span>
       </div>
+      {l.external_listing_id && (
+        <p className="text-xs text-text-muted">
+          Quantidade sincronizada: <span className="tabular-nums">{l.synced_quantity ?? '—'}</span>
+          {' · '}
+          {estimate === null && <button type="button" className="text-brand hover:underline" onClick={loadEstimate}>ver tarifa estimada</button>}
+          {estimate === 'loading' && 'calculando tarifa…'}
+          {estimate && estimate !== 'loading' && (
+            <span title={`Estimativa pré-venda (${estimate.source}). A venda usa a tarifa real do pedido.`}>
+              tarifa estimada {formatCurrency(estimate.sale_fee_amount)} · líquido estimado {formatCurrency(estimate.estimated_net)} (sem frete)
+            </span>
+          )}
+        </p>
+      )}
+      {l.metrics && (
+        <p className="text-xs text-text-secondary">
+          Vendas reais: {l.metrics.units} un em {l.metrics.orders} pedido(s) · bruto {formatCurrency(l.metrics.gross)} · tarifa {formatCurrency(l.metrics.fees)}
+          {' '}· frete/custos {formatCurrency(l.metrics.shipping_and_costs)} · líquido {formatCurrency(l.metrics.net)}
+          {l.metrics.avg_ticket != null && ` · ticket médio ${formatCurrency(l.metrics.avg_ticket)}`}
+        </p>
+      )}
+      {l.price_history.length > 0 && (() => {
+        const h = l.price_history[l.price_history.length - 1]
+        return (
+          <p className="text-xs text-text-muted">
+            Última alteração de preço ({fmtDate(h.at)}): {h.previous != null ? formatCurrency(h.previous) : '—'} → {formatCurrency(h.requested)}
+            {' '}— {h.result === 'applied' ? 'aplicado no canal' : h.result === 'not_applied' ? 'não aplicado pelo canal' : 'falhou'}
+          </p>
+        )
+      })()}
+      {editing && <PriceEditor offer={l} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged() }} />}
       {l.external_status && (
         <p className="text-xs text-text-muted">ML: {l.external_status}{l.external_sub_status.length ? ` (${l.external_sub_status.join(', ')})` : ''}</p>
       )}
@@ -235,6 +361,9 @@ function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish }: {
       <div className="mt-1 flex flex-wrap gap-1">
         {l.external_listing_id ? (
           <>
+            <Button size="sm" variant="secondary" disabled={busy !== null || editing} onClick={() => setEditing(true)}>
+              <Pencil className="h-3.5 w-3.5" /> Editar preço
+            </Button>
             <Button size="sm" variant="secondary" disabled={busy !== null} loading={busy === `${l.id}:sync`} onClick={() => onAction(l, 'sync')}>
               <RefreshCw className="h-3.5 w-3.5" /> Sincronizar
             </Button>
@@ -326,13 +455,20 @@ function PublishFlow({ overview, candidates, retryOffer, onCancel, onDone }: {
   const [prices, setPrices] = useState<Record<number, string>>({})
   const [familyName, setFamilyName] = useState(previous?.family_name ?? overview.product.name)
   const [description, setDescription] = useState(previous?.description ?? '')
-  const [listingType, setListingType] = useState(retryOffer?.listing_type_id ?? previous?.listing_type_id ?? 'gold_special')
+  const [listingType, setListingType] = useState(retryOffer?.listing_type_id ?? previous?.listing_type_id ?? '')
+  // Tipos de anúncio disponíveis para a conta nesta categoria (API — sem lista fixa).
+  const [listingTypes, setListingTypes] = useState<Array<{ id: string; name: string }> | null>(null)
   // Identificador da oferta dentro da variação (vazio = o tipo de anúncio).
   const [offerKey, setOfferKey] = useState(retryOffer && retryOffer.offer_key !== retryOffer.listing_type_id ? retryOffer.offer_key : '')
   const effectiveOfferKey = (offerKey.trim().toLowerCase() || listingType).replace(/[^a-z0-9_-]+/g, '-')
   const offerTaken = (v: ChannelProductOverview['variations'][number]) =>
     v.listings.some((l) => l.offer_key === effectiveOfferKey && (l.external_listing_id != null || !l.can_publish) && l.id !== retryOffer?.id)
   const [submitting, setSubmitting] = useState(false)
+  // Tarifa estimada da nova oferta (preço da 1ª variação selecionada).
+  const firstSelected = candidates.find((v) => selected.has(v.id))
+  const estimatePrice = firstSelected ? (prices[firstSelected.id] ? Number(prices[firstSelected.id].replace(',', '.')) : firstSelected.price) : null
+  const { estimate: feeEstimate } = useFeeEstimate(category && listingType && estimatePrice && estimatePrice > 0
+    ? `/api/integrations/mercadolivre/fee-estimate?category_id=${category.category_id}&listing_type_id=${listingType}&price=${estimatePrice}` : null)
   // Tabela de medidas (categorias de moda)
   const [charts, setCharts] = useState<SizeChartSummary[] | null>(null)
   const [chart, setChart] = useState<SizeChart | null>(null)
@@ -365,6 +501,15 @@ function PublishFlow({ overview, candidates, retryOffer, onCancel, onDone }: {
       if (!res.ok) { toast.error(json.error); setCategory(null); return }
       const f = json as MercadoLivrePublishForm
       setForm(f)
+      fetch(`/api/integrations/mercadolivre/listing-types?category_id=${s.category_id}`)
+        .then((r) => r.json().then((j) => ({ ok: r.ok, j })))
+        .then(({ ok, j }) => {
+          const types = ok ? (j.listing_types ?? []) as Array<{ id: string; name: string }> : []
+          setListingTypes(types)
+          setListingType((cur) => (cur && types.some((t) => t.id === cur) ? cur : types[0]?.id ?? cur))
+          if (!ok) toast.error('Tipos de anúncio indisponíveis', { description: j.error })
+        })
+        .catch(() => setListingTypes([]))
       setCategory((cur) => cur && cur.category_id === s.category_id ? { ...cur, category_name: f.category.name || cur.category_name } : cur)
       setCharts(null); setChart(null); setRowByVariation({}); setGridInactive(false)
       const isCommon = (id: string) => f.common_attributes.some((d) => d.id === id)
@@ -536,10 +681,13 @@ function PublishFlow({ overview, candidates, retryOffer, onCancel, onDone }: {
                 <input className="input-base mt-0.5 h-9 text-sm" maxLength={form.category.max_title_length} value={familyName} onChange={(e) => setFamilyName(e.target.value)} />
               </label>
               <label className="block text-xs text-text-muted">Tipo de anúncio
-                <select className="input-base mt-0.5 h-9 text-sm" value={listingType} disabled={retryOffer != null} onChange={(e) => setListingType(e.target.value)}>
-                  <option value="gold_special">Clássico (gold_special)</option>
-                  <option value="gold_pro">Premium (gold_pro)</option>
+                <select className="input-base mt-0.5 h-9 text-sm" value={listingType} disabled={retryOffer != null || !listingTypes?.length} onChange={(e) => setListingType(e.target.value)}>
+                  {!listingTypes && <option value={listingType}>{listingType || 'carregando…'}</option>}
+                  {listingTypes?.length === 0 && <option value="">nenhum tipo disponível para a conta</option>}
+                  {listingTypes?.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.id})</option>)}
+                  {retryOffer && listingTypes && !listingTypes.some((t) => t.id === listingType) && <option value={listingType}>{listingType}</option>}
                 </select>
+                {feeEstimate && <span>Tarifa estimada {formatCurrency(feeEstimate.sale_fee_amount)} · líquido estimado {formatCurrency(feeEstimate.estimated_net)} (preço {formatCurrency(estimatePrice!)}, sem frete)</span>}
               </label>
               <label className="block text-xs text-text-muted">Identificador da oferta (opcional)
                 <input className="input-base mt-0.5 h-9 text-sm" placeholder={listingType} maxLength={60} value={offerKey}
@@ -642,7 +790,7 @@ function PublishFlow({ overview, candidates, retryOffer, onCancel, onDone }: {
 
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={onCancel} disabled={submitting}>Cancelar</Button>
-            <Button onClick={submit} loading={submitting} disabled={selected.size === 0 || !familyName.trim() || gridMissing.length > 0}>Publicar no Mercado Livre</Button>
+            <Button onClick={submit} loading={submitting} disabled={selected.size === 0 || !familyName.trim() || !listingType || gridMissing.length > 0}>Publicar no Mercado Livre</Button>
           </div>
           {gridMissing.length > 0 && (
             <p className="text-right text-xs text-warning">

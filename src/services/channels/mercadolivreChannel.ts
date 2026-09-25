@@ -13,6 +13,8 @@ import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
 import { createSupabaseMercadoLivreRepo } from '@/services/integrations/mercadolivre.service'
 import { CURRENCY_BY_SITE, ListingError, assertPublishAllowed, createSupabaseListingSource, type ChannelContext } from './listings.service'
 import {
+  getAvailableListingTypes,
+  type AvailableListingType,
   checkConditionalAttributes,
   getCategoryAttributes,
   getCategoryDetails,
@@ -260,4 +262,10 @@ export async function createSizeChartForChannel(
   const created = await createSizeChart(ctx, body, channel.siteId)
   // A resposta do POST já traz as linhas; se vier sem, lê a tabela criada.
   return created.rows.length ? created : getSizeChart(ctx, created.id, channel.siteId)
+}
+
+/** Tipos de anúncio que a conta conectada pode usar na categoria (API, sem lista fixa). */
+export async function getMercadoLivreListingTypes(companyId: number, categoryId: string): Promise<AvailableListingType[]> {
+  const { integrationId, sellerId } = await getConnectedMercadoLivreIntegration(companyId)
+  return getAvailableListingTypes({ integrationId, companyId }, sellerId, categoryId)
 }
