@@ -33,7 +33,7 @@ import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
 import { logMercadoLivre, type MercadoLivreEvent, type MercadoLivreLogFields } from '@/lib/integrations/mercadolivre/log'
 import { validatePictureUrls } from '@/lib/integrations/mercadolivre/listingPayload'
 import { getVariationAvailability } from '@/services/inventory/availability.service'
-import { listMediaByEntity } from '@/services/media.service'
+import { loadVariationListingPictureUrls } from '@/services/catalog/productPictures'
 import { createMercadoLivreAdapter } from '@/lib/integrations/mercadolivre/adapter'
 import { estimateListingFee, type ListingFeeEstimate } from '@/lib/integrations/mercadolivre/catalog'
 import { resolveMercadoLivreChannel } from './mercadolivreChannel'
@@ -1263,20 +1263,10 @@ export function createSupabaseListingSource(): ListingSourceLoader {
       }
     },
     async loadPictures(companyId, productId, variationId) {
-      const pick = (items: Array<{ url: string; visibility: string; active: boolean; url_expires_at: string | null; role: string }>) =>
-        items.filter((m) => m.visibility === 'public' && m.active && !m.url_expires_at)
-          .sort((a, b) => (a.role === 'primary' ? -1 : 0) - (b.role === 'primary' ? -1 : 0))
-          .map((m) => m.url)
-      const [vMedia, pMedia] = await Promise.all([
-        listMediaByEntity('product_variation', String(variationId), companyId),
-        listMediaByEntity('product', String(productId), companyId),
-      ])
-      const urls = [...(vMedia.ok ? pick(vMedia.data) : []), ...(pMedia.ok ? pick(pMedia.data) : [])]
-      if (urls.length === 0) {
+      return loadVariationListingPictureUrls(companyId, productId, variationId, async () => {
         const { data } = await admin.from('products').select('photo_url').eq('id', productId).eq('company_id', companyId).maybeSingle()
-        if (data?.photo_url) urls.push(data.photo_url)
-      }
-      return [...new Set(urls)]
+        return data?.photo_url ?? null
+      })
     },
   }
 }

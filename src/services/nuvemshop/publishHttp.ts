@@ -11,6 +11,9 @@ const STATUS_BY_CODE: Record<NonNullable<PublishResult['code']>, number> = {
   remote_error:           502,
   mapping_persist_failed: 500,
   db_error:               500,
+  no_images:              422,
+  invalid_price:          422,
+  publish_in_progress:    409,
 }
 
 export function isPublishOk(result: PublishResult): boolean {

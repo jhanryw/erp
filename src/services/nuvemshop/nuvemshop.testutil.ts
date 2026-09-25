@@ -12,6 +12,7 @@ type Row = Record<string, any>
 export type NsFakeTables = Record<string, Row[]>
 
 const RELATIONS: Record<string, Record<string, { table: string; fk: string }>> = {
+  media_usages:       { media: { table: 'media', fk: 'media_id' } },
   product_variations: { products: { table: 'products', fk: 'product_id' } },
   stock_balances:     { stock_locations: { table: 'stock_locations', fk: 'stock_location_id' } },
   product_variation_attributes: {
@@ -161,7 +162,15 @@ export function createNuvemshopFakeDb(tables: NsFakeTables, options: NsFakeDbOpt
       : { data: null, error: { code: 'PGRST202', message: `Could not find the function public.${name}` } }
   }
 
-  return { from, calls, rpc }
+  // Supabase Storage: só o necessário para resolveMediaUrl (bucket público).
+  const storage = {
+    from: (bucket: string) => ({
+      getPublicUrl: (key: string) => ({ data: { publicUrl: `https://storage.test/storage/v1/object/public/${bucket}/${key}` } }),
+      createSignedUrl: async (key: string) => ({ data: { signedUrl: `https://storage.test/storage/v1/object/sign/${bucket}/${key}?token=x` }, error: null }),
+    }),
+  }
+
+  return { from, calls, rpc, storage }
 }
 
 // ─── API Nuvemshop fake ───────────────────────────────────────────────────────
@@ -174,9 +183,21 @@ export function createFakeNuvemshopApi() {
   let nextId = 5000
   const stores = new Map<string, Map<string, NuvemshopProductResponse>>()
   const stock = new Map<string, number>() // `${store}:${product}:${variant}` → qty
-  const calls = { create: 0, stockPuts: [] as Array<{ storeId: string; productId: string; variantId: string; qty: number }> }
+  const calls = {
+    create: 0,
+    createPayloads: [] as NuvemshopProductFullPayload[],
+    addedImages: [] as Array<{ productId: string; src: string; position?: number }>,
+    stockPuts: [] as Array<{ storeId: string; productId: string; variantId: string; qty: number }>,
+  }
   /** Se true, a criação devolve as variantes em ordem invertida. */
-  const options = { reverseVariants: false, duplicateRemoteSku: false }
+  const options = {
+    reverseVariants: false,
+    duplicateRemoteSku: false,
+    /** Quantas imagens do POST /products a loja "aceita" (simula recusa parcial). */
+    acceptInitialImages: undefined as number | undefined,
+    /** Posições cuja inclusão posterior falha. */
+    failAddImagePositions: [] as number[],
+  }
 
   const store = (creds?: NuvemshopCredentials) => {
     const id = creds?.storeId ?? 'env'
@@ -203,9 +224,20 @@ export function createFakeNuvemshopApi() {
       let variants = payload.variants.map((v) => ({ id: nextId++, sku: v.sku ?? null, price: v.price.toFixed(2), stock: v.stock }))
       if (options.duplicateRemoteSku && variants.length > 1) variants[1].sku = variants[0].sku
       if (options.reverseVariants) variants = [...variants].reverse()
-      const product = { id, name: { pt: payload.name }, variants }
+      const images = (payload.images ?? []).slice(0, options.acceptInitialImages ?? Infinity).map((img, i) => ({ id: nextId++, src: img.src, position: img.position ?? i + 1 }))
+      calls.createPayloads.push(JSON.parse(JSON.stringify(payload)))
+      const product = { id, name: { pt: payload.name }, variants, images }
       store(creds).set(String(id), product)
       return JSON.parse(JSON.stringify(product))
+    },
+    async addNuvemshopProductImage(productId: string, image: { src: string; position?: number }, creds?: NuvemshopCredentials) {
+      const p = store(creds).get(String(productId))
+      if (!p) throw new FakeNotFound('Nuvemshop addProductImage 404')
+      if (image.position != null && options.failAddImagePositions.includes(image.position)) throw new Error(`Nuvemshop addProductImage 422: imagem ${image.position} inacessível`)
+      calls.addedImages.push({ productId: String(productId), ...image })
+      const img = { id: nextId++, src: image.src, position: image.position }
+      ;(p.images ??= []).push(img)
+      return img
     },
     async getNuvemshopProduct(id: string, creds?: NuvemshopCredentials) {
       const p = store(creds).get(String(id))
@@ -253,8 +285,37 @@ export function baseTables(): NsFakeTables {
     ],
     produto_map: [],
     nuvemshop_sync_logs: [],
+    media: [
+      mediaRow(1, 1, 'p10-main', 'jpg'),
+      mediaRow(2, 1, 'p10-gal', 'png'),
+      mediaRow(3, 1, 'p11-main', 'jpg'),
+      mediaRow(4, 2, 'p20-main', 'jpg'),
+    ],
+    media_usages: [
+      usageRow(1, 1, 1, 'product', '10', 'primary', 0),
+      usageRow(2, 2, 1, 'product', '10', 'gallery', 0),
+      usageRow(3, 3, 1, 'product', '11', 'primary', 0),
+      usageRow(4, 4, 2, 'product', '20', 'primary', 0),
+    ],
   }
 }
+
+let usageSeq = 0
+/** Linha de `media` pública/ativa/pronta (sobrescreva campos com `over`). */
+export function mediaRow(id: number, companyId: number, name: string, extension: string, over: Record<string, unknown> = {}) {
+  return {
+    id, public_id: `00000000-0000-4000-8000-${String(id).padStart(12, '0')}`, company_id: companyId,
+    storage_key: `${companyId}/${name}.${extension}`, external_url: null, visibility: 'public',
+    extension, mime_type: extension === 'jpg' ? 'image/jpeg' : `image/${extension}`, status: 'ready', active: true, ...over,
+  }
+}
+
+export function usageRow(id: number, mediaId: number, companyId: number, entityType: string, entityId: string, role: string, position: number) {
+  usageSeq++
+  return { id, media_id: mediaId, company_id: companyId, entity_type: entityType, entity_id: entityId, role, position, created_at: `2026-09-25T00:00:${String(usageSeq % 60).padStart(2, '0')}Z` }
+}
+
+export const publicUrl = (key: string) => `https://storage.test/storage/v1/object/public/media-public/${key}`
 
 export const ctxCompany1 = { companyId: 1, storeId: '111', integrationId: 1, source: 'company_integration' as const, credentials: { storeId: '111', accessToken: 't1' } }
 export const ctxCompany2 = { companyId: 2, storeId: '222', integrationId: 2, source: 'company_integration' as const, credentials: { storeId: '222', accessToken: 't2' } }

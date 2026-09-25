@@ -15,15 +15,28 @@
  *     com esse SKU sem vínculo (ex.: criação anterior cujo mapping falhou),
  *     recusa em vez de duplicar — o usuário decide.
  *   - Nunca exclui nada remoto.
+ *   - Imagens vêm do Media Hub (helper compartilhado com o Mercado Livre) e
+ *     são enviadas SOMENTE no caminho de criação inicial: até 9 no
+ *     POST /products e o restante via POST /products/{id}/images. Produto já
+ *     publicado nunca recebe imagens de novo (evita duplicação).
+ *   - Preço por variação = price_override ?? base_price.
  */
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import {
+  addNuvemshopProductImage,
   createNuvemshopProductFull,
   getNuvemshopProduct,
   getNuvemshopProductBySku,
+  NuvemshopTransportError,
+  type NuvemshopImageInput,
   type NuvemshopProductResponse,
 } from '@/lib/integrations/nuvemshop'
+import {
+  loadProductPicturesProductFirst,
+  validatePublicPictures,
+  type OrderedProductPicture,
+} from '@/services/catalog/productPictures'
 import type { NuvemshopContext } from './context.service'
 import {
   getNuvemshopProductMapping,
@@ -48,6 +61,9 @@ export type PublishFailureCode =
   | 'remote_error'
   | 'mapping_persist_failed'
   | 'db_error'
+  | 'no_images'
+  | 'invalid_price'
+  | 'publish_in_progress'
 
 export interface PublishResult {
   status:                   PublishStatus
@@ -62,7 +78,29 @@ export interface PublishResult {
   message?:                 string
   skuIssues?:               SkuValidationIssue[]
   unmatched?:               VariantPairingResult['unmatched']
+  /** Só no caminho de criação. */
+  images?:                  PublishImageReport
+  /** Avisos não fatais (ex.: falha parcial de imagens). */
+  warnings?:                string[]
 }
+
+export interface PublishImageReport {
+  /** Imagens públicas encontradas no Media Hub (após dedupe). */
+  found:          number
+  /** Enviadas no POST /products. */
+  sentInitial:    number
+  /** Enviadas depois, via POST /products/{id}/images. */
+  sentAfter:      number
+  /** Não chegaram à Nuvemshop (recusa no payload inicial ou falha posterior). */
+  failed:         number
+  /** Mídias ignoradas antes do envio (formato/URL). */
+  skippedInvalid: Array<{ url: string; reason: string }>
+}
+
+/** Recomendação da Nuvemshop: até 9 imagens no POST /products; o resto pelo endpoint de imagens. */
+export const NUVEMSHOP_INITIAL_IMAGE_LIMIT = 9
+/** Formatos aceitos pela API de imagens da Nuvemshop (gif, jpg, png, webp). */
+export const NUVEMSHOP_IMAGE_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'webp']
 
 type AttributeRow = {
   variation_types:  { name: string; slug: string } | null
@@ -72,10 +110,11 @@ type AttributeRow = {
 type VariationRow = {
   id:                           number
   sku_variation:                string | null
+  price_override:               number | string | null
   product_variation_attributes: AttributeRow[] | null
 }
 
-type ProductRow = { id: number; name: string; base_price: number; photo_url: string | null; active: boolean }
+type ProductRow = { id: number; name: string; base_price: number | string; active: boolean }
 
 const failed = (productId: number, code: PublishFailureCode, message: string, extra: Partial<PublishResult> = {}): PublishResult =>
   ({ status: 'failed', productId, code, message, ...extra })
@@ -88,7 +127,7 @@ async function loadProduct(companyId: number, productId: number): Promise<{ prod
   const admin = createAdminClient()
   const { data: product, error } = await (admin as any)
     .from('products')
-    .select('id, name, base_price, photo_url, active')
+    .select('id, name, base_price, active')
     .eq('id', productId)
     .eq('company_id', companyId)
     .maybeSingle() as { data: ProductRow | null; error: { message: string } | null }
@@ -100,6 +139,7 @@ async function loadProduct(companyId: number, productId: number): Promise<{ prod
     .select(`
       id,
       sku_variation,
+      price_override,
       product_variation_attributes (
         variation_type_id,
         variation_value_id,
@@ -132,7 +172,25 @@ async function loadStockByVariation(variationIds: number[]): Promise<{ ok: true;
   return { ok: true, data: out }
 }
 
-function buildPayload(product: ProductRow, variations: VariationRow[], stock: Map<number, number>) {
+/**
+ * Preço enviado por variação: price_override ?? base_price. Devolve null
+ * quando não é um número finito ≥ 0 (nunca manda NaN/negativo).
+ */
+export function resolveVariationPrice(priceOverride: number | string | null | undefined, basePrice: number | string | null | undefined): number | null {
+  const raw = priceOverride != null && priceOverride !== '' ? priceOverride : basePrice
+  if (raw == null || raw === '') return null
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) return null
+  return Math.round(value * 100) / 100
+}
+
+function buildPayload(
+  product: ProductRow,
+  variations: VariationRow[],
+  stock: Map<number, number>,
+  prices: Map<number, number>,
+  images: NuvemshopImageInput[],
+) {
   const typeOrder: Record<string, number> = { cor: 0, tamanho: 1 }
   const attributeTypeMap = new Map<string, string>()
   for (const v of variations) {
@@ -152,7 +210,7 @@ function buildPayload(product: ProductRow, variations: VariationRow[], stock: Ma
     }
     return {
       internalVariationId: v.id,
-      price:               product.base_price,
+      price:               prices.get(v.id)!,
       stock:               stock.get(v.id) ?? 0,
       sku:                 (v.sku_variation ?? '').trim(),
       attributeValues:     attributeSlugs.map((slug) => attrBySlug.get(slug) ?? ''),
@@ -161,7 +219,7 @@ function buildPayload(product: ProductRow, variations: VariationRow[], stock: Ma
 
   return {
     name:      product.name,
-    images:    product.photo_url ? [product.photo_url] : undefined,
+    images:    images.length > 0 ? images : undefined,
     attributeNames,
     variants,
     published: false,
@@ -233,10 +291,29 @@ async function repairExistingPublication(
 }
 
 /**
+ * Trava em memória contra clique duplo NO MESMO processo (sem schema). Não
+ * protege entre instâncias/containers diferentes — ali vale a guarda por SKU.
+ */
+const publishInFlight = new Set<string>()
+
+/**
  * Publica (ou verifica/repara) um produto da empresa do contexto na loja do
  * contexto. Nunca lança — erros viram `status: 'failed'`.
  */
 export async function publishProductToNuvemshop(ctx: NuvemshopContext, productId: number): Promise<PublishResult> {
+  const key = `${ctx.companyId}:${productId}`
+  if (publishInFlight.has(key)) {
+    return failed(productId, 'publish_in_progress', 'Este produto já está sendo enviado para a Nuvemshop. Aguarde o término.')
+  }
+  publishInFlight.add(key)
+  try {
+    return await publishProductInner(ctx, productId)
+  } finally {
+    publishInFlight.delete(key)
+  }
+}
+
+async function publishProductInner(ctx: NuvemshopContext, productId: number): Promise<PublishResult> {
   const loaded = await loadProduct(ctx.companyId, productId)
   if (loaded.error) return failed(productId, 'db_error', loaded.error)
   const { product, variations } = loaded
@@ -282,6 +359,36 @@ export async function publishProductToNuvemshop(ctx: NuvemshopContext, productId
     }
   }
 
+  // ── Validação local da criação (antes de qualquer chamada remota nova) ────
+  const prices = new Map<number, number>()
+  const badPrices: number[] = []
+  for (const v of variations) {
+    const price = resolveVariationPrice(v.price_override, product.base_price)
+    if (price == null) badPrices.push(v.id)
+    else prices.set(v.id, price)
+  }
+  if (badPrices.length > 0) {
+    return failed(productId, 'invalid_price',
+      `Preço inválido (vazio, negativo ou não numérico) na(s) variação(ões) ${badPrices.map((id) => `#${id}`).join(', ')}. Corrija o preço antes de publicar.`,
+      { productName: product.name, previousRemoteProductId })
+  }
+
+  const loadedPictures = await loadProductPicturesProductFirst(ctx.companyId, productId, variations.map((v) => v.id))
+  if (!loadedPictures.ok) {
+    return failed(productId, 'db_error', `Falha ao carregar imagens do produto — nada foi criado na Nuvemshop: ${loadedPictures.error}`,
+      { productName: product.name, previousRemoteProductId })
+  }
+  const pictureCheck = validatePublicPictures(loadedPictures.data, NUVEMSHOP_IMAGE_EXTENSIONS)
+  if (pictureCheck.valid.length === 0) {
+    const detail = pictureCheck.invalid.length > 0 ? ` Ignoradas: ${pictureCheck.invalid.map((i) => i.reason).join('; ')}.` : ''
+    return failed(productId, 'no_images',
+      `Adicione pelo menos uma imagem pública (JPG, PNG, GIF ou WEBP) ao produto antes de enviá-lo para a Nuvemshop.${detail}`,
+      { productName: product.name, previousRemoteProductId })
+  }
+  const pictures: OrderedProductPicture[] = pictureCheck.valid
+  const initialPictures = pictures.slice(0, NUVEMSHOP_INITIAL_IMAGE_LIMIT)
+  const extraPictures = pictures.slice(NUVEMSHOP_INITIAL_IMAGE_LIMIT)
+
   // ── Anti-duplicação: SKU já existe na loja sem vínculo? ───────────────────
   const firstSku = (variations[0].sku_variation ?? '').trim()
   try {
@@ -301,14 +408,20 @@ export async function publishProductToNuvemshop(ctx: NuvemshopContext, productId
     return failed(productId, 'db_error', `Falha ao carregar estoque — publicação abortada, nada foi criado na Nuvemshop: ${stock.error}`,
       { productName: product.name, previousRemoteProductId })
   }
-  const payload = buildPayload(product, variations, stock.data)
+  const payload = buildPayload(product, variations, stock.data, prices,
+    initialPictures.map((p) => ({ src: p.url, position: p.position })))
   const stockTotal = payload.variants.reduce((sum, v) => sum + v.stock, 0)
 
   let created: NuvemshopProductResponse
   try {
     created = await createNuvemshopProductFull(payload, ctx.credentials)
   } catch (err) {
-    return failed(productId, 'remote_error', `Falha ao criar produto na Nuvemshop: ${errorMessage(err)}`, { productName: product.name, previousRemoteProductId })
+    // Sem resposta (timeout/rede): a Nuvemshop PODE ter criado. Não repetimos
+    // aqui; a próxima tentativa passa pela guarda por SKU e nunca duplica.
+    const message = err instanceof NuvemshopTransportError
+      ? `A Nuvemshop não confirmou a criação (${errorMessage(err)}). O produto pode ter sido criado: verifique na Nuvemshop — uma nova tentativa não duplica (confere o SKU antes).`
+      : `Falha ao criar produto na Nuvemshop: ${errorMessage(err)}`
+    return failed(productId, 'remote_error', message, { productName: product.name, previousRemoteProductId })
   }
   const remoteProductId = String(created.id)
 
@@ -333,19 +446,60 @@ export async function publishProductToNuvemshop(ctx: NuvemshopContext, productId
     else persistErrors.push(`variação #${pair.variationId}: ${saved.error}`)
   }
 
+  // ── Imagens além do limite inicial (produto e vínculo já gravados) ────────
+  const imageErrors: string[] = []
+  let initialRejected = 0
+  if (Array.isArray(created.images) && created.images.length < initialPictures.length) {
+    initialRejected = initialPictures.length - created.images.length
+    imageErrors.push(`${initialRejected} imagem(ns) do envio inicial não foram aceitas pela Nuvemshop`)
+  }
+  let sentAfter = 0
+  for (const picture of extraPictures) {
+    try {
+      await addNuvemshopProductImage(remoteProductId, { src: picture.url, position: picture.position }, ctx.credentials)
+      sentAfter++
+    } catch (err) {
+      imageErrors.push(`imagem ${picture.position}: ${errorMessage(err)}`)
+    }
+  }
+  const images: PublishImageReport = {
+    found:          loadedPictures.data.length,
+    sentInitial:    initialPictures.length,
+    sentAfter,
+    failed:         initialRejected + (extraPictures.length - sentAfter),
+    skippedInvalid: pictureCheck.invalid,
+  }
+  const warnings: string[] = []
+  if (images.failed > 0) {
+    warnings.push(`Produto criado, mas ${images.failed} de ${pictures.length} imagem(ns) não foram enviadas à Nuvemshop. Adicione as restantes pelo painel da Nuvemshop.`)
+  }
+  if (images.skippedInvalid.length > 0) {
+    warnings.push(`${images.skippedInvalid.length} imagem(ns) ignoradas por formato/URL não aceitos.`)
+  }
+
   const complete = pairing.unmatched.length === 0 && persistErrors.length === 0
+  const problems = [...pairing.unmatched.map((u) => `variação #${u.variationId}: ${u.reason}`), ...persistErrors, ...imageErrors]
   await logNuvemshopEvent({
-    eventType: 'product_publish', direction: 'erp_to_ns', success: complete, externalProductId: remoteProductId,
-    errorMessage: complete ? null : [...pairing.unmatched.map((u) => `variação #${u.variationId}: ${u.reason}`), ...persistErrors].join('; '),
-    metadata: { company_id: ctx.companyId, produto_id: productId, previous_remote_product_id: previousRemoteProductId ?? null, variants_mapped: variantsMapped },
+    eventType: 'product_publish', direction: 'erp_to_ns', success: complete && images.failed === 0, externalProductId: remoteProductId,
+    errorMessage: problems.length > 0 ? problems.join('; ') : null,
+    metadata: {
+      company_id: ctx.companyId, produto_id: productId, previous_remote_product_id: previousRemoteProductId ?? null,
+      variations: variations.length, variants_mapped: variantsMapped,
+      images_found: images.found, images_sent_initial: images.sentInitial, images_sent_after: images.sentAfter,
+      images_failed: images.failed, images_skipped_invalid: images.skippedInvalid.length,
+      result: complete ? (images.failed > 0 ? 'published_partial_images' : 'published') : 'inconsistent',
+    },
   })
 
   if (!complete) {
     return {
       status: 'inconsistent', productId, productName: product.name, remoteProductId, previousRemoteProductId, variantsMapped, stockTotal,
-      unmatched: pairing.unmatched,
+      unmatched: pairing.unmatched, images, warnings,
       message: `Produto criado (ID ${remoteProductId}), mas ${pairing.unmatched.length + persistErrors.length} variação(ões) ficaram sem vínculo. Publicar novamente tenta reparar por SKU sem duplicar.`,
     }
   }
-  return { status: 'published', productId, productName: product.name, remoteProductId, previousRemoteProductId, variantsMapped, stockTotal }
+  return {
+    status: 'published', productId, productName: product.name, remoteProductId, previousRemoteProductId, variantsMapped, stockTotal,
+    images, ...(warnings.length > 0 ? { warnings } : {}),
+  }
 }

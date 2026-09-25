@@ -6,6 +6,9 @@ import {
   createNuvemshopFakeDb,
   ctxCompany1,
   ctxCompany2,
+  mediaRow,
+  publicUrl,
+  usageRow,
   type FakeNuvemshopApi,
   type NsFakeDbOptions,
   type NsFakeTables,
@@ -20,6 +23,8 @@ vi.mock('@/lib/integrations/nuvemshop', () => ({
   getNuvemshopProductBySku:   (...a: any[]) => (h.api.getNuvemshopProductBySku as any)(...a),
   listAllNuvemshopProducts:   (...a: any[]) => (h.api.listAllNuvemshopProducts as any)(...a),
   updateVariantStock:         (...a: any[]) => (h.api.updateVariantStock as any)(...a),
+  addNuvemshopProductImage:   (...a: any[]) => (h.api.addNuvemshopProductImage as any)(...a),
+  NuvemshopTransportError:    class NuvemshopTransportError extends Error { readonly ambiguous = true },
   isNuvemshopNotFound:        (e: unknown) => h.api.isNuvemshopNotFound(e),
 }))
 vi.mock('@/services/nuvemshop/context.service', () => ({
@@ -391,6 +396,167 @@ describe('estoque fail-safe (migration de kits ausente / falhas de banco)', () =
     const r = await publishProductToNuvemshop(ctxCompany1, 10)
     expect(r).toMatchObject({ status: 'failed', code: 'db_error' })
     expect(r.message).toMatch(/publicação abortada/)
+    expect(h.api.calls.create).toBe(0)
+    expect(mapRows(10)).toHaveLength(0)
+  })
+})
+
+describe('publicação com imagens do Media Hub (Fase 1)', () => {
+  /** Troca as imagens do produto 10 por N imagens de galeria + 1 principal. */
+  function setProduct10Images(total: number) {
+    tables.media = tables.media.filter((m) => m.company_id !== 1 || !String(m.storage_key).startsWith('1/p10'))
+    tables.media_usages = tables.media_usages.filter((u) => u.entity_id !== '10')
+    for (let i = 1; i <= total; i++) {
+      tables.media.push(mediaRow(100 + i, 1, `p10-${i}`, 'jpg'))
+      tables.media_usages.push(usageRow(100 + i, 100 + i, 1, 'product', '10', i === 1 ? 'primary' : 'gallery', i))
+    }
+  }
+  const payloadImages = () => h.api.calls.createPayloads.at(-1)?.images ?? []
+  const lastPublishLog = () => tables.nuvemshop_sync_logs.filter((l) => l.event_type === 'product_publish').at(-1)
+
+  it('produto simples + 1 imagem: imagem vai no POST /products com position 1', async () => {
+    const r = await publishProductToNuvemshop(ctxCompany1, 11)
+    expect(r.status).toBe('published')
+    expect(payloadImages()).toEqual([{ src: publicUrl('1/p11-main.jpg'), position: 1 }])
+    expect(r.images).toMatchObject({ found: 1, sentInitial: 1, sentAfter: 0, failed: 0 })
+  })
+
+  it('várias imagens: principal primeiro, galeria em seguida', async () => {
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r.status).toBe('published')
+    expect(payloadImages()).toEqual([
+      { src: publicUrl('1/p10-main.jpg'), position: 1 },
+      { src: publicUrl('1/p10-gal.png'), position: 2 },
+    ])
+  })
+
+  it('exatamente 9 imagens: todas no payload inicial, nenhuma depois', async () => {
+    setProduct10Images(9)
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(payloadImages()).toHaveLength(9)
+    expect(h.api.calls.addedImages).toHaveLength(0)
+    expect(r.images).toMatchObject({ found: 9, sentInitial: 9, sentAfter: 0, failed: 0 })
+  })
+
+  it('12 imagens: 9 no POST /products, 10–12 pelo endpoint de imagens', async () => {
+    setProduct10Images(12)
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(payloadImages().map((i) => i.position)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(h.api.calls.addedImages.map((i) => [i.productId, i.position])).toEqual([
+      [r.remoteProductId, 10], [r.remoteProductId, 11], [r.remoteProductId, 12],
+    ])
+    expect(r.images).toMatchObject({ found: 12, sentInitial: 9, sentAfter: 3, failed: 0 })
+    expect(r.warnings).toBeUndefined()
+  })
+
+  it('falha numa imagem adicional: produto e vínculo mantidos, falha parcial registrada', async () => {
+    setProduct10Images(11)
+    h.api.options.failAddImagePositions = [11]
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r.status).toBe('published')
+    expect(r.images).toMatchObject({ sentInitial: 9, sentAfter: 1, failed: 1 })
+    expect(r.warnings?.[0]).toMatch(/1 de 11 imagem/)
+    expect(productRow(10)?.external_id).toBe(r.remoteProductId)
+    expect(variantRow(101)).toBeDefined()
+    expect(h.api.stores.get('111')?.has(r.remoteProductId!)).toBe(true)
+    expect(lastPublishLog()).toMatchObject({
+      success: false,
+      error_message: expect.stringMatching(/imagem 11/),
+      metadata: expect.objectContaining({ images_found: 11, images_sent_initial: 9, images_sent_after: 1, images_failed: 1, result: 'published_partial_images' }),
+    })
+  })
+
+  it('imagens do payload inicial recusadas pela loja contam como falha parcial', async () => {
+    h.api.options.acceptInitialImages = 1
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r.status).toBe('published')
+    expect(r.images).toMatchObject({ sentInitial: 2, failed: 1 })
+  })
+
+  it('produto sem imagem: bloqueado antes de qualquer chamada remota', async () => {
+    tables.media_usages = tables.media_usages.filter((u) => u.entity_id !== '10')
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r).toMatchObject({ status: 'failed', code: 'no_images' })
+    expect(r.message).toMatch(/pelo menos uma imagem pública/)
+    expect(h.api.calls.create).toBe(0)
+    expect(mapRows(10)).toHaveLength(0)
+  })
+
+  it('só imagem privada/inativa conta como "sem imagem"', async () => {
+    tables.media.find((m) => m.id === 1)!.visibility = 'private'
+    tables.media.find((m) => m.id === 2)!.active = false
+    expect((await publishProductToNuvemshop(ctxCompany1, 10)).code).toBe('no_images')
+  })
+
+  it('isolamento: mídia de outra empresa não é enviada', async () => {
+    tables.media_usages = tables.media_usages.filter((u) => u.entity_id !== '10')
+    tables.media_usages.push(usageRow(90, 4, 1, 'product', '10', 'primary', 0)) // mídia 4 é da empresa 2
+    expect((await publishProductToNuvemshop(ctxCompany1, 10)).code).toBe('no_images')
+    expect(h.api.calls.create).toBe(0)
+  })
+
+  it('imagens das variações entram depois das do produto', async () => {
+    tables.media.push(mediaRow(50, 1, 'v102-main', 'webp'))
+    tables.media_usages.push(usageRow(50, 50, 1, 'product_variation', '102', 'primary', 0))
+    await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(payloadImages().map((i) => i.src)).toEqual([publicUrl('1/p10-main.jpg'), publicUrl('1/p10-gal.png'), publicUrl('1/v102-main.webp')])
+  })
+
+  it('price_override prevalece; sem override usa base_price', async () => {
+    tables.product_variations.find((v) => v.id === 102)!.price_override = 129.9
+    await publishProductToNuvemshop(ctxCompany1, 10)
+    const variants = h.api.calls.createPayloads.at(-1)!.variants
+    expect(variants.find((v) => v.sku === 'VR-P')?.price).toBe(100)
+    expect(variants.find((v) => v.sku === 'VR-M')?.price).toBe(129.9)
+  })
+
+  it('preço inválido (negativo) bloqueia a publicação', async () => {
+    tables.product_variations.find((v) => v.id === 101)!.price_override = -1
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r).toMatchObject({ status: 'failed', code: 'invalid_price' })
+    expect(h.api.calls.create).toBe(0)
+  })
+
+  it('produto já publicado: não cria de novo nem reenvia imagens', async () => {
+    setProduct10Images(11)
+    await publishProductToNuvemshop(ctxCompany1, 10)
+    const addedBefore = h.api.calls.addedImages.length
+    const again = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(again.status).toBe('already_published')
+    expect(again.images).toBeUndefined()
+    expect(h.api.calls.create).toBe(1)
+    expect(h.api.calls.addedImages.length).toBe(addedBefore)
+  })
+
+  it('SKU remoto sem vínculo: recusa sem criar nem enviar imagens', async () => {
+    h.api.addRemote('111', { id: 777, name: { pt: 'Órfão' }, variants: [{ id: 778, sku: 'VR-P' }] })
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r.code).toBe('remote_sku_conflict')
+    expect(h.api.calls.create).toBe(0)
+    expect(h.api.calls.addedImages).toHaveLength(0)
+  })
+
+  it('dois cliques simultâneos no mesmo processo: só um cria', async () => {
+    const [a, b] = await Promise.all([publishProductToNuvemshop(ctxCompany1, 10), publishProductToNuvemshop(ctxCompany1, 10)])
+    expect([a.status, b.status].sort()).toEqual(['failed', 'published'])
+    expect([a.code, b.code]).toContain('publish_in_progress')
+    expect(h.api.calls.create).toBe(1)
+  })
+
+  it('timeout na criação: não grava vínculo e orienta a verificar (sem retry cego)', async () => {
+    const { NuvemshopTransportError } = await import('@/lib/integrations/nuvemshop')
+    h.api.createNuvemshopProductFull = async () => { throw new (NuvemshopTransportError as any)('Nuvemshop não respondeu em 20s', 'timeout') }
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r).toMatchObject({ status: 'failed', code: 'remote_error' })
+    expect(r.message).toMatch(/pode ter sido criado/)
+    expect(mapRows(10)).toHaveLength(0)
+  })
+
+  it('token inválido (401): falha clara, nada gravado', async () => {
+    h.api.getNuvemshopProductBySku = async () => { throw new Error('Nuvemshop API 401: Invalid access token') }
+    const r = await publishProductToNuvemshop(ctxCompany1, 10)
+    expect(r).toMatchObject({ status: 'failed', code: 'remote_error' })
+    expect(r.message).toMatch(/401/)
     expect(h.api.calls.create).toBe(0)
     expect(mapRows(10)).toHaveLength(0)
   })

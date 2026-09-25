@@ -49,6 +49,62 @@ function baseUrl(creds?: NuvemshopCredentials) {
 const APP_AGENT =
   process.env.NUVEMSHOP_APP_AGENT ?? 'erp-nuvemshop-integration (no-reply@local)'
 
+// ─── Transporte: timeout + 429 ────────────────────────────────────────────────
+
+/**
+ * Ajustável só por testes. `maxAttempts` conta a primeira tentativa.
+ * 429 = requisição recusada ANTES de ser processada (leaky bucket da
+ * Nuvemshop), então repetir é seguro inclusive para POST. Timeout/erro de
+ * rede NÃO são repetidos: podem ter sido processados (POST /products poderia
+ * duplicar) — viram NuvemshopTransportError e quem chama decide.
+ */
+export const nuvemshopHttpConfig = {
+  timeoutMs:   20_000,
+  maxAttempts: 3,
+  minWaitMs:   500,
+  maxWaitMs:   10_000,
+  sleep:       (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+}
+
+/** Falha sem resposta HTTP (timeout, rede). O servidor PODE ter processado. */
+export class NuvemshopTransportError extends Error {
+  readonly ambiguous = true
+  constructor(message: string, public readonly kind: 'timeout' | 'network') {
+    super(message)
+    this.name = 'NuvemshopTransportError'
+  }
+}
+
+/** Espera sugerida pelo cabeçalho oficial `x-rate-limit-reset` (ms até esvaziar o bucket). */
+export function rateLimitWaitMs(headers: Headers): number {
+  const reset = Number(headers.get('x-rate-limit-reset'))
+  const base = Number.isFinite(reset) && reset > 0 ? reset : 1_000
+  return Math.min(Math.max(base, nuvemshopHttpConfig.minWaitMs), nuvemshopHttpConfig.maxWaitMs)
+}
+
+async function nuvemshopFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const method = init.method ?? 'GET'
+  const path = url.replace(/^https:\/\/[^/]+\/v1\/\d+/, '')
+  for (let attempt = 1; ; attempt++) {
+    let res: Response
+    try {
+      res = await fetch(url, { ...init, signal: AbortSignal.timeout(nuvemshopHttpConfig.timeoutMs) })
+    } catch (err) {
+      const isTimeout = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+      throw new NuvemshopTransportError(
+        isTimeout
+          ? `Nuvemshop não respondeu em ${Math.round(nuvemshopHttpConfig.timeoutMs / 1000)}s (${method} ${path})`
+          : `Falha de rede com a Nuvemshop (${method} ${path}): ${err instanceof Error ? err.message : String(err)}`,
+        isTimeout ? 'timeout' : 'network',
+      )
+    }
+    if (res.status !== 429 || attempt >= nuvemshopHttpConfig.maxAttempts) return res
+    const waitMs = rateLimitWaitMs(res.headers)
+    console.warn('[nuvemshop] 429 rate limit — nova tentativa', { method, path, attempt, waitMs })
+    await nuvemshopHttpConfig.sleep(waitMs)
+  }
+}
+
 function authHeaders(creds?: NuvemshopCredentials): Record<string, string> {
   return {
     Authentication:  `bearer ${resolveCredentials(creds).accessToken}`,
@@ -74,10 +130,23 @@ export interface NuvemshopRemoteVariant {
   stock?: number | null
 }
 
+export interface NuvemshopRemoteImage {
+  id:        number
+  src?:      string
+  position?: number
+}
+
 export interface NuvemshopProductResponse {
   id:       number
   name:     Record<string, string>
   variants: NuvemshopRemoteVariant[]
+  images?:  NuvemshopRemoteImage[]
+}
+
+/** Imagem por URL pública: a Nuvemshop baixa o arquivo (`src`). position 1 = principal. */
+export interface NuvemshopImageInput {
+  src:       string
+  position?: number
 }
 
 // ─── createNuvemshopProductFull types ─────────────────────────────────────────
@@ -95,7 +164,7 @@ export interface NuvemshopVariantInput {
 export interface NuvemshopProductFullPayload {
   name:            string
   description?:    string
-  images?:         string[]
+  images?:         NuvemshopImageInput[]
   /** Ordered attribute type names, e.g. ["Cor", "Tamanho"] */
   attributeNames:  string[]
   variants:        NuvemshopVariantInput[]
@@ -131,7 +200,7 @@ export async function createNuvemshopProduct(
     body.images = payload.images.map((src) => ({ src }))
   }
 
-  const res = await fetch(`${baseUrl(creds)}/products`, {
+  const res = await nuvemshopFetch(`${baseUrl(creds)}/products`, {
     method:  'POST',
     headers: authHeaders(creds),
     body:    JSON.stringify(body),
@@ -164,7 +233,7 @@ export async function createNuvemshopProductFull(
   }
 
   if (payload.images && payload.images.length > 0) {
-    body.images = payload.images.map((src) => ({ src }))
+    body.images = payload.images.map((img) => ({ src: img.src, ...(img.position != null ? { position: img.position } : {}) }))
   }
 
   // Attributes define the variant dimensions at product level (e.g. "Cor", "Tamanho")
@@ -182,7 +251,7 @@ export async function createNuvemshopProductFull(
       : {}),
   }))
 
-  const res = await fetch(`${baseUrl(creds)}/products`, {
+  const res = await nuvemshopFetch(`${baseUrl(creds)}/products`, {
     method:  'POST',
     headers: authHeaders(creds),
     body:    JSON.stringify(body),
@@ -193,6 +262,25 @@ export async function createNuvemshopProductFull(
   }
 
   return res.json() as Promise<NuvemshopProductResponse>
+}
+
+// ─── addNuvemshopProductImage ─────────────────────────────────────────────────
+
+/** Acrescenta UMA imagem (por URL pública) a um produto existente. */
+export async function addNuvemshopProductImage(
+  externalProductId: string,
+  image:             NuvemshopImageInput,
+  creds?:            NuvemshopCredentials
+): Promise<NuvemshopRemoteImage> {
+  const res = await nuvemshopFetch(`${baseUrl(creds)}/products/${encodeURIComponent(externalProductId)}/images`, {
+    method:  'POST',
+    headers: authHeaders(creds),
+    body:    JSON.stringify({ src: image.src, ...(image.position != null ? { position: image.position } : {}) }),
+  })
+  if (!res.ok) {
+    throw new NuvemshopApiError(res.status, await res.text(), 'Nuvemshop addProductImage')
+  }
+  return res.json() as Promise<NuvemshopRemoteImage>
 }
 
 // ─── updateVariantStock ───────────────────────────────────────────────────────
@@ -207,7 +295,7 @@ export async function updateVariantStock(
   newQuantity:       number,
   creds?:            NuvemshopCredentials
 ): Promise<void> {
-  const res = await fetch(
+  const res = await nuvemshopFetch(
     `${baseUrl(creds)}/products/${externalProductId}/variants/${externalVariantId}`,
     {
       method:  'PUT',
@@ -228,7 +316,7 @@ export async function getNuvemshopProduct(
   externalProductId: string,
   creds?:            NuvemshopCredentials
 ): Promise<NuvemshopProductResponse | null> {
-  const res = await fetch(`${baseUrl(creds)}/products/${encodeURIComponent(externalProductId)}`, {
+  const res = await nuvemshopFetch(`${baseUrl(creds)}/products/${encodeURIComponent(externalProductId)}`, {
     headers: authHeaders(creds),
   })
   if (res.status === 404) return null
@@ -241,7 +329,7 @@ export async function getNuvemshopProductBySku(
   sku:    string,
   creds?: NuvemshopCredentials
 ): Promise<NuvemshopProductResponse | null> {
-  const res = await fetch(`${baseUrl(creds)}/products/sku/${encodeURIComponent(sku)}`, {
+  const res = await nuvemshopFetch(`${baseUrl(creds)}/products/sku/${encodeURIComponent(sku)}`, {
     headers: authHeaders(creds),
   })
   if (res.status === 404) return null
@@ -263,7 +351,7 @@ export async function listAllNuvemshopProducts(
   const out: NuvemshopProductResponse[] = []
   for (let page = 1; page <= LIST_MAX_PAGES; page++) {
     const url = `${baseUrl(creds)}/products?page=${page}&per_page=${LIST_PAGE_SIZE}&fields=id,name,variants`
-    const res = await fetch(url, { headers: authHeaders(creds) })
+    const res = await nuvemshopFetch(url, { headers: authHeaders(creds) })
     // Nuvemshop responde 404 ao pedir uma página além da última.
     if (res.status === 404 && page > 1) break
     if (!res.ok) throw new NuvemshopApiError(res.status, await res.text())

@@ -15,10 +15,12 @@ export function NuvemshopSendButton({ produtoId }: Props) {
   const [externalId, setExternalId] = useState<string | null>(null)
   const [skipped, setSkipped]       = useState(false)
   const [errorMsg, setErrorMsg]     = useState<string | null>(null)
+  const [warning, setWarning]       = useState<string | null>(null)
 
   async function handleSend() {
     setState('loading')
     setErrorMsg(null)
+    setWarning(null)
     try {
       const res  = await fetch('/api/integrations/nuvemshop/product', {
         method:  'POST',
@@ -30,6 +32,7 @@ export function NuvemshopSendButton({ produtoId }: Props) {
       if (res.ok && data.ok) {
         setExternalId(data.external_id)
         setSkipped(!!data.skipped)
+        setWarning(Array.isArray(data.warnings) && data.warnings.length > 0 ? data.warnings.join(' ') : null)
         setState('success')
       } else {
         setErrorMsg(data.error ?? `Erro ${res.status}`)
@@ -43,9 +46,12 @@ export function NuvemshopSendButton({ produtoId }: Props) {
 
   if (state === 'success') {
     return (
-      <span className="inline-flex items-center gap-1 text-sm text-green-600">
-        <Send className="h-3.5 w-3.5" />
-        {skipped ? 'Já publicado' : 'Publicado'}{externalId ? ` · ID ${externalId}` : ''}
+      <span className="inline-flex flex-col items-start gap-1">
+        <span className="inline-flex items-center gap-1 text-sm text-green-600">
+          <Send className="h-3.5 w-3.5" />
+          {skipped ? 'Já publicado' : 'Publicado'}{externalId ? ` · ID ${externalId}` : ''}
+        </span>
+        {warning && <span className="max-w-xs text-xs text-warning">{warning}</span>}
       </span>
     )
   }

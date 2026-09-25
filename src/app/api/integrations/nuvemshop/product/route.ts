@@ -29,6 +29,8 @@ export async function POST(request: Request) {
       external_id:     result.remoteProductId ?? null,
       skipped:         result.status === 'already_published',
       variants_mapped: result.variantsMapped ?? 0,
+      ...(result.images ? { images: result.images } : {}),
+      ...(result.warnings?.length ? { warnings: result.warnings } : {}),
       ...(ok ? {} : { error: result.message, code: result.code ?? null, sku_issues: result.skuIssues, unmatched: result.unmatched }),
     },
     { status: publishHttpStatus(result) },

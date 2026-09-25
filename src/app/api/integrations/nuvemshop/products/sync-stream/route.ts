@@ -51,7 +51,11 @@ export async function POST(request: Request) {
           const r = await publishProductToNuvemshop(ctx, id)
           const name = r.productName ?? `#${id}`
           if (r.status === 'published' || r.status === 'relinked') {
-            send({ type: 'product', status: 'ok', name, product_id: id, variants_mapped: r.variantsMapped ?? 0, stock_total: r.stockTotal ?? 0, relinked: r.status === 'relinked' })
+            send({
+              type: 'product', status: 'ok', name, product_id: id, variants_mapped: r.variantsMapped ?? 0, stock_total: r.stockTotal ?? 0,
+              relinked: r.status === 'relinked', images_sent: r.images ? r.images.sentInitial + r.images.sentAfter : undefined,
+              warning: r.warnings?.join(' ') || undefined,
+            })
             synced++
           } else if (r.status === 'already_published') {
             send({ type: 'product', status: 'skipped', name, product_id: id, reason: 'Já publicado' })

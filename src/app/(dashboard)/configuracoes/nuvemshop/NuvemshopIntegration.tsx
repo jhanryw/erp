@@ -14,7 +14,7 @@ import { Card, CardHeader, CardContent } from '@/components/ui/card'
 
 type SyncEvent =
   | { type: 'start';   total: number }
-  | { type: 'product'; status: 'ok';        name: string; product_id: number; variants_mapped: number; stock_total: number }
+  | { type: 'product'; status: 'ok';        name: string; product_id: number; variants_mapped: number; stock_total: number; images_sent?: number; warning?: string }
   | { type: 'product'; status: 'error';     name: string; product_id: number; error: string }
   | { type: 'product'; status: 'no_variants'; name: string; product_id: number }
   | { type: 'product'; status: 'skipped';   name: string; product_id: number; reason: string }
@@ -153,7 +153,11 @@ function SyncLog({ events, loading }: { events: SyncEvent[]; loading: boolean })
             return (
               <div key={i} className="flex gap-2 text-success">
                 <span className="flex-shrink-0">✓</span>
-                <span>{ev.name} — {ev.variants_mapped} variação(ões) · estoque: {ev.stock_total}</span>
+                <span>
+                  {ev.name} — {ev.variants_mapped} variação(ões) · estoque: {ev.stock_total}
+                  {ev.images_sent != null ? ` · ${ev.images_sent} imagem(ns)` : ''}
+                  {ev.warning ? <span className="block text-warning">{ev.warning}</span> : null}
+                </span>
               </div>
             )
           }
