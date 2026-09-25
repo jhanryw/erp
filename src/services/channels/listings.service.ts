@@ -93,6 +93,11 @@ export interface ListingRow {
   last_error: string | null
   publish_lease_until: string | null
   metadata: Record<string, unknown>
+  /** Reconciliação periódica canal → Qarvon (202609271000). */
+  last_reconciled_at?: string | null
+  last_reconcile_error?: string | null
+  /** Carimbo de concorrência (trigger touch_updated_at). */
+  updated_at?: string
 }
 
 export type BeginResult =
@@ -271,7 +276,7 @@ function channelLog(ctx: Pick<ChannelContext, 'provider' | 'companyId' | 'integr
   }
 }
 
-function resolveDeps(deps: ListingsServiceDeps = {}) {
+export function resolveDeps(deps: ListingsServiceDeps = {}) {
   return {
     repo: deps.repo ?? createSupabaseListingsRepo(),
     source: deps.source ?? createSupabaseListingSource(),
@@ -952,6 +957,13 @@ export interface ListingView {
   price_source: string | null
   last_seen_external_price: number | null
   external_price_detected_at: string | null
+  /** Reconciliação periódica (somente leitura no canal). */
+  last_reconciled_at: string | null
+  last_reconcile_error: string | null
+  /** Status do canal com o motivo (pausa/moderação), em texto. */
+  external_status_reason: string | null
+  observed_quantity: number | null
+  reconcile_divergences: Array<{ code: string; message: string }>
   local_status: ListingLocalStatus
   external_status: string | null
   external_sub_status: string[]
@@ -996,6 +1008,13 @@ export function toListingView(row: ListingRow): ListingView {
     last_seen_external_price: ((row.metadata ?? {}) as Record<string, unknown>).last_seen_external_price == null ? null
       : Number(((row.metadata ?? {}) as Record<string, unknown>).last_seen_external_price),
     external_price_detected_at: (((row.metadata ?? {}) as Record<string, unknown>).external_price_detected_at as string | undefined) ?? null,
+    last_reconciled_at: row.last_reconciled_at ?? null,
+    last_reconcile_error: row.last_reconcile_error ?? null,
+    external_status_reason: (meta.reconcile as { status_reason?: string | null } | undefined)?.status_reason ?? null,
+    observed_quantity: (meta.reconcile as { observed?: { quantity?: number | null } } | undefined)?.observed?.quantity ?? null,
+    reconcile_divergences: Array.isArray((meta.reconcile as { divergences?: unknown } | undefined)?.divergences)
+      ? ((meta.reconcile as { divergences: Array<{ code: string; message: string }> }).divergences)
+      : [],
     listing_type_id: row.listing_type_id ?? ((row.metadata ?? {}) as Record<string, unknown>).listing_type_id as string ?? null,
     local_status: row.local_status,
     external_status: row.external_status,
@@ -1159,10 +1178,11 @@ function defaultAdapterFor(ctx: ChannelContext): ChannelAdapter {
   })
 }
 
-const LISTING_COLUMNS = `id, company_id, integration_id, provider, product_id, product_variation_id, seller_sku, offer_key, listing_type_id,
+export const LISTING_COLUMNS = `id, company_id, integration_id, provider, product_id, product_variation_id, seller_sku, offer_key, listing_type_id,
   external_listing_id, external_variant_id, external_product_id, external_group_id, external_ids,
   external_category_id, external_status, external_sub_status, permalink, local_status, channel_price,
-  last_sent_price, synced_quantity, last_synced_at, last_error, publish_lease_until, metadata`
+  last_sent_price, synced_quantity, last_synced_at, last_error, publish_lease_until, metadata,
+  last_reconciled_at, last_reconcile_error, updated_at`
 
 export function createSupabaseListingsRepo(): ListingsRepo {
   const admin = createAdminClient() as any

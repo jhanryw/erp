@@ -348,7 +348,21 @@ function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish, onCha
       })()}
       {editing && <PriceEditor offer={l} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged() }} />}
       {l.external_status && (
-        <p className="text-xs text-text-muted">ML: {l.external_status}{l.external_sub_status.length ? ` (${l.external_sub_status.join(', ')})` : ''}</p>
+        <p className="text-xs text-text-muted">ML: {l.external_status_reason ?? `${l.external_status}${l.external_sub_status.length ? ` (${l.external_sub_status.join(', ')})` : ''}`}</p>
+      )}
+      {l.last_reconcile_error && (
+        <p className="text-xs text-error">Erro na conferência automática com o Mercado Livre ({fmtDate(l.last_reconciled_at)}): {l.last_reconcile_error}</p>
+      )}
+      {!l.last_reconcile_error && l.reconcile_divergences.length > 0 && (
+        <div className="rounded border border-warning/40 bg-warning/5 px-2 py-1 text-xs text-warning">
+          <p className="font-medium">Divergência com o Mercado Livre (conferido em {fmtDate(l.last_reconciled_at)})</p>
+          <ul className="list-disc pl-4">
+            {l.reconcile_divergences.map((d) => <li key={d.code}>{d.message}</li>)}
+          </ul>
+        </div>
+      )}
+      {!l.last_reconcile_error && l.reconcile_divergences.length === 0 && l.last_reconciled_at && (
+        <p className="text-xs text-text-muted">Conferido com o Mercado Livre em {fmtDate(l.last_reconciled_at)} — sem divergências.</p>
       )}
       {l.external_listing_id && (
         <p className="text-xs text-text-muted">

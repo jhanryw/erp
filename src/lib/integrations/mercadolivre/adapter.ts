@@ -6,6 +6,7 @@
  *   validate    POST /items/validate (204 = ok; 400 com cause[] error/warning — nada é criado)
  *   publish     POST /items (+ POST /items/{id}/description, + GET /user-products/{id} p/ family_id)
  *   fetch       GET  /items/{id}
+ *   fetch lote  GET  /items?ids=A,B,…  (multiget, até 20 por chamada; erro por item)
  *   price       PUT  /items/{id} {price}
  *   quantity    PUT  /items/{id} {available_quantity}   (0 → ML pausa com out_of_stock e reativa ao repor)
  *   pause       PUT  /items/{id} {status:'paused'}      (paused_by_seller: nunca reativa sozinho)
@@ -13,7 +14,7 @@
  *   reconcile   GET  /users/{seller}/items/search?seller_sku=
  */
 
-import type { ChannelAdapter, ChannelListingDraft, ChannelListingRef, ChannelListingSnapshot, ChannelValidationResult } from '@/lib/channels/types'
+import type { ChannelAdapter, ChannelFetchResult, ChannelListingDraft, ChannelListingRef, ChannelListingSnapshot, ChannelValidationResult } from '@/lib/channels/types'
 import { mercadoLivreRequest, type MercadoLivreRequestDeps } from './client'
 import { MercadoLivreError, isMercadoLivreError, parseMercadoLivreCauses } from './errors'
 import { buildItemBody, normalizeAttributes, parseItem, type MercadoLivreListingModel } from './listingPayload'
@@ -26,6 +27,9 @@ export interface MercadoLivreAdapterContext {
   maxTitleLength?: number
   deps?: MercadoLivreRequestDeps
 }
+
+/** Limite documentado do multiget GET /items?ids=. */
+const MULTIGET_MAX = 20
 
 export function createMercadoLivreAdapter(ctx: MercadoLivreAdapterContext): ChannelAdapter {
   const call = <T>(method: 'GET' | 'POST' | 'PUT', path: string, body?: unknown, query?: Record<string, string>) =>
@@ -96,6 +100,24 @@ export function createMercadoLivreAdapter(ctx: MercadoLivreAdapterContext): Chan
     },
 
     fetchListing,
+
+    async fetchListings(externalListingIds) {
+      const out: ChannelFetchResult[] = []
+      const ids = [...new Set(externalListingIds)]
+      for (let i = 0; i < ids.length; i += MULTIGET_MAX) {
+        const chunk = ids.slice(i, i + MULTIGET_MAX)
+        const res = await call<Array<{ code?: number; body?: Record<string, unknown> }>>('GET', '/items', undefined, { ids: chunk.join(',') })
+        const rows = Array.isArray(res.data) ? res.data : []
+        chunk.forEach((id, idx) => {
+          // Casamento pelo id do corpo; itens com erro (sem id) pela posição — o ML preserva a ordem de ids.
+          const r = rows.find((x) => x?.body?.id != null && String(x.body.id) === id)
+            ?? (rows.length === chunk.length && rows[idx]?.code !== 200 ? rows[idx] : undefined)
+          if (r && r.code === 200 && r.body) out.push({ externalListingId: id, snapshot: parseItem(r.body), error: null })
+          else out.push({ externalListingId: id, snapshot: null, error: { status: r?.code ?? null, message: String((r?.body as Record<string, unknown> | undefined)?.message ?? 'item não retornado pelo canal') } })
+        })
+      }
+      return out
+    },
 
     async updateListing(ref, draft) {
       const body: Record<string, unknown> = {}

@@ -62,6 +62,15 @@ export interface ChannelListingSnapshot {
   pictureCount: number
   /** Avisos não fatais (ex.: descrição não aceita, preço ignorado por automação). */
   warnings: string[]
+  /** Conta do canal dona do anúncio (isolamento: nunca aceitar item de outra conta). */
+  sellerId?: string | null
+}
+
+/** Resultado de uma leitura em lote (1 item): snapshot ou erro individual. */
+export interface ChannelFetchResult {
+  externalListingId: string
+  snapshot: ChannelListingSnapshot | null
+  error: { status: number | null; message: string } | null
 }
 
 export interface ChannelListingRef {
@@ -85,6 +94,8 @@ export interface ChannelAdapter {
   validateListing?(draft: ChannelListingDraft): Promise<ChannelValidationResult>
   publishListing(draft: ChannelListingDraft): Promise<ChannelListingSnapshot>
   fetchListing(ref: ChannelListingRef): Promise<ChannelListingSnapshot>
+  /** Leitura em LOTE (somente leitura), com erro por item. Opcional: sem ele, o core lê 1 a 1. */
+  fetchListings?(externalListingIds: string[]): Promise<ChannelFetchResult[]>
   /** Atualiza conteúdo editável (título/imagens/atributos) de um anúncio existente. */
   updateListing(ref: ChannelListingRef, draft: Partial<ChannelListingDraft>): Promise<ChannelListingSnapshot>
   updatePrice(ref: ChannelListingRef, price: number): Promise<ChannelListingSnapshot>

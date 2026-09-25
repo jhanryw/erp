@@ -132,6 +132,7 @@ export function parseItem(item: Record<string, unknown>, extra: { familyId?: str
     title: (item.title as string) ?? null,
     pictureCount: Array.isArray(item.pictures) ? (item.pictures as unknown[]).length : 0,
     warnings: [...itemWarnings, ...(extra.warnings ?? [])],
+    sellerId: item.seller_id != null ? String(item.seller_id) : null,
   }
 }
 

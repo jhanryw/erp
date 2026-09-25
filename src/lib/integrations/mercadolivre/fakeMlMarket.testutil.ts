@@ -277,6 +277,15 @@ export class FakeMlMarket extends FakeMlApi {
       const it = [...this.items.values()].find((i) => i.user_product_id === m![1])
       return it ? json(200, { id: m[1], family_id: it.family_id }) : json(404, { message: 'not found' })
     }
+    if (path === '/items' && method === 'GET') {
+      // multiget público: devolve itens de QUALQUER vendedor (isolamento é do core)
+      const ids = (url.searchParams.get('ids') ?? '').split(',').filter(Boolean)
+      if (ids.length > 20) return json(400, { message: 'max 20 ids' })
+      return json(200, ids.map((id) => {
+        const it = this.items.get(id)
+        return it ? { code: 200, body: this.view(it) } : { code: 404, body: { message: `Item with id ${id} not found`, error: 'not_found', status: 404 } }
+      }))
+    }
     m = path.match(/^\/items\/([A-Z0-9]+)$/)
     if (m) {
       const it = this.items.get(m[1])

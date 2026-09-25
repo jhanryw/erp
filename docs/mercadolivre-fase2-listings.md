@@ -249,3 +249,37 @@ tipos da API e tarifa estimada ao vivo.
 - UI: "Preço próprio da oferta" / "Herdando preço do Qarvon" e "Preço alterado
   no Mercado Livre em DD/MM HH:mm"; histórico distingue Qarvon × Mercado Livre.
 - Testes: `listings.service.test.ts` P1–P9.
+
+## 18. Reconciliação periódica canal → Qarvon (202609271000)
+
+`POST /api/jobs/channels/reconcile` (`Authorization: Bearer $CRON_SECRET`) —
+`src/services/channels/listingsReconcile.service.ts`.
+
+- **Somente leitura no canal**: nenhum PUT/POST; vale também para conta real
+  (a trava `CHANNEL_LISTINGS_ALLOW_REAL_ACCOUNTS` continua valendo para escrita).
+- Lote: `rpc_claim_channel_listings_reconcile(limit, min_age)` pega anúncios
+  `active`/`paused` com id externo, nunca reconciliados ou mais antigos que a
+  idade mínima (`FOR UPDATE SKIP LOCKED` — execuções sobrepostas não repetem
+  anúncio) e carimba `last_reconciled_at`. Leitura em lote
+  `GET /items?ids=` (20 por chamada), agrupada por empresa.
+- Atualiza: status/sub_status, ids externos, permalink, categoria, tipo de
+  anúncio, quantidade observada e motivo de pausa/moderação
+  (`metadata.reconcile`: observed, status_reason, divergences).
+- Preço: mesma regra do sync (`externalPriceTransition`) → preço próprio
+  externo; preço-base nunca muda.
+- Status: `closed` → closed; `active` → active (reativado no canal);
+  `paused_by_seller` → paused; falta de estoque/moderação → mantém o local e
+  sinaliza. Nada é "corrigido" no canal.
+- Divergência de quantidade só é sinalizada (o fan-out/Sincronizar é que envia).
+- Erros individuais em `last_reconcile_error` (404, item de outra conta,
+  conta desconectada, falha de transporte); os demais seguem.
+- Isolamento: cada empresa usa só a própria conta; item cujo `seller_id` ≠
+  conta conectada é recusado; integração trocada é recusada.
+- Concorrência: grava com trava otimista em `updated_at`; se um sync/edição
+  mudou a linha no meio, a rodada não sobrescreve (`skipped_concurrent`).
+- **Agenda sugerida**: a cada 15 min; `CHANNEL_RECONCILE_BATCH_SIZE=100`,
+  `CHANNEL_RECONCILE_MIN_AGE_MINUTES=60` → cada anúncio conferido ~1×/h
+  (até ~400 anúncios vivos; acima disso aumentar o lote). Custo: 1 GET
+  `/users/me` por empresa + 1 GET por 20 anúncios.
+- Testes: `listingsReconcile.service.test.ts` (C1–C14) e
+  `supabase/tests/channel_listings_reconcile.test.sql`.

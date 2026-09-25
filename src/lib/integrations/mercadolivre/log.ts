@@ -24,6 +24,8 @@ export type MercadoLivreEvent =
   | 'mercadolivre.listing.paused'
   | 'mercadolivre.listing.activated'
   | 'mercadolivre.listing.reconciled'
+  | 'mercadolivre.listing.periodic_reconciled'
+  | 'mercadolivre.listing.periodic_reconcile_failed'
   | 'mercadolivre.webhook.received'
   | 'mercadolivre.inbound.processed'
   | 'mercadolivre.inbound.failed'
