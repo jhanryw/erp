@@ -870,3 +870,125 @@ describe('sincronização, pausa e reativação', () => {
     expect(repo.rows[0].last_error).toMatch(/retryable|500/)
   })
 })
+
+describe('direção do preço: ML → oferta, nunca → preço-base do Qarvon', () => {
+  async function published() {
+    await publishListings(session, publishInput(1, [11]), deps())
+    return repo.rows[0]
+  }
+  const itemOf = (row: { external_listing_id: string | null }) => api.item(row.external_listing_id!)!
+  const pricePuts = () => api.calls.filter((c) => c.method === 'PUT' && 'price' in JSON.parse(c.body!))
+  const hist = () => repo.rows[0].metadata.price_history as Array<Record<string, unknown>>
+
+  it('P1. Sincronizar detecta preço alterado no ML → vira preço próprio externo, sem reenviar preço', async () => {
+    const row = await published()
+    itemOf(row).price = 8 // alterado direto no Mercado Livre
+    await syncListing(COMPANY, row.id, deps())
+    expect(pricePuts()).toHaveLength(0)
+    expect(itemOf(row).price).toBe(8)
+    expect(repo.rows[0]).toMatchObject({ channel_price: 8, last_sent_price: 49.9 })
+    expect(repo.rows[0].metadata).toMatchObject({ price_source: 'external', last_seen_external_price: 8, external_price_detected_at: expect.any(String) })
+    expect(hist().at(-1)).toMatchObject({ previous: 49.9, requested: 8, result: 'external_change', source: 'external', channel_price_after: 8 })
+    expect(products[0].base_price).toBe(49.9)
+    const view = toListingView(repo.rows[0])
+    expect(view).toMatchObject({ price_mode: 'own', price_source: 'external', last_seen_external_price: 8 })
+  })
+
+  it('P2. fan-out de estoque (quantityOnly) também detecta a mudança externa e nunca envia preço', async () => {
+    const row = await published()
+    itemOf(row).price = 8
+    availability.set(11, { sellable_quantity: 2, manual_enabled: true })
+    await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    expect(pricePuts()).toHaveLength(0)
+    expect(itemOf(row).available_quantity).toBe(2)
+    expect(repo.rows[0]).toMatchObject({ channel_price: 8, synced_quantity: 2 })
+    expect(repo.rows[0].metadata.price_source).toBe('external')
+    expect(products[0].base_price).toBe(49.9)
+  })
+
+  it('P3. oferta com preço próprio (externo) não volta a herdar: mudar o preço-base não afeta a oferta', async () => {
+    const row = await published()
+    itemOf(row).price = 8
+    await syncListing(COMPANY, row.id, deps())
+    products[0].base_price = 60
+    await syncListing(COMPANY, row.id, deps())
+    await syncListing(COMPANY, row.id, deps())
+    expect(pricePuts()).toHaveLength(0)
+    expect(itemOf(row).price).toBe(8)
+    expect(repo.rows[0].channel_price).toBe(8)
+    expect(hist().filter((h) => h.result === 'external_change')).toHaveLength(1) // sem duplicar histórico
+  })
+
+  it('P4. oferta com preço próprio definido no Qarvon: mudar o preço-base não afeta a oferta', async () => {
+    const row = await published()
+    await updateListingPrice(COMPANY, row.id, 39.9, USER, deps())
+    const before = pricePuts().length
+    products[0].base_price = 60
+    await syncListing(COMPANY, row.id, deps())
+    expect(pricePuts()).toHaveLength(before)
+    expect(itemOf(row).price).toBe(39.9)
+    expect(repo.rows[0]).toMatchObject({ channel_price: 39.9, last_sent_price: 39.9 })
+    expect(hist().at(-1)).toMatchObject({ result: 'applied', source: 'qarvon' })
+  })
+
+  it('P5. oferta herdando e sem mudança externa: segue o preço-base (Sincronizar envia o herdado)', async () => {
+    const row = await published()
+    products[0].base_price = 52.9
+    await syncListing(COMPANY, row.id, deps())
+    expect(pricePuts().map((c) => JSON.parse(c.body!))).toEqual([{ price: 52.9 }])
+    expect(itemOf(row).price).toBe(52.9)
+    expect(repo.rows[0]).toMatchObject({ channel_price: null, last_sent_price: 52.9 })
+    expect(toListingView(repo.rows[0]).price_mode).toBe('inherited')
+  })
+
+  it('P6. sincronização só de estoque nunca envia preço, mesmo herdando com preço-base alterado', async () => {
+    const row = await published()
+    products[0].base_price = 52.9
+    await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    expect(pricePuts()).toHaveLength(0)
+    expect(itemOf(row).price).toBe(49.9)
+    expect(repo.rows[0]).toMatchObject({ channel_price: null, last_sent_price: 49.9 })
+  })
+
+  it('P7. preço-base do produto nunca muda por causa do ML (sync, fan-out, reconciliação)', async () => {
+    const row = await published()
+    itemOf(row).price = 12
+    await syncListing(COMPANY, row.id, deps(), { quantityOnly: true })
+    itemOf(row).price = 11
+    await syncListing(COMPANY, row.id, deps())
+    expect(products[0].base_price).toBe(49.9)
+    expect(products[0].variations[0].price_override).toBeNull()
+    expect(repo.rows[0].channel_price).toBe(11)
+    expect(hist().filter((h) => h.result === 'external_change').map((h) => [h.previous, h.requested])).toEqual([[49.9, 12], [12, 11]])
+  })
+
+  it('P8. reconciliação com preço divergente no ML → oferta passa a preço próprio externo', async () => {
+    const d = deps({ leaseSeconds: 10 })
+    const realComplete = repo.complete.bind(repo)
+    repo.complete = async () => false
+    await publishListings(session, publishInput(1, [11]), d)
+    repo.complete = realComplete
+    repo.rows[0].publish_lease_until = new Date(Date.now() - 1000).toISOString()
+    const id = [...api.items.keys()][0]
+    api.item(id)!.price = 8
+    const rec = await reconcileListing(COMPANY, repo.rows[0].id, d)
+    expect(rec.outcome).toBe('attached')
+    expect(pricePuts()).toHaveLength(0)
+    expect(repo.rows[0]).toMatchObject({ external_listing_id: id, channel_price: 8 })
+    expect(repo.rows[0].metadata.price_source).toBe('external')
+    expect(hist().at(-1)).toMatchObject({ previous: 49.9, requested: 8, result: 'external_change', source: 'external' })
+    expect(products[0].base_price).toBe(49.9)
+  })
+
+  it('P9. reconciliação com preço igual ao do Qarvon → continua herdando', async () => {
+    const d = deps({ leaseSeconds: 10 })
+    const realComplete = repo.complete.bind(repo)
+    repo.complete = async () => false
+    await publishListings(session, publishInput(1, [11]), d)
+    repo.complete = realComplete
+    repo.rows[0].publish_lease_until = new Date(Date.now() - 1000).toISOString()
+    await reconcileListing(COMPANY, repo.rows[0].id, d)
+    expect(repo.rows[0].channel_price).toBeNull()
+    expect(toListingView(repo.rows[0]).price_mode).toBe('inherited')
+  })
+})

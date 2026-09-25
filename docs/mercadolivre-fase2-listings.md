@@ -226,3 +226,26 @@ tipo, preço (próprio ou herdado), quantidade sincronizada, status, tarifa
 estimada sob demanda, vendas reais, última alteração de preço e ações
 **Editar preço · Sincronizar · Pausar/Reativar · Abrir**; "Nova oferta" com
 tipos da API e tarifa estimada ao vivo.
+
+## 17. Direção do preço: ML → oferta, nunca → preço-base
+
+- O preço-base do produto (e `price_override` da variação) **nunca** muda por
+  causa do Mercado Livre.
+- `channel_price` NULL = oferta **herdando** o preço do Qarvon; não-NULL =
+  **preço próprio da oferta** (definido no Qarvon ou detectado no ML). Uma
+  oferta com preço próprio nunca volta a herdar automaticamente.
+- `last_sent_price` = último preço **enviado pelo Qarvon** (não é sobrescrito
+  pelo que se observa no canal). Observação externa fica em metadata:
+  `last_seen_external_price`, `price_source` (`qarvon` | `qarvon_inherited` |
+  `external`), `external_price_detected_at`.
+- Toda sincronização (Sincronizar e fan-out de estoque) observa o preço atual
+  do item (resposta do PUT de quantidade; GET se ausente). Se diverge do preço
+  conhecido da oferta → vira preço próprio externo, entra no histórico como
+  `external_change` (`source: 'external'`) e **nenhum preço é enviado**.
+- Só "Sincronizar" (nunca o fan-out) pode enviar preço, e apenas para oferta
+  ainda herdando, sem divergência externa, quando o preço herdado mudou.
+- Reconciliação por SKU: oferta herdando cujo item tem preço ≠ preço do Qarvon
+  passa a preço próprio externo.
+- UI: "Preço próprio da oferta" / "Herdando preço do Qarvon" e "Preço alterado
+  no Mercado Livre em DD/MM HH:mm"; histórico distingue Qarvon × Mercado Livre.
+- Testes: `listings.service.test.ts` P1–P9.

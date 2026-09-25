@@ -307,8 +307,14 @@ function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish, onCha
         <Badge variant={st.variant}>{st.label}</Badge>
         {typeLabel && <span className="text-xs font-medium">{typeLabel}</span>}
         {l.offer_key !== l.listing_type_id && <span className="font-mono text-xs text-text-muted">{l.offer_key}</span>}
-        <span className="text-xs tabular-nums">{formatCurrency(l.effective_price)}{l.channel_price != null ? ' (preço da oferta)' : ' (herda o preço do Qarvon)'}</span>
+        <span className="text-xs tabular-nums">{formatCurrency(l.effective_price)}</span>
+        <span className={`rounded px-1.5 text-xs ${l.price_mode === 'own' ? 'bg-brand/10 text-brand' : 'bg-bg-overlay text-text-muted'}`}>
+          {l.price_mode === 'own' ? 'Preço próprio da oferta' : 'Herdando preço do Qarvon'}
+        </span>
       </div>
+      {l.price_source === 'external' && l.external_price_detected_at && (
+        <p className="text-xs text-info">Preço alterado no Mercado Livre em {fmtDate(l.external_price_detected_at)}</p>
+      )}
       {l.external_listing_id && (
         <p className="text-xs text-text-muted">
           Quantidade sincronizada: <span className="tabular-nums">{l.synced_quantity ?? '—'}</span>
@@ -334,7 +340,9 @@ function OfferBlock({ offer: l, busy, canRepublish, onAction, onRepublish, onCha
         return (
           <p className="text-xs text-text-muted">
             Última alteração de preço ({fmtDate(h.at)}): {h.previous != null ? formatCurrency(h.previous) : '—'} → {formatCurrency(h.requested)}
-            {' '}— {h.result === 'applied' ? 'aplicado no canal' : h.result === 'not_applied' ? 'não aplicado pelo canal' : 'falhou'}
+            {' '}— {h.result === 'external_change' ? 'feita no Mercado Livre (detectada)'
+              : h.result === 'applied' ? 'feita pelo Qarvon, aplicada no canal'
+              : h.result === 'not_applied' ? 'feita pelo Qarvon, não aplicada pelo canal' : 'feita pelo Qarvon, falhou'}
           </p>
         )
       })()}

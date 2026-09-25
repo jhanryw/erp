@@ -525,27 +525,51 @@ export async function syncListing(
 
   const info = (await d.availability(companyId, [row.product_variation_id])).get(row.product_variation_id)
   const quantity = product.active && variation.active ? resolveListingQuantity(info) : 0
-  const price = resolveListingPrice(product, variation, row.channel_price)
   const warnings: string[] = []
 
   try {
+    // 1. Estoque (absoluto, camada central) — nunca carrega preço. A resposta
+    //    do canal traz o preço ATUAL do item: é a observação do passo 2.
     let snap = await adapter.updateQuantity(refOf(row), quantity)
     warnings.push(...snap.warnings)
-    let sentPrice = row.last_sent_price
-    // quantityOnly: fan-out de estoque (stock.changed) — nunca mexe em preço.
-    if (!options.quantityOnly && (row.last_sent_price == null || Math.abs(Number(row.last_sent_price) - price) > 0.009)) {
-      snap = await adapter.updatePrice(refOf(row), price)
-      warnings.push(...snap.warnings)
-      sentPrice = snap.price != null && Math.abs(snap.price - price) <= 0.009 ? price : row.last_sent_price
+    if (snap.price == null) snap = await adapter.fetchListing(refOf(row))
+    const observed = snap.price
+
+    // 2. Divergência externa → preço próprio externo; NÃO envia preço.
+    const nowIso = new Date().toISOString()
+    const external = externalPriceTransition(row, observed, nowIso)
+    const externalChange = external?.channel_price != null
+    let patch: Partial<ListingRow> = { ...(external ?? {}) }
+    let current: ListingRow = { ...row, ...patch }
+
+    // 3. Só se não houve mudança externa, a oferta ainda HERDA e o preço do
+    //    Qarvon mudou: envia o preço herdado. Preço próprio nunca recebe o
+    //    preço-base. Fan-out de estoque (quantityOnly) nunca envia preço.
+    // Sem preço conhecido localmente não há como distinguir mudança externa:
+    // nunca envia (não sobrescreve o canal às cegas).
+    if (!options.quantityOnly && !externalChange && current.channel_price == null && offerKnownPrice(row) != null) {
+      const inherited = resolveListingPrice(product, variation, null)
+      if (!samePrice(observed, inherited)) {
+        snap = await adapter.updatePrice(refOf(row), inherited)
+        warnings.push(...snap.warnings)
+        const meta = (current.metadata ?? {}) as Record<string, unknown>
+        if (samePrice(snap.price, inherited)) {
+          patch = { ...patch, last_sent_price: inherited, metadata: { ...meta, last_seen_external_price: inherited, price_source: 'qarvon_inherited' } }
+        } else {
+          patch = { ...patch, metadata: { ...meta, last_seen_external_price: snap.price } }
+        }
+        current = { ...current, ...patch }
+      }
     }
+
     await d.repo.update(companyId, listingId, {
       ...snapshotPatch(row, snap),
+      ...patch,
       synced_quantity: quantity,
-      last_sent_price: sentPrice,
-      last_synced_at: new Date().toISOString(),
+      last_synced_at: nowIso,
       last_error: warnings.length ? `aviso: ${[...new Set(warnings)].join(' | ')}` : null,
     })
-    channelLog(ctx, 'synced', { listing_id: listingId, external_listing_id: row.external_listing_id, quantity })
+    channelLog(ctx, 'synced', { listing_id: listingId, external_listing_id: row.external_listing_id, quantity, reason: externalChange ? 'external_price_change' : null })
   } catch (err) {
     await d.repo.update(companyId, listingId, { last_error: errorText(err) })
     channelLog(ctx, 'sync_failed', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: isMercadoLivreError(err) ? err.kind : 'error' })
@@ -567,17 +591,75 @@ export async function pauseListing(companyId: number, listingId: number, deps?: 
 
 // ─── Preço por oferta (Fase 4) ────────────────────────────────────────────────
 
+const MAX_PRICE_HISTORY = 20
+
 export interface PriceHistoryEntry {
   at: string
   previous: number | null
+  /** Qarvon: preço pedido. Externo: preço observado no canal. */
   requested: number
-  result: 'applied' | 'not_applied' | 'failed'
+  result: 'applied' | 'not_applied' | 'failed' | 'external_change'
   channel_price_after: number | null
   error: string | null
   user_id: string | null
+  /** Quem alterou: o Qarvon (envio) ou o canal (detectado). Entradas antigas sem campo = qarvon. */
+  source?: 'qarvon' | 'external'
 }
 
-const MAX_PRICE_HISTORY = 20
+/**
+ * Semântica de preço da oferta:
+ *   channel_price NULL      → HERDANDO o preço do Qarvon (variação ?? produto)
+ *   channel_price preenchido → PREÇO PRÓPRIO efetivo da oferta (definido pelo
+ *                              Qarvon via "Editar preço" ou detectado no canal)
+ *   last_sent_price          → último preço ENVIADO pelo Qarvon ao canal
+ *   metadata.last_seen_external_price / price_source / external_price_detected_at
+ *                            → preço observado no canal e origem da última mudança
+ * Uma oferta com preço próprio nunca volta a herdar automaticamente, e o
+ * preço-base do produto nunca muda por causa do canal.
+ */
+export function offerKnownPrice(row: Pick<ListingRow, 'channel_price' | 'last_sent_price' | 'metadata'>): number | null {
+  if (row.channel_price != null) return Number(row.channel_price)
+  const seen = ((row.metadata ?? {}) as Record<string, unknown>).last_seen_external_price
+  if (row.last_sent_price != null) return Number(row.last_sent_price)
+  return seen == null ? null : Number(seen)
+}
+
+const samePrice = (a: number | null | undefined, b: number | null | undefined) =>
+  a != null && b != null && Math.abs(Number(a) - Number(b)) <= 0.009
+
+/**
+ * Preço observado no canal diverge do preço conhecido → mudança EXTERNA:
+ * a oferta passa a ter preço próprio = preço do canal (não é erro).
+ * Retorna o patch (sem enviar nada ao canal) ou null se não houve mudança.
+ */
+export function externalPriceTransition(row: ListingRow, observed: number | null, nowIso: string): Partial<ListingRow> | null {
+  if (observed == null) return null
+  const meta = (row.metadata ?? {}) as Record<string, unknown>
+  const known = offerKnownPrice(row)
+  if (known == null) {
+    // Sem referência local (vínculo antigo): só registra o que o canal mostra.
+    return { metadata: { ...meta, last_seen_external_price: observed } }
+  }
+  if (samePrice(known, observed)) {
+    return samePrice(meta.last_seen_external_price as number | null, observed) ? null : { metadata: { ...meta, last_seen_external_price: observed } }
+  }
+  const entry: PriceHistoryEntry = {
+    at: nowIso, previous: known, requested: observed, result: 'external_change', channel_price_after: observed,
+    error: null, user_id: null, source: 'external',
+  }
+  const hist = Array.isArray(meta.price_history) ? (meta.price_history as PriceHistoryEntry[]) : []
+  return {
+    channel_price: observed,
+    metadata: {
+      ...meta,
+      price_source: 'external',
+      last_seen_external_price: observed,
+      external_price_detected_at: nowIso,
+      price_history: [...hist, entry].slice(-MAX_PRICE_HISTORY),
+    },
+  }
+}
+
 const MAX_OFFER_PRICE = 1_000_000
 
 function pushPriceHistory(row: ListingRow, entry: PriceHistoryEntry): Record<string, unknown> {
@@ -609,7 +691,7 @@ export async function updateListingPrice(
   assertPublishAllowed(ctx)
   if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const previous = row.channel_price ?? row.last_sent_price
-  const base = { at: new Date().toISOString(), previous: previous == null ? null : Number(previous), requested, user_id: userId }
+  const base = { at: new Date().toISOString(), previous: previous == null ? null : Number(previous), requested, user_id: userId, source: 'qarvon' as const }
 
   let snap: ChannelListingSnapshot
   try {
@@ -629,9 +711,8 @@ export async function updateListingPrice(
     const message = `O canal não aplicou o preço (atual ${snap.price ?? '—'}).${snap.warnings.length ? ` ${snap.warnings.join(' | ')}` : ''}`
     await d.repo.update(companyId, listingId, {
       ...snapshotPatch(row, snap),
-      last_sent_price: snap.price ?? row.last_sent_price,
       last_error: message,
-      metadata: pushPriceHistory(row, { ...base, result: 'not_applied', channel_price_after: row.channel_price, error: message }),
+      metadata: { ...pushPriceHistory(row, { ...base, result: 'not_applied', channel_price_after: row.channel_price, error: message }), last_seen_external_price: snap.price },
     })
     return { row: (await d.repo.get(companyId, listingId))!, result: 'not_applied', message }
   }
@@ -642,7 +723,8 @@ export async function updateListingPrice(
     last_sent_price: requested,
     last_synced_at: new Date().toISOString(),
     last_error: null,
-    metadata: pushPriceHistory(row, { ...base, result: 'applied', channel_price_after: requested, error: null }),
+    metadata: { ...pushPriceHistory(row, { ...base, result: 'applied', channel_price_after: requested, error: null }),
+      price_source: 'qarvon', last_seen_external_price: requested },
   })
   channelLog(ctx, 'synced', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: 'price_updated' })
   return { row: (await d.repo.get(companyId, listingId))!, result: 'applied', message: null }
@@ -803,6 +885,18 @@ export async function reconcileListing(companyId: number, listingId: number, dep
   if (candidates.length === 1) {
     const snap = candidates[0]
     await d.repo.complete(companyId, listingId, null, snap, snap.price, snap.quantity, 'aviso: vinculado por reconciliação (SKU)')
+    // Oferta herdando com preço do item diferente do preço do Qarvon → o preço
+    // foi alterado no canal: vira preço próprio externo (histórico registrado).
+    if (row.channel_price == null && snap.price != null) {
+      const product = await d.source.loadProduct(companyId, row.product_id)
+      const variation = product?.variations.find((v) => v.id === row.product_variation_id)
+      const linked = await d.repo.get(companyId, listingId)
+      if (product && variation && linked) {
+        const expected = resolveListingPrice(product, variation, null)
+        const transition = externalPriceTransition({ ...linked, channel_price: null, last_sent_price: expected }, snap.price, new Date().toISOString())
+        if (transition?.channel_price != null) await d.repo.update(companyId, listingId, transition)
+      }
+    }
     channelLog(ctx, 'reconciled', { listing_id: listingId, external_listing_id: snap.externalListingId, reason: 'attached' })
     return { outcome: 'attached', externalListingId: snap.externalListingId, message: `Vinculado ao anúncio ${snap.externalListingId}.` }
   }
@@ -852,6 +946,12 @@ export interface ListingView {
   seller_sku: string
   offer_key: string
   listing_type_id: string | null
+  /** own = preço próprio da oferta; inherited = herdando o preço do Qarvon. */
+  price_mode: 'own' | 'inherited'
+  /** Origem da última mudança de preço: qarvon | external | qarvon_inherited | null. */
+  price_source: string | null
+  last_seen_external_price: number | null
+  external_price_detected_at: string | null
   local_status: ListingLocalStatus
   external_status: string | null
   external_sub_status: string[]
@@ -891,6 +991,11 @@ export function toListingView(row: ListingRow): ListingView {
     product_variation_id: row.product_variation_id,
     seller_sku: row.seller_sku,
     offer_key: row.offer_key,
+    price_mode: row.channel_price != null ? 'own' : 'inherited',
+    price_source: (((row.metadata ?? {}) as Record<string, unknown>).price_source as string | undefined) ?? null,
+    last_seen_external_price: ((row.metadata ?? {}) as Record<string, unknown>).last_seen_external_price == null ? null
+      : Number(((row.metadata ?? {}) as Record<string, unknown>).last_seen_external_price),
+    external_price_detected_at: (((row.metadata ?? {}) as Record<string, unknown>).external_price_detected_at as string | undefined) ?? null,
     listing_type_id: row.listing_type_id ?? ((row.metadata ?? {}) as Record<string, unknown>).listing_type_id as string ?? null,
     local_status: row.local_status,
     external_status: row.external_status,
