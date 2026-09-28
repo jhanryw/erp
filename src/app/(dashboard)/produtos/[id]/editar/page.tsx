@@ -12,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { ProductMediaManager } from '../../_components/product-media'
+import { buildVariationOverrideUpdates, describeOverrideError, type OverrideEdit } from './variationOverrides'
 import { WHOLESALE_STATUS_LABEL, WHOLESALE_VARIATION_STATUS_LABEL } from '@/services/wholesale/adminStatusLabels'
 import type { WholesaleAdminStatus, WholesaleVariationDetail } from '@/services/wholesale/adminStatus'
 import { Badge } from '@/components/ui/badge'
@@ -39,10 +40,10 @@ type VariationRow = {
 }
 
 // Edição in-place dos overrides de uma variação existente — valores como
-// string (mesmo padrão de input controlado do resto do formulário) para
-// permitir campo vazio sem virar "0". '' → null no submit (limpa o
-// override); número → grava; nunca alterado se o usuário não tocar no campo.
-type OverrideEdit = { price_override: string; wholesale_price_override: string }
+// string para permitir campo vazio sem virar "0". Conversão e validação no
+// submit via buildVariationOverrideUpdates (./variationOverrides.ts):
+// '' → null (limpa o override); "12,90"/"12.90" → 12.9; inválido → erro,
+// nunca enviado. OverrideEdit vem de lá.
 
 type VariationValue = { id: number; value: string; slug: string; sku_code?: string | null }
 
@@ -134,7 +135,7 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     handleSubmit,
     watch,
     reset,
-    formState: { errors, isSubmitting },
+    formState: { errors, isSubmitting, isDirty },
   } = useForm<ProductEditFormData>({
     resolver: zodResolver(productEditSchema),
   })
@@ -339,22 +340,26 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     if (toAdd.length > 0)    payload.variations_to_add    = toAdd.map(({ key: _key, ...v }) => v)
 
     // Overrides de variações EXISTENTES — só entra no payload quem
-    // realmente mudou (compara com o valor original carregado do banco),
-    // pra não gerar updates/ruído de auditoria em variação intocada.
-    const variationsToUpdate = variations
-      .map((v) => {
-        const edit = overrideEdits[v.id]
-        if (!edit) return null
-        const newPrice = edit.price_override.trim() === '' ? null : Number(edit.price_override)
-        const newWholesale = edit.wholesale_price_override.trim() === '' ? null : Number(edit.wholesale_price_override)
-        const priceChanged = newPrice !== (v.price_override ?? null)
-        const wholesaleChanged = newWholesale !== (v.wholesale_price_override ?? null)
-        if (!priceChanged && !wholesaleChanged) return null
-        return { id: v.id, price_override: newPrice, wholesale_price_override: newWholesale }
+    // realmente mudou (compara com o valor carregado do banco). Valor
+    // inválido (ex.: "abc", "0,00") bloqueia o envio: nunca vira null
+    // silenciosamente nem mostra sucesso.
+    const overrideResult = buildVariationOverrideUpdates(variations, overrideEdits)
+    if (overrideResult.errors.length > 0) {
+      toast.error('Corrija os preços específicos antes de salvar.', {
+        description: overrideResult.errors.map(describeOverrideError).join(' · '),
       })
-      .filter((x): x is { id: number; price_override: number | null; wholesale_price_override: number | null } => x !== null)
+      return
+    }
+    const variationsToUpdate = overrideResult.updates
 
     if (variationsToUpdate.length > 0) payload.variations_to_update = variationsToUpdate
+
+    // Nada mudou (formulário intocado e nenhuma variação a criar, excluir
+    // ou alterar) → não envia nem diz "atualizado".
+    if (!isDirty && toDelete.length === 0 && toAdd.length === 0 && variationsToUpdate.length === 0) {
+      toast.info('Nenhuma alteração para salvar.')
+      return
+    }
 
     // Log de diagnóstico ANTES do fetch — sku_variation digitado é ignorado
     // pelo servidor (gerado lá a partir de tipo/modelo/ano + cor/tamanho),
@@ -437,6 +442,8 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
     }
 
     toast.success('Produto atualizado!')
+    // O detalhe é Server Component: push + refresh relê o banco, então a
+    // tela seguinte mostra o valor efetivamente gravado (não o estado local).
     router.push(`/produtos/${params.id}`)
     router.refresh()
   }
@@ -743,10 +750,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                         <div>
                           <label className="label-base text-xs">Preço varejo específico</label>
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
-                            placeholder={basePrice > 0 ? `base: ${basePrice.toFixed(2)}` : 'usa o preço base'}
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
+                            placeholder={basePrice > 0 ? `base: ${basePrice.toFixed(2).replace('.', ',')}` : 'usa o preço base'}
                             className="input-base text-xs py-1.5 w-full"
                             value={edit.price_override}
                             onChange={(e) => updateOverrideEdit(v.id, 'price_override', e.target.value)}
@@ -755,9 +762,9 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                         <div>
                           <label className="label-base text-xs">Preço atacado específico</label>
                           <input
-                            type="number"
-                            step="0.01"
-                            min="0.01"
+                            type="text"
+                            inputMode="decimal"
+                            autoComplete="off"
                             placeholder="opcional"
                             className="input-base text-xs py-1.5 w-full"
                             value={edit.wholesale_price_override}
