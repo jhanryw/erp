@@ -87,6 +87,8 @@ async function defaultListPending(limit: number): Promise<PendingListing[]> {
   const { data, error } = await admin.from('channel_listings')
     .select('id, company_id')
     .eq('stock_sync_pending', true)
+    // Fan-out de estoque para Shopee é Fase 5: só Mercado Livre por enquanto.
+    .eq('provider', 'mercadolivre')
     .order('updated_at', { ascending: true })
     .limit(limit)
   if (error) throw new Error(error.message)

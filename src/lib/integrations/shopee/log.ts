@@ -14,6 +14,14 @@ export type ShopeeEvent =
   | 'shopee.token.refresh_waited'
   | 'shopee.integration.disconnected'
   | 'shopee.api.error'
+  | 'shopee.listing.publish_started'
+  | 'shopee.listing.published'
+  | 'shopee.listing.publish_failed'
+  | 'shopee.listing.synced'
+  | 'shopee.listing.sync_failed'
+  | 'shopee.listing.paused'
+  | 'shopee.listing.activated'
+  | 'shopee.listing.reconciled'
 
 export interface ShopeeLogFields {
   company_id?: number | null
@@ -25,10 +33,15 @@ export interface ShopeeLogFields {
   worker_id?: string | null
   reason?: string | null
   path?: string | null
+  listing_id?: number | null
+  product_variation_id?: number | null
+  external_listing_id?: string | null
+  quantity?: number | null
 }
 
 const ALLOWED_KEYS: ReadonlyArray<keyof ShopeeLogFields> = [
   'company_id', 'integration_id', 'shop_id', 'user_id', 'http_status', 'request_id', 'worker_id', 'reason', 'path',
+  'listing_id', 'product_variation_id', 'external_listing_id', 'quantity',
 ]
 
 export type LogSink = (line: string) => void

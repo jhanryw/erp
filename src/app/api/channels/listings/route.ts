@@ -6,7 +6,8 @@ import { getChannelProductOverview, publishListings } from '@/services/channels/
 import { getMercadoLivreConnection } from '@/services/integrations/mercadolivre.service'
 import { requiredAttributeIdsFor } from '@/services/channels/mercadolivreChannel'
 import { channelErrorResponse, parsePositiveId, requireChannelUser } from '../_shared'
-import { publishListingsSchema } from './schema'
+import { publishListingsSchema, type ShopeePublishBody } from './schema'
+import type { ChannelSession } from '../_shared'
 import { zodErrorMessage } from '@/app/api/produtos/kits/schema'
 
 /** GET ?product_id= — "Canais de venda" do produto: conexão + variações + anúncios. */
@@ -40,6 +41,8 @@ export async function POST(request: Request) {
   if (!parsed.success) return NextResponse.json({ error: zodErrorMessage(parsed.error) }, { status: 422 })
   const b = parsed.data
 
+  if (b.provider === 'shopee') return publishShopee(user, b)
+
   try {
     // Obrigatórios calculados no servidor a partir da categoria (+ condicionais).
     const requiredAttributeIds = await requiredAttributeIdsFor(user.company_id, b.category_id, [
@@ -66,6 +69,49 @@ export async function POST(request: Request) {
       detail: `mercadolivre: ${published.length}/${results.length} variação(ões) publicada(s) (conta ${channel.accountLabel ?? channel.sellerId}${channel.isTestAccount ? ', TEST' : ''})`,
     })
     return NextResponse.json({ model: channel.model, results }, { status: published.length > 0 ? 201 : 200 })
+  } catch (err) {
+    return channelErrorResponse(err)
+  }
+}
+
+/**
+ * Shopee pelo MESMO núcleo genérico (lease/idempotência de listings.service).
+ * Obrigatórios da categoria são calculados no servidor pelo adaptador
+ * (validateListing consulta a Shopee ao vivo) — nada vem confiado do cliente.
+ */
+async function publishShopee(user: ChannelSession, b: ShopeePublishBody) {
+  try {
+    const { channel, results } = await publishListings(
+      { companyId: user.company_id, userId: user.id },
+      {
+        target: { provider: 'shopee', integrationId: b.integration_id },
+        productId: b.product_id,
+        categoryId: b.category_id,
+        offerKey: b.offer_key ?? null,
+        familyName: b.item_name ?? null,
+        description: b.description ?? null,
+        commonAttributes: [],
+        requiredAttributeIds: [],
+        variations: b.variations.map((v) => ({ productVariationId: v.product_variation_id, channelPrice: v.channel_price ?? null })),
+        channelOptions: {
+          shopee: {
+            condition: b.condition ?? null,
+            weight_kg: b.weight_kg ?? null,
+            dimension: b.dimension ?? null,
+            brand: b.brand ?? null,
+            attributes: b.attributes,
+            logistic_channel_id: b.logistic_channel_id ?? null,
+            item_status: b.item_status ?? null,
+          },
+        },
+      },
+    )
+    const published = results.filter((r) => r.status === 'published' || r.status === 'reconciled')
+    auditLog({
+      userId: user.id, userRole: user.role, action: 'create', resource: 'product', resourceId: b.product_id,
+      detail: `shopee: ${published.length}/${results.length} publicado(s) (loja ${channel.shopId ?? channel.sellerId}, integração ${channel.integrationId})`,
+    })
+    return NextResponse.json({ provider: 'shopee', integration_id: channel.integrationId, results }, { status: published.length > 0 ? 201 : 200 })
   } catch (err) {
     return channelErrorResponse(err)
   }

@@ -25,6 +25,7 @@ import {
   resolveLocalStatus,
   type ChannelAdapter,
   type ChannelAttributeValue,
+  type ChannelProvider,
   type ChannelListingDraft,
   type ChannelListingSnapshot,
   type ListingLocalStatus,
@@ -37,6 +38,10 @@ import { loadVariationListingPictureUrls } from '@/services/catalog/productPictu
 import { createMercadoLivreAdapter } from '@/lib/integrations/mercadolivre/adapter'
 import { estimateListingFee, type ListingFeeEstimate } from '@/lib/integrations/mercadolivre/catalog'
 import { resolveMercadoLivreChannel } from './mercadolivreChannel'
+import { isShopeeError } from '@/lib/integrations/shopee/errors'
+import { logShopee, type ShopeeEvent } from '@/lib/integrations/shopee/log'
+import { createShopeeAdapter } from '@/lib/integrations/shopee/adapter'
+import { resolveShopeeChannel } from './shopeeChannel'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -53,7 +58,7 @@ export class ListingError extends Error {
 }
 
 export interface ChannelContext {
-  provider: 'mercadolivre'
+  provider: ChannelProvider
   integrationId: number
   companyId: number
   sellerId: string
@@ -63,6 +68,18 @@ export interface ChannelContext {
   model: string
   accountLabel: string | null
   isTestAccount: boolean
+  /** Shopee: shop_id da loja (= sellerId). */
+  shopId?: string
+}
+
+/**
+ * Qual conta de canal usar. Sem alvo = Mercado Livre (conta única por
+ * empresa — comportamento anterior). Com alvo = a integração EXATA
+ * (multi-loja: Shopee), sempre validada contra a empresa da sessão.
+ */
+export interface ChannelTarget {
+  provider: ChannelProvider
+  integrationId: number | null
 }
 
 export interface ListingRow {
@@ -140,8 +157,12 @@ export interface ProductSource {
 
 export interface ListingSourceLoader {
   loadProduct(companyId: number, productId: number): Promise<ProductSource | null>
-  /** URLs de imagem já em ordem (variação primeiro, depois produto). */
-  loadPictures(companyId: number, productId: number, variationId: number): Promise<string[]>
+  /**
+   * URLs de imagem já em ordem (variação primeiro, depois produto), só do
+   * Media Hub. `allowLegacyPhotoUrl` (padrão true, comportamento do ML) cai
+   * para products.photo_url quando o Media Hub não tem nada.
+   */
+  loadPictures(companyId: number, productId: number, variationId: number, opts?: { allowLegacyPhotoUrl?: boolean }): Promise<string[]>
 }
 
 export interface AvailabilityInfo {
@@ -153,7 +174,7 @@ export interface ListingsServiceDeps {
   repo?: ListingsRepo
   source?: ListingSourceLoader
   availability?: (companyId: number, variationIds: number[]) => Promise<Map<number, AvailabilityInfo>>
-  resolveChannel?: (companyId: number) => Promise<ChannelContext>
+  resolveChannel?: (companyId: number, target?: ChannelTarget) => Promise<ChannelContext>
   adapterFor?: (ctx: ChannelContext) => ChannelAdapter
   leaseSeconds?: number
   /** Tarifa ESTIMADA do canal (pré-venda). Nunca usada no financeiro. */
@@ -187,6 +208,10 @@ export interface PublishInput {
   variations: PublishVariationInput[]
   /** Ids de atributos obrigatórios da categoria (validados antes de chamar o canal). */
   requiredAttributeIds?: string[]
+  /** Conta do canal (multi-loja). Ausente = Mercado Livre da empresa. */
+  target?: ChannelTarget
+  /** Parâmetros específicos do canal, repassados ao adaptador em draft.channelOptions. */
+  channelOptions?: Record<string, unknown>
 }
 
 export type PublishOutcome =
@@ -229,7 +254,7 @@ function mergeAttributes(common: ChannelAttributeValue[] = [], specific: Channel
 
 function errorText(err: unknown): string {
   if (err instanceof ListingError) return err.message
-  if (isMercadoLivreError(err)) return `${err.kind}${err.httpStatus ? ` (${err.httpStatus})` : ''}: ${err.message}`
+  if (isMercadoLivreError(err) || isShopeeError(err)) return `${err.kind}${err.httpStatus ? ` (${err.httpStatus})` : ''}: ${err.message}`
   return err instanceof Error ? err.message : 'erro inesperado'
 }
 
@@ -267,12 +292,40 @@ async function recordAttempt(
 
 /** Falha no POST /items que garante que o anúncio NÃO foi criado (rejeição explícita do canal). */
 function isDefinitiveRejection(err: unknown): boolean {
+  if (isShopeeError(err)) {
+    // Shopee: falhas ANTES do add_item (imagem, requisitos) marcam nothingCreated.
+    return err.nothingCreated || ['bad_request', 'forbidden', 'unauthorized', 'reauth_required', 'integration_not_found', 'integration_disabled', 'config'].includes(err.kind)
+  }
   return isMercadoLivreError(err) && ['bad_request', 'forbidden', 'unauthorized', 'reauth_required', 'not_found'].includes(err.kind)
+}
+
+function errKind(err: unknown): string {
+  return isMercadoLivreError(err) || isShopeeError(err) ? err.kind : 'error'
 }
 
 function channelLog(ctx: Pick<ChannelContext, 'provider' | 'companyId' | 'integrationId'>, event: string, fields: MercadoLivreLogFields = {}): void {
   if (ctx.provider === 'mercadolivre') {
     logMercadoLivre(`mercadolivre.listing.${event}` as MercadoLivreEvent, { company_id: ctx.companyId, integration_id: ctx.integrationId, ...fields })
+  } else if (ctx.provider === 'shopee') {
+    logShopee(`shopee.listing.${event}` as ShopeeEvent, {
+      company_id: ctx.companyId, integration_id: ctx.integrationId, listing_id: fields.listing_id ?? null,
+      product_variation_id: fields.product_variation_id ?? null, external_listing_id: fields.external_listing_id ?? null,
+      quantity: fields.quantity ?? null, http_status: fields.http_status ?? null, reason: fields.reason ?? null,
+    })
+  }
+}
+
+/** Alvo do canal a partir de um vínculo existente (a integração EXATA do anúncio). */
+function targetOf(row: Pick<ListingRow, 'provider' | 'integration_id'>): ChannelTarget | undefined {
+  return row.provider === 'mercadolivre' ? undefined : { provider: row.provider as ChannelProvider, integrationId: row.integration_id }
+}
+
+/** Reconciliação por SKU pode não existir no canal nesta fase (Shopee): vira needs_reconciliation, nunca republicação. */
+async function safeReconcile(companyId: number, listingId: number, deps: ListingsServiceDeps): Promise<ReconcileResult> {
+  try {
+    return await reconcileListing(companyId, listingId, deps)
+  } catch (err) {
+    return { outcome: 'ambiguous', message: `Reconciliação automática indisponível: ${errorText(err)}` }
   }
 }
 
@@ -297,7 +350,12 @@ export function resolveDeps(deps: ListingsServiceDeps = {}) {
  * publicar na conta real da loja durante a Fase 2. Sincronizar/pausar
  * anúncios já existentes não é afetado.
  */
-export function assertPublishAllowed(ctx: Pick<ChannelContext, 'isTestAccount'>, env: Record<string, string | undefined> = process.env): void {
+export function assertPublishAllowed(ctx: Pick<ChannelContext, 'isTestAccount'> & { provider?: ChannelProvider }, env: Record<string, string | undefined> = process.env): void {
+  if (ctx.provider === 'shopee') {
+    // Sem conta de teste confirmada na Shopee: liberação explícita e SEPARADA da do ML.
+    if (env.SHOPEE_LISTINGS_ALLOW_PUBLISH === 'true') return
+    throw new ListingError('real_account_blocked', 'Publicação na Shopee bloqueada: defina SHOPEE_LISTINGS_ALLOW_PUBLISH=true para liberar escritas nesta instalação.')
+  }
   if (ctx.isTestAccount) return
   if (env.CHANNEL_LISTINGS_ALLOW_REAL_ACCOUNTS === 'true') return
   throw new ListingError('real_account_blocked', 'Publicação em conta REAL bloqueada nesta fase: conecte um usuário de TESTE do Mercado Livre.')
@@ -309,10 +367,14 @@ export async function publishListings(
   deps?: ListingsServiceDeps,
 ): Promise<{ channel: ChannelContext; results: PublishOutcome[] }> {
   const d = resolveDeps(deps)
-  const ctx = await d.resolveChannel(session.companyId)
+  const ctx = await d.resolveChannel(session.companyId, input.target)
+  if (input.target && (ctx.provider !== input.target.provider || (input.target.integrationId != null && ctx.integrationId !== input.target.integrationId) || ctx.companyId !== session.companyId)) {
+    throw new ListingError('not_connected', 'Conta do canal não corresponde à solicitada.')
+  }
   assertPublishAllowed(ctx)
   // Oferta resolvida uma vez para o pedido inteiro (mesma chave em todas as variações).
-  const listingTypeId = input.listingTypeId ?? 'gold_special'
+  // Tipo de anúncio padrão é conceito do ML; outros canais não recebem um.
+  const listingTypeId = input.listingTypeId ?? (ctx.provider === 'mercadolivre' ? 'gold_special' : undefined)
   input = { ...input, listingTypeId, offerKey: normalizeOfferKey(input.offerKey, listingTypeId) }
   const product = await d.source.loadProduct(session.companyId, input.productId)
   if (!product) throw new ListingError('not_found', 'Produto não encontrado.')
@@ -356,7 +418,7 @@ async function publishOne(
   const price = resolveListingPrice(product, variation, vInput.channelPrice)
   if (!(price > 0)) return fail('invalid_price', 'Preço inválido.')
 
-  const pictures = validatePictureUrls(await d.source.loadPictures(session.companyId, product.id, pvid))
+  const pictures = validatePictureUrls(await d.source.loadPictures(session.companyId, product.id, pvid, { allowLegacyPhotoUrl: ctx.provider === 'mercadolivre' }))
   if (pictures.valid.length === 0) {
     return fail('invalid_images', `Nenhuma imagem válida (JPG/PNG pública).${pictures.invalid.length ? ` Recusadas: ${pictures.invalid.map((i) => i.reason).join('; ')}` : ''}`)
   }
@@ -382,7 +444,7 @@ async function publishOne(
     quantity,
     pictureUrls: pictures.valid,
     attributes,
-    channelOptions: { listing_type_id: input.listingTypeId!, condition: 'new' },
+    channelOptions: { listing_type_id: input.listingTypeId ?? null, condition: 'new', ...(input.channelOptions ?? {}) },
   }
 
   // Vínculo em 'error' sem id externo = a tentativa anterior PODE ter criado o
@@ -392,7 +454,7 @@ async function publishOne(
     .find((r) => r.product_variation_id === pvid && r.integration_id === ctx.integrationId
       && r.offer_key === input.offerKey && r.local_status !== 'closed')
   if (existing && !existing.external_listing_id && existing.local_status === 'error') {
-    const rec = await reconcileListing(session.companyId, existing.id, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
+    const rec = await safeReconcile(session.companyId, existing.id, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
     if (rec.outcome === 'attached') {
       return { productVariationId: pvid, status: 'reconciled', listingId: existing.id, externalListingId: rec.externalListingId!, warnings: [] }
     }
@@ -407,6 +469,7 @@ async function publishOne(
     metadata: {
       category_id: input.categoryId, domain_id: input.domainId ?? null, listing_type_id: draft.channelOptions.listing_type_id, family_name: productName,
       description: input.description ?? null, attributes, model: ctx.model, offer_key: input.offerKey,
+      ...(input.channelOptions ? { channel_options: input.channelOptions } : {}),
     },
     userId: session.userId,
     offerKey: input.offerKey!,
@@ -422,7 +485,7 @@ async function publishOne(
   if (begin.result === 'needs_reconciliation') {
     // Tentativa anterior caiu entre a criação no canal e o salvamento:
     // procura pelo SKU antes de qualquer nova tentativa (nunca duplica).
-    const rec = await reconcileListing(session.companyId, begin.listing_id!, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
+    const rec = await safeReconcile(session.companyId, begin.listing_id!, { ...d, resolveChannel: async () => ctx, adapterFor: () => adapter })
     if (rec.outcome === 'attached') {
       return { productVariationId: pvid, status: 'reconciled', listingId: begin.listing_id!, externalListingId: rec.externalListingId!, warnings: [] }
     }
@@ -475,10 +538,10 @@ async function publishOne(
     }
     channelLog(ctx, 'publish_failed', {
       listing_id: listingId, product_variation_id: pvid,
-      http_status: isMercadoLivreError(err) ? err.httpStatus : null,
-      reason: isMercadoLivreError(err) ? err.kind : 'error',
+      http_status: isMercadoLivreError(err) || isShopeeError(err) ? err.httpStatus : null,
+      reason: errKind(err),
     })
-    return fail(isMercadoLivreError(err) && err.kind === 'reauth_required' ? 'needs_reauth' : 'channel_error', message, listingId)
+    return fail((isMercadoLivreError(err) || isShopeeError(err)) && err.kind === 'reauth_required' ? 'needs_reauth' : 'channel_error', message, listingId)
   }
 }
 
@@ -519,7 +582,7 @@ export async function syncListing(
 ): Promise<ListingRow> {
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
-  const ctx = await d.resolveChannel(companyId)
+  const ctx = await d.resolveChannel(companyId, targetOf(row))
   assertPublishAllowed(ctx)
   if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const adapter = d.adapterFor(ctx)
@@ -577,7 +640,7 @@ export async function syncListing(
     channelLog(ctx, 'synced', { listing_id: listingId, external_listing_id: row.external_listing_id, quantity, reason: externalChange ? 'external_price_change' : null })
   } catch (err) {
     await d.repo.update(companyId, listingId, { last_error: errorText(err) })
-    channelLog(ctx, 'sync_failed', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: isMercadoLivreError(err) ? err.kind : 'error' })
+    channelLog(ctx, 'sync_failed', { listing_id: listingId, external_listing_id: row.external_listing_id, reason: errKind(err) })
     throw err
   }
   return (await d.repo.get(companyId, listingId))!
@@ -586,8 +649,9 @@ export async function syncListing(
 export async function pauseListing(companyId: number, listingId: number, deps?: ListingsServiceDeps): Promise<ListingRow> {
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
-  const ctx = await d.resolveChannel(companyId)
+  const ctx = await d.resolveChannel(companyId, targetOf(row))
   assertPublishAllowed(ctx)
+  if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const snap = await d.adapterFor(ctx).pauseListing(refOf(row))
   await d.repo.update(companyId, listingId, { ...snapshotPatch(row, snap, 'paused'), last_error: null })
   channelLog(ctx, 'paused', { listing_id: listingId, external_listing_id: row.external_listing_id })
@@ -692,7 +756,7 @@ export async function updateListingPrice(
     throw new ListingError('invalid_price', 'Preço inválido (maior que zero, até 2 casas decimais).')
   }
   const row = await loadPublished(d, companyId, listingId)
-  const ctx = await d.resolveChannel(companyId)
+  const ctx = await d.resolveChannel(companyId, targetOf(row))
   assertPublishAllowed(ctx)
   if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const previous = row.channel_price ?? row.last_sent_price
@@ -836,8 +900,9 @@ export function aggregateOfferMetrics(rows: OfferSaleRow[]): Map<number | null, 
 export async function activateListing(companyId: number, listingId: number, deps?: ListingsServiceDeps): Promise<ListingRow> {
   const d = resolveDeps(deps)
   const row = await loadPublished(d, companyId, listingId)
-  const ctx = await d.resolveChannel(companyId)
+  const ctx = await d.resolveChannel(companyId, targetOf(row))
   assertPublishAllowed(ctx)
+  if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const product = await d.source.loadProduct(companyId, row.product_id)
   const variation = product?.variations.find((v) => v.id === row.product_variation_id)
   if (!product || !variation || !product.active || !variation.active) {
@@ -872,7 +937,8 @@ export async function reconcileListing(companyId: number, listingId: number, dep
     throw new ListingError('in_progress', 'Publicação em andamento; aguarde antes de reconciliar.')
   }
 
-  const ctx = await d.resolveChannel(companyId)
+  const ctx = await d.resolveChannel(companyId, targetOf(row))
+  if (row.integration_id !== ctx.integrationId) throw new ListingError('not_connected', 'Anúncio pertence a uma conta que não está mais conectada.')
   const found = await d.adapterFor(ctx).findListingsBySellerSku(row.seller_sku)
   const alreadyLinked = new Set((await d.repo.listByProduct(companyId, row.product_id)).map((r) => r.external_listing_id).filter(Boolean))
   let candidates = found.filter((s) => !alreadyLinked.has(s.externalListingId) && s.externalStatus !== 'closed')
@@ -1166,12 +1232,16 @@ async function defaultLoadOrderItems(companyId: number, productId: number): Prom
   }))
 }
 
-async function defaultResolveChannel(companyId: number): Promise<ChannelContext> {
+async function defaultResolveChannel(companyId: number, target?: ChannelTarget): Promise<ChannelContext> {
+  if (target?.provider === 'shopee') return resolveShopeeChannel(companyId, target.integrationId ?? 0)
   return resolveMercadoLivreChannel(companyId)
 }
 
 /** Registro de adaptadores por provider — único ponto que conhece as implementações. */
 function defaultAdapterFor(ctx: ChannelContext): ChannelAdapter {
+  if (ctx.provider === 'shopee') {
+    return createShopeeAdapter({ integrationId: ctx.integrationId, companyId: ctx.companyId, shopId: ctx.shopId ?? ctx.sellerId })
+  }
   return createMercadoLivreAdapter({
     integrationId: ctx.integrationId, companyId: ctx.companyId, sellerId: ctx.sellerId,
     model: ctx.model === 'user_products' ? 'user_products' : 'legacy',
@@ -1262,8 +1332,8 @@ export function createSupabaseListingSource(): ListingSourceLoader {
         })),
       }
     },
-    async loadPictures(companyId, productId, variationId) {
-      return loadVariationListingPictureUrls(companyId, productId, variationId, async () => {
+    async loadPictures(companyId, productId, variationId, opts) {
+      return loadVariationListingPictureUrls(companyId, productId, variationId, opts?.allowLegacyPhotoUrl === false ? undefined : async () => {
         const { data } = await admin.from('products').select('photo_url').eq('id', productId).eq('company_id', companyId).maybeSingle()
         return data?.photo_url ?? null
       })

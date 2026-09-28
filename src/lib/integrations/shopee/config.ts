@@ -25,6 +25,14 @@ export const SHOPEE_PATHS = {
   cancelAuthorize: '/cancel_auth',
   tokenGet: '/api/v2/auth/token/get',
   accessTokenGet: '/api/v2/auth/access_token/get',
+  // Shop API — catálogo/publicação (paths conferidos na referência oficial v2, 28/09/2026)
+  getCategory: '/api/v2/product/get_category',
+  getAttributeTree: '/api/v2/product/get_attribute_tree',
+  getBrandList: '/api/v2/product/get_brand_list',
+  addItem: '/api/v2/product/add_item',
+  getItemBaseInfo: '/api/v2/product/get_item_base_info',
+  uploadImage: '/api/v2/media_space/upload_image',
+  getChannelList: '/api/v2/logistics/get_channel_list',
 } as const
 
 export interface ShopeeConfig {

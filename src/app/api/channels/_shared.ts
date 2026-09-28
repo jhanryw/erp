@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireRole, type SessionUser } from '@/lib/supabase/session'
 import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
+import { isShopeeError } from '@/lib/integrations/shopee/errors'
 import { ListingError } from '@/services/channels/listings.service'
 
 /** Publicar/sincronizar/pausar anúncios = mesmo nível da publicação na Nuvemshop (gerente). */
@@ -35,6 +36,16 @@ export function channelErrorResponse(err: unknown): NextResponse {
   }
   if (isMercadoLivreError(err)) {
     const status = err.kind === 'rate_limited' ? 429 : err.kind === 'reauth_required' ? 409 : err.retryable ? 502 : 400
+    return NextResponse.json({ error: err.message, code: err.kind }, { status })
+  }
+  if (isShopeeError(err)) {
+    const status =
+      err.kind === 'rate_limited' ? 429 :
+      err.kind === 'reauth_required' ? 409 :
+      err.kind === 'integration_not_found' || err.kind === 'integration_disabled' || err.kind === 'not_found' ? 404 :
+      err.kind === 'not_implemented' ? 501 :
+      err.kind === 'config' ? 503 :
+      err.retryable ? 502 : 400
     return NextResponse.json({ error: err.message, code: err.kind }, { status })
   }
   console.error('[api/channels] erro inesperado', err instanceof Error ? err.message : 'unknown')

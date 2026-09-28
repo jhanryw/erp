@@ -24,6 +24,8 @@ export type ShopeeErrorKind =
   | 'timeout'
   | 'network'
   | 'invalid_response'     // resposta sem os campos esperados / não-JSON
+  | 'not_found'            // recurso (item/categoria) inexistente nesta loja
+  | 'not_implemented'      // operação do ChannelAdapter fora do escopo desta fase
 
 const RETRYABLE: ReadonlySet<ShopeeErrorKind> = new Set(['rate_limited', 'server', 'timeout', 'network', 'refresh_in_progress'])
 
@@ -34,11 +36,17 @@ export class ShopeeError extends Error {
   readonly shopeeError: string | null
   readonly requestId: string | null
   readonly retryAfterSeconds: number | null
+  /**
+   * true = é CERTO que nada foi criado na Shopee (ex.: falha no download/upload
+   * de imagem ANTES do add_item). O core usa isso para deixar o vínculo
+   * republicável em vez de exigir reconciliação.
+   */
+  readonly nothingCreated: boolean
 
   constructor(
     kind: ShopeeErrorKind,
     message: string,
-    opts: { httpStatus?: number | null; shopeeError?: string | null; requestId?: string | null; retryAfterSeconds?: number | null } = {},
+    opts: { httpStatus?: number | null; shopeeError?: string | null; requestId?: string | null; retryAfterSeconds?: number | null; nothingCreated?: boolean } = {},
   ) {
     super(redactSecrets(message))
     this.name = 'ShopeeError'
@@ -47,6 +55,7 @@ export class ShopeeError extends Error {
     this.shopeeError = opts.shopeeError ?? null
     this.requestId = opts.requestId ?? null
     this.retryAfterSeconds = opts.retryAfterSeconds ?? null
+    this.nothingCreated = opts.nothingCreated ?? false
   }
 
   /** Falha transitória — a camada chamadora pode tentar de novo depois. */

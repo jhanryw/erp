@@ -259,6 +259,14 @@ describe('reconciliação periódica canal → Qarvon (somente leitura)', () => 
     expect(api.calls).toHaveLength(0)
   })
 
+  it('C15. anúncio Shopee no lote → ignorado (reconciliação Shopee é Fase 8): sem erro gravado nem leitura no ML', async () => {
+    const r = mkRow('800001', { provider: 'shopee', integration_id: 999 })
+    const res = await runPeriodicListingReconcile({}, deps())
+    expect(res.failed).toBe(0)
+    expect(row(r.id).last_reconcile_error ?? null).toBeNull()
+    expect(api.calls).toHaveLength(0)
+  })
+
   it('describeExternalStatus: texto do status com motivo', () => {
     expect(describeExternalStatus('paused', ['out_of_stock'])).toBe('pausado (sem estoque)')
     expect(describeExternalStatus(null, [])).toBeNull()

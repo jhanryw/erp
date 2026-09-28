@@ -206,7 +206,12 @@ export async function runPeriodicListingReconcile(
   }
 
   const byCompany = new Map<number, ListingRow[]>()
-  for (const r of rows) byCompany.set(r.company_id, [...(byCompany.get(r.company_id) ?? []), r])
+  // Reconciliação periódica cobre só o Mercado Livre nesta fase; anúncios de
+  // outros canais (Shopee: Fase 8) são ignorados sem gravar erro.
+  for (const r of rows) {
+    if (r.provider && r.provider !== 'mercadolivre') continue
+    byCompany.set(r.company_id, [...(byCompany.get(r.company_id) ?? []), r])
+  }
 
   for (const [companyId, list] of byCompany) {
     let ctx: ChannelContext

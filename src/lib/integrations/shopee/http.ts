@@ -32,6 +32,8 @@ export interface ShopeeHttpRequest {
   auth: ShopeeAuth
   query?: Record<string, string | number | boolean | undefined>
   body?: unknown
+  /** multipart/form-data (ex.: media_space/upload_image). Exclusivo com `body`. */
+  form?: FormData
   timeoutMs?: number
   fetchImpl?: FetchLike
   now?: () => Date
@@ -67,8 +69,11 @@ export async function shopeeHttp<T = Record<string, unknown>>(req: ShopeeHttpReq
   }
 
   const headers: Record<string, string> = { accept: 'application/json' }
-  let body: string | undefined
-  if (req.body !== undefined) {
+  let body: string | FormData | undefined
+  if (req.form !== undefined) {
+    // content-type (com boundary) é definido pelo próprio fetch.
+    body = req.form
+  } else if (req.body !== undefined) {
     headers['content-type'] = 'application/json'
     body = JSON.stringify(req.body)
   }
