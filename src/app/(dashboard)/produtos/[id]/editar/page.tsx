@@ -13,6 +13,7 @@ import { Select } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { ProductMediaManager } from '../../_components/product-media'
 import { buildVariationOverrideUpdates, describeOverrideError, type OverrideEdit } from './variationOverrides'
+import { EMPTY_PHYSICAL, PHYSICAL_KEYS, PHYSICAL_LABEL, buildProductPhysicalPatch, buildVariationPhysicalUpdates, describePhysicalError, physicalToEdit, type PhysicalEdit, type PhysicalKey } from './physicalFields'
 import { WHOLESALE_STATUS_LABEL, WHOLESALE_VARIATION_STATUS_LABEL } from '@/services/wholesale/adminStatusLabels'
 import type { WholesaleAdminStatus, WholesaleVariationDetail } from '@/services/wholesale/adminStatus'
 import { Badge } from '@/components/ui/badge'
@@ -35,6 +36,10 @@ type VariationRow = {
   cost_override: number | null
   price_override: number | null
   wholesale_price_override: number | null
+  weight_kg_override?: number | string | null
+  package_length_cm_override?: number | null
+  package_width_cm_override?: number | null
+  package_height_cm_override?: number | null
   active: boolean
   product_variation_attributes: AttributeRow[]
 }
@@ -118,6 +123,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
   // Overrides de preço varejo/atacado das variações EXISTENTES, indexado por
   // id — inicializado a partir do banco ao carregar, editado in-place.
   const [overrideEdits, setOverrideEdits] = useState<Record<number, OverrideEdit>>({})
+  // Dados físicos de envio (genéricos): produto + override opcional por variação.
+  const [physicalLoaded, setPhysicalLoaded] = useState<Record<string, unknown> | null>(null)
+  const [physicalEdit, setPhysicalEdit] = useState<PhysicalEdit>(EMPTY_PHYSICAL)
+  const [physicalVarEdits, setPhysicalVarEdits] = useState<Record<number, PhysicalEdit>>({})
 
   // Controls whether the "add variation" form is visible
   const [showAddVariation, setShowAddVariation] = useState(false)
@@ -202,6 +211,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
       }
       setOverrideEdits(initialEdits)
 
+      setPhysicalLoaded(product as Record<string, unknown>)
+      setPhysicalEdit(physicalToEdit(product as Record<string, unknown>))
+      setPhysicalVarEdits(Object.fromEntries(loadedVariations.map((v) => [v.id, physicalToEdit(v as unknown as Record<string, unknown>, '_override')])))
+
       reset({
         name: product.name ?? '',
         sku: product.sku ?? '',
@@ -263,6 +276,10 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
       ...prev,
       [variationId]: { ...(prev[variationId] ?? { price_override: '', wholesale_price_override: '' }), [field]: value },
     }))
+  }
+
+  function updatePhysicalVarEdit(variationId: number, key: PhysicalKey, value: string) {
+    setPhysicalVarEdits(prev => ({ ...prev, [variationId]: { ...(prev[variationId] ?? EMPTY_PHYSICAL), [key]: value } }))
   }
 
   function addVariation() {
@@ -350,13 +367,27 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
       })
       return
     }
-    const variationsToUpdate = overrideResult.updates
+    // Dados físicos (produto + overrides de variação): inválido bloqueia o envio.
+    const physicalProduct = buildProductPhysicalPatch(physicalEdit, physicalLoaded)
+    const physicalVars = buildVariationPhysicalUpdates(variations as unknown as Array<{ id: number; sku_variation: string }>, physicalVarEdits)
+    const physicalErrors = [...physicalProduct.errors, ...physicalVars.errors]
+    if (physicalErrors.length > 0) {
+      toast.error('Corrija peso/dimensões antes de salvar.', { description: physicalErrors.map(describePhysicalError).join(' · ') })
+      return
+    }
+    Object.assign(payload, physicalProduct.patch)
+    const hasPhysicalProductChange = Object.keys(physicalProduct.patch).length > 0
+
+    // Mescla updates de preço e físicos da MESMA variação num único item.
+    const byId = new Map<number, Record<string, unknown>>()
+    for (const u of [...overrideResult.updates, ...physicalVars.updates]) byId.set(u.id, { ...(byId.get(u.id) ?? {}), ...u })
+    const variationsToUpdate = [...byId.values()]
 
     if (variationsToUpdate.length > 0) payload.variations_to_update = variationsToUpdate
 
     // Nada mudou (formulário intocado e nenhuma variação a criar, excluir
     // ou alterar) → não envia nem diz "atualizado".
-    if (!isDirty && toDelete.length === 0 && toAdd.length === 0 && variationsToUpdate.length === 0) {
+    if (!isDirty && !hasPhysicalProductChange && toDelete.length === 0 && toAdd.length === 0 && variationsToUpdate.length === 0) {
       toast.info('Nenhuma alteração para salvar.')
       return
     }
@@ -725,6 +756,34 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
           </div>
         </div>
 
+        {/* ── Dados físicos (envio) — genérico, usado por todos os canais ── */}
+        <div className="card p-6 space-y-5">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">
+              Dados físicos <span className="text-xs font-normal text-text-muted">(peso e embalagem para envio)</span>
+            </h3>
+            <p className="text-xs text-text-muted mt-1">
+              Usados pelos canais de venda e cálculo de frete. Dimensões: preencha as três juntas (ou nenhuma).
+            </p>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {PHYSICAL_KEYS.map((k) => (
+              <div key={k}>
+                <label className="label-base">{PHYSICAL_LABEL[k]}</label>
+                <input
+                  type="text"
+                  inputMode={k === 'weight_kg' ? 'decimal' : 'numeric'}
+                  autoComplete="off"
+                  placeholder={k === 'weight_kg' ? 'ex.: 0,350' : 'ex.: 20'}
+                  className="input-base w-full"
+                  value={physicalEdit[k]}
+                  onChange={(e) => setPhysicalEdit(prev => ({ ...prev, [k]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* ── Variações existentes ── */}
         <div className="card p-6 space-y-4">
           <h3 className="text-sm font-semibold text-text-primary">
@@ -779,6 +838,32 @@ export default function EditarProdutoPage({ params }: { params: { id: string } }
                           </p>
                         </div>
                       </div>
+                      <details className="mt-3">
+                        <summary className="text-xs text-text-muted cursor-pointer select-none">
+                          Peso/dimensões específicos desta variação (opcional)
+                        </summary>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-2">
+                          {PHYSICAL_KEYS.map((k) => {
+                            const pe = physicalVarEdits[v.id] ?? EMPTY_PHYSICAL
+                            const inherited = physicalEdit[k].trim()
+                            return (
+                              <div key={k}>
+                                <label className="label-base text-xs">{PHYSICAL_LABEL[k]}</label>
+                                <input
+                                  type="text"
+                                  inputMode={k === 'weight_kg' ? 'decimal' : 'numeric'}
+                                  autoComplete="off"
+                                  placeholder={inherited ? `produto: ${inherited}` : 'usa os dados do produto'}
+                                  className="input-base text-xs py-1.5 w-full"
+                                  value={pe[k]}
+                                  onChange={(e) => updatePhysicalVarEdit(v.id, k, e.target.value)}
+                                />
+                              </div>
+                            )
+                          })}
+                        </div>
+                        <p className="text-xs text-text-muted mt-1">Vazio = usa os dados do produto.</p>
+                      </details>
                     </div>
                     <Button
                       type="button"

@@ -40,6 +40,33 @@ export interface ChannelListingDraft {
   attributes: ChannelAttributeValue[]
   /** Parâmetros específicos do canal (tipo de anúncio, condição…). */
   channelOptions: Record<string, unknown>
+  /**
+   * Dados físicos de envio JÁ RESOLVIDOS pelo core (PIM: override da variação
+   * → produto; ver resolveProductShippingDimensions). null = não cadastrado.
+   * Canais que não usam (ML hoje) simplesmente ignoram.
+   */
+  shippingDimensions?: ShippingDimensionsDraft | null
+  /** Dados fiscais do PRODUTO (products.ncm/cest/origem/unidade_med). Canais que não usam ignoram. */
+  fiscalInfo?: ProductFiscalInfoDraft | null
+}
+
+export interface ShippingDimensionsDraft {
+  weightKg: number | null
+  lengthCm: number | null
+  widthCm: number | null
+  heightCm: number | null
+  /** Só parte das 3 dimensões cadastrada (canal decide se bloqueia). */
+  dimensionsPartial: boolean
+  /** Valores inválidos (<= 0) encontrados no cadastro. */
+  invalid: string[]
+}
+
+export interface ProductFiscalInfoDraft {
+  ncm: string | null
+  cest: string | null
+  /** Origem ICMS 0-8. */
+  origin: number | null
+  measureUnit: string | null
 }
 
 /** Identificadores e estado que o canal devolveu — extensível. */

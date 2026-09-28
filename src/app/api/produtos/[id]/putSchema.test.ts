@@ -100,3 +100,22 @@ describe('putSchema — semântica de PATCH parcial', () => {
     expect(parsed).toEqual({})
   })
 })
+
+describe('putSchema — dados físicos de envio', () => {
+  it('aceita peso kg decimal e dimensões cm inteiras; null limpa; ausente fica undefined', () => {
+    const r = putSchema.parse({ weight_kg: '0.35', package_length_cm: 25, package_width_cm: null })
+    expect(r).toMatchObject({ weight_kg: 0.35, package_length_cm: 25, package_width_cm: null })
+    expect(r.package_height_cm).toBeUndefined()
+  })
+  it('rejeita peso zero/negativo e dimensão não inteira/zero', () => {
+    expect(putSchema.safeParse({ weight_kg: 0 }).success).toBe(false)
+    expect(putSchema.safeParse({ weight_kg: -1 }).success).toBe(false)
+    expect(putSchema.safeParse({ package_length_cm: 2.5 }).success).toBe(false)
+    expect(putSchema.safeParse({ package_height_cm: 0 }).success).toBe(false)
+  })
+  it('override físico por variação', () => {
+    const r = putSchema.parse({ variations_to_update: [{ id: 1, weight_kg_override: '0.5', package_width_cm_override: null }] })
+    expect(r.variations_to_update![0]).toMatchObject({ id: 1, weight_kg_override: 0.5, package_width_cm_override: null })
+    expect(putSchema.safeParse({ variations_to_update: [{ id: 1, weight_kg_override: 0 }] }).success).toBe(false)
+  })
+})

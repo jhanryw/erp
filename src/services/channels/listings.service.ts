@@ -29,7 +29,15 @@ import {
   type ChannelListingDraft,
   type ChannelListingSnapshot,
   type ListingLocalStatus,
+  type ProductFiscalInfoDraft,
+  type ShippingDimensionsDraft,
 } from '@/lib/channels/types'
+import {
+  resolveProductShippingDimensions,
+  type ProductShippingFields,
+  type ResolvedShippingDimensions,
+  type VariationShippingOverrides,
+} from '@/services/catalog/shippingDimensions'
 import { isMercadoLivreError } from '@/lib/integrations/mercadolivre/errors'
 import { logMercadoLivre, type MercadoLivreEvent, type MercadoLivreLogFields } from '@/lib/integrations/mercadolivre/log'
 import { validatePictureUrls } from '@/lib/integrations/mercadolivre/listingPayload'
@@ -142,6 +150,8 @@ export interface VariationSource {
   active: boolean
   color: string | null
   size: string | null
+  /** Overrides físicos da variação (NULL/ausente = herda do produto). */
+  physical?: VariationShippingOverrides | null
 }
 
 export interface ProductSource {
@@ -153,6 +163,10 @@ export interface ProductSource {
   model: string | null
   is_kit: boolean
   variations: VariationSource[]
+  /** Peso/dimensões do produto (PIM). Ausente = não cadastrado. */
+  physical?: ProductShippingFields | null
+  /** Fiscal do produto (products.ncm/cest/origem/unidade_med). */
+  fiscal?: ProductFiscalInfoDraft | null
 }
 
 export interface ListingSourceLoader {
@@ -244,6 +258,15 @@ export function resolveListingPrice(product: { base_price: number }, variation: 
 export function resolveListingQuantity(info: AvailabilityInfo | undefined): number {
   if (!info || !info.manual_enabled) return 0
   return Math.max(0, Math.floor(info.sellable_quantity))
+}
+
+/** Resolução do PIM → forma genérica do draft (sem nenhum conceito de canal). */
+export function toShippingDraft(r: ResolvedShippingDimensions): ShippingDimensionsDraft {
+  return {
+    weightKg: r.weightKg, lengthCm: r.lengthCm, widthCm: r.widthCm, heightCm: r.heightCm,
+    dimensionsPartial: r.dimensionsPartial,
+    invalid: r.issues.map((i) => `${i.field}@${i.source}`),
+  }
 }
 
 function mergeAttributes(common: ChannelAttributeValue[] = [], specific: ChannelAttributeValue[] = []): ChannelAttributeValue[] {
@@ -445,6 +468,8 @@ async function publishOne(
     pictureUrls: pictures.valid,
     attributes,
     channelOptions: { listing_type_id: input.listingTypeId ?? null, condition: 'new', ...(input.channelOptions ?? {}) },
+    shippingDimensions: toShippingDraft(resolveProductShippingDimensions(product.physical, variation.physical)),
+    fiscalInfo: product.fiscal ?? null,
   }
 
   // Vínculo em 'error' sem id externo = a tentativa anterior PODE ter criado o
@@ -1318,6 +1343,18 @@ export function createSupabaseListingSource(): ListingSourceLoader {
         .eq('product_id', productId)
         .order('id')
       const attr = (v: any, slug: string) => (v.product_variation_attributes ?? []).find((a: any) => a.variation_types?.slug === slug)?.variation_values?.value ?? null
+      // Dados físicos/fiscais em consulta SEPARADA e tolerante: se a migration
+      // 202609281100 ainda não estiver aplicada, a publicação ML segue igual
+      // (campos ficam ausentes) em vez de "Produto não encontrado".
+      const { data: px, error: pxErr } = await admin
+        .from('products')
+        .select('weight_kg, package_length_cm, package_width_cm, package_height_cm, ncm, cest, origem, unidade_med')
+        .eq('id', productId).eq('company_id', companyId).maybeSingle()
+      const { data: vx, error: vxErr } = await admin
+        .from('product_variations')
+        .select('id, weight_kg_override, package_length_cm_override, package_width_cm_override, package_height_cm_override')
+        .eq('product_id', productId)
+      const vPhys = new Map<number, VariationShippingOverrides>(vxErr ? [] : (vx ?? []).map((r: any) => [r.id, r]))
       return {
         id: p.id,
         name: p.name,
@@ -1326,9 +1363,15 @@ export function createSupabaseListingSource(): ListingSourceLoader {
         brand: p.brands?.name ?? null,
         model: p.modelo && !['kit', 'sem_modelo'].includes(p.modelo) ? p.modelo : null,
         is_kit: p.product_kind === 'kit',
+        physical: pxErr || !px ? null : px,
+        fiscal: pxErr || !px ? null : {
+          ncm: px.ncm ?? null, cest: px.cest ?? null,
+          origin: px.origem != null ? Number(px.origem) : null, measureUnit: px.unidade_med ?? null,
+        },
         variations: (vars ?? []).map((v: any) => ({
           id: v.id, sku: v.sku_variation, price_override: v.price_override != null ? Number(v.price_override) : null,
           active: v.active, color: attr(v, 'cor'), size: attr(v, 'tamanho'),
+          physical: vPhys.get(v.id) ?? null,
         })),
       }
     },

@@ -33,7 +33,9 @@ const positiveInt = z.coerce.number().int().positive()
  * Shopee (Fase 3): produto SIMPLES — exatamente 1 variação vendável por
  * publicação. integration_id identifica QUAL loja (multi-loja); a empresa
  * vem da sessão e a integração é validada contra ela no servidor.
- * Peso/condição são opcionais AQUI de propósito: a validação do canal
+ * Peso/dimensões vêm do PIM (products/variação); weight_kg/dimension aqui são
+ * só FALLBACK manual quando o PIM não tem o dado. Peso/condição são opcionais
+ * AQUI de propósito: a validação do canal
  * devolve erros estruturados (missing_weight, missing_condition…).
  */
 export const shopeePublishSchema = z.object({

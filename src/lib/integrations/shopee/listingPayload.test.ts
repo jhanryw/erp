@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { ChannelListingDraft } from '@/lib/channels/types'
-import { buildAddItemBody, mapItemStatus, snapshotFromItem, validateAgainstRequirements, validateDraftLocally, type ShopeeRequirementsSnapshot } from './listingPayload'
+import { buildAddItemBody, buildTaxInfo, mapItemStatus, resolveEffectivePhysical, snapshotFromItem, validateAgainstRequirements, validateDraftLocally, type ShopeeRequirementsSnapshot } from './listingPayload'
 
 function draft(shopee: Record<string, unknown> = {}, over: Partial<ChannelListingDraft> = {}): ChannelListingDraft {
   return {
@@ -121,5 +121,73 @@ describe('payload add_item', () => {
     expect(s).toMatchObject({ externalListingId: '123', externalProductId: '123', externalVariantId: null, externalGroupId: null, externalIds: { item_id: '123', shop_id: '555' }, externalStatus: 'active', price: 10, sellerSku: 'A', sellerId: '555' })
     expect(mapItemStatus('SELLER_DELETE')).toBe('closed')
     expect(mapItemStatus('UNLIST')).toBe('paused')
+  })
+})
+
+describe('dados físicos do PIM (draft.shippingDimensions)', () => {
+  const pim = (over: Record<string, unknown> = {}) => ({ weightKg: 0.35, lengthCm: 25, widthCm: 18, heightCm: 4, dimensionsPartial: false, invalid: [], ...over })
+
+  it('PIM é a fonte primária: peso e dimensões do produto vão ao payload (manual ignorado)', () => {
+    const d = draft({ weight_kg: 9, dimension: { package_height: 1, package_length: 1, package_width: 1 } }, { shippingDimensions: pim() })
+    expect(resolveEffectivePhysical(d)).toMatchObject({ weightKg: 0.35, weightSource: 'pim', dimensionSource: 'pim', errors: [] })
+    const body = buildAddItemBody(d, { imageIds: ['i'], choices: validateAgainstRequirements(d, req).resolved })
+    expect(body.weight).toBe(0.35)
+    expect(body.dimension).toEqual({ package_height: 4, package_length: 25, package_width: 18 })
+  })
+
+  it('PIM sem peso → override manual como fallback; nenhum dos dois → missing_weight', () => {
+    expect(resolveEffectivePhysical(draft({ weight_kg: 0.2 }, { shippingDimensions: pim({ weightKg: null }) }))).toMatchObject({ weightKg: 0.2, weightSource: 'manual' })
+    expect(codes(validateDraftLocally(draft({ weight_kg: null }, { shippingDimensions: pim({ weightKg: null, lengthCm: null, widthCm: null, heightCm: null }) })))).toEqual(['missing_weight'])
+  })
+
+  it('peso zero/negativo cadastrado no PIM → invalid_weight (sem cair no manual)', () => {
+    expect(codes(validateDraftLocally(draft({ weight_kg: 0.2 }, { shippingDimensions: pim({ weightKg: null, invalid: ['weightKg@product'] }) })))).toEqual(['invalid_weight'])
+  })
+
+  it('dimensão parcial no PIM (só largura) → incomplete_dimensions, sem misturar com manual', () => {
+    const d = draft({ dimension: { package_height: 1, package_length: 1, package_width: 1 } }, { shippingDimensions: pim({ lengthCm: null, heightCm: null, dimensionsPartial: true }) })
+    expect(codes(validateDraftLocally(d))).toEqual(['incomplete_dimensions'])
+  })
+
+  it('PIM sem dimensões → manual completo é usado; nada → dimensão omitida', () => {
+    const none = pim({ lengthCm: null, widthCm: null, heightCm: null })
+    expect(resolveEffectivePhysical(draft({ dimension: { package_height: 2, package_length: 3, package_width: 4 } }, { shippingDimensions: none })).dimensionSource).toBe('manual')
+    const d = draft({}, { shippingDimensions: none })
+    expect(buildAddItemBody(d, { imageIds: ['i'], choices: validateAgainstRequirements(d, req).resolved })).not.toHaveProperty('dimension')
+  })
+
+  it('limite de peso do canal usa o peso do PIM', () => {
+    expect(codes(validateAgainstRequirements(draft({ weight_kg: 0.2 }, { shippingDimensions: pim({ weightKg: 50 }) }), req).errors)).toEqual(['weight_out_of_channel_limits'])
+  })
+})
+
+describe('tax_info (fiscal do produto)', () => {
+  const fiscal = (over: Record<string, unknown> = {}) => ({ ncm: '6212.10.00', cest: '28.038.00', origin: 0, measureUnit: 'UN', ...over })
+
+  it('NCM/CEST/origem/unidade válidos → tax_info normalizado; nunca CFOP/CSOSN', () => {
+    const d = draft({}, { fiscalInfo: fiscal() })
+    const body = buildAddItemBody(d, { imageIds: ['i'], choices: validateAgainstRequirements(d, req).resolved })
+    expect(body.tax_info).toEqual({ ncm: '62121000', cest: '2803800', origin: '0', measure_unit: 'UN' })
+    expect(JSON.stringify(body)).not.toMatch(/cfop|csosn/)
+  })
+
+  it('sem dados fiscais → tax_info omitido, sem erro (opcional na doc)', () => {
+    const d = draft({}, { fiscalInfo: null })
+    expect(validateDraftLocally(d)).toEqual([])
+    expect(buildAddItemBody(d, { imageIds: ['i'], choices: validateAgainstRequirements(d, req).resolved })).not.toHaveProperty('tax_info')
+    expect(buildTaxInfo({ fiscalInfo: fiscal({ ncm: null, cest: null, origin: null, measureUnit: null }) })).toEqual({ taxInfo: null, errors: [], warnings: [] })
+  })
+
+  it('NCM/CEST/origem mal formados bloqueiam', () => {
+    expect(codes(validateDraftLocally(draft({}, { fiscalInfo: fiscal({ ncm: '1234' }) })))).toEqual(['invalid_ncm'])
+    expect(codes(validateDraftLocally(draft({}, { fiscalInfo: fiscal({ cest: '12' }) })))).toEqual(['invalid_cest'])
+    expect(codes(validateDraftLocally(draft({}, { fiscalInfo: fiscal({ origin: 9 }) })))).toEqual(['invalid_origin'])
+  })
+
+  it('unidade: alias PAR→PARES; fora da lista → aviso e omitida', () => {
+    expect(buildTaxInfo({ fiscalInfo: fiscal({ measureUnit: 'PAR' }) }).taxInfo?.measure_unit).toBe('PARES')
+    const r = buildTaxInfo({ fiscalInfo: fiscal({ measureUnit: 'XYZ' }) })
+    expect(r.taxInfo).not.toHaveProperty('measure_unit')
+    expect(codes(r.warnings)).toEqual(['measure_unit_not_supported'])
   })
 })

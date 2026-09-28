@@ -74,6 +74,20 @@ export async function GET(
     return NextResponse.json({ error: variationsError.message }, { status: 500 })
   }
 
+  // Dados físicos (migration 202609281100) em consulta separada e tolerante:
+  // sem a migration aplicada a tela continua abrindo (campos ficam vazios).
+  const { data: phys } = await (admin as any)
+    .from('products')
+    .select('weight_kg, package_length_cm, package_width_cm, package_height_cm')
+    .eq('id', productId).eq('company_id', user.company_id).maybeSingle()
+  const { data: varPhys } = await (admin as any)
+    .from('product_variations')
+    .select('id, weight_kg_override, package_length_cm_override, package_width_cm_override, package_height_cm_override')
+    .eq('product_id', productId)
+  if (phys) Object.assign(product, phys)
+  const physById = new Map<number, Record<string, unknown>>((varPhys ?? []).map((r: { id: number }) => [r.id, r]))
+  for (const v of (variations ?? []) as Array<{ id: number }>) Object.assign(v, physById.get(v.id) ?? {})
+
   // Status comercial do atacado — calculado pela MESMA regra do catálogo
   // público (evaluateWholesaleSellability), nunca reimplementado no front.
   const wholesale = await loadWholesaleProductDetail(admin as any, user.company_id, {
@@ -223,6 +237,11 @@ export async function PUT(
       wholesale_price: productFields.wholesale_price,
       // Só grava quando enviado — PUT sem o campo nunca toca o canal.
       ...(patch.wholesale_enabled !== undefined ? { wholesale_enabled: patch.wholesale_enabled } : {}),
+      // Dados físicos: só grava o que foi enviado (null limpa; ausente mantém).
+      ...(patch.weight_kg !== undefined ? { weight_kg: patch.weight_kg } : {}),
+      ...(patch.package_length_cm !== undefined ? { package_length_cm: patch.package_length_cm } : {}),
+      ...(patch.package_width_cm !== undefined ? { package_width_cm: patch.package_width_cm } : {}),
+      ...(patch.package_height_cm !== undefined ? { package_height_cm: patch.package_height_cm } : {}),
       ...(skuChanged ? { sku_source: 'manual' } : {}),
     })
     .eq('id', productId) as {

@@ -47,3 +47,10 @@ describe('buildVariationOverridePatch', () => {
     expect(resolved).toEqual({ price: 35, missingWholesalePrice: false })
   })
 })
+
+describe('buildVariationOverridePatch — overrides físicos', () => {
+  it('só inclui campos enviados; null limpa', () => {
+    expect(buildVariationOverridePatch({ weight_kg_override: 0.5, package_height_cm_override: null })).toEqual({ weight_kg_override: 0.5, package_height_cm_override: null })
+    expect(buildVariationOverridePatch({})).toEqual({})
+  })
+})

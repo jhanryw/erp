@@ -16,8 +16,18 @@
  *   obrigatório no BR desde 2026-09-01, Update Log), brand {brand_id,
  *   original_brand_name}, seller_stock[{location_id?, stock}].
  *
- * Opções específicas chegam em draft.channelOptions.shopee (nunca colunas
- * novas em products): o operador informa-as na publicação.
+ * tax_info (reconfirmado em 28/09/2026, mesma página): objeto OPCIONAL;
+ *   todos os subcampos "Required: False" — ncm (8 dígitos ou "00"),
+ *   same_state_cfop, diff_state_cfop, csosn, origin (0-8), cest (7 dígitos
+ *   ou "00"), measure_unit (lista fechada, maiúsculas), pis, cofins, icms_cst…
+ *   O Qarvon envia SÓ o que é atributo do produto e já existe no PIM
+ *   (products.ncm/cest/origem/unidade_med). CFOP/CSOSN são operacionais
+ *   (regime da empresa × destino) — NÃO são enviados nem modelados no produto.
+ *
+ * Peso/dimensões: fonte primária = draft.shippingDimensions (PIM, resolvido
+ * pelo core). channelOptions.shopee.weight_kg/dimension são FALLBACK manual,
+ * usados só quando o PIM não tem o dado. Demais opções específicas (condição,
+ * marca, atributos, logística) continuam em draft.channelOptions.shopee.
  */
 
 import type { ChannelListingDraft, ChannelListingSnapshot, ChannelValidationResult } from '@/lib/channels/types'
@@ -62,11 +72,119 @@ export function readShopeeOptions(draft: Pick<ChannelListingDraft, 'channelOptio
 
 const isPosInt = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0
 
+// ─── Dados físicos: PIM primeiro, override manual como fallback ─────────────
+
+export type PhysicalSource = 'pim' | 'manual' | 'none'
+
+export interface EffectivePhysical {
+  weightKg: number | null
+  weightSource: PhysicalSource
+  dimension: { package_height: number; package_length: number; package_width: number } | null
+  dimensionSource: PhysicalSource
+  errors: ValidationIssue[]
+}
+
+/**
+ * Peso: PIM (draft.shippingDimensions.weightKg) → channelOptions.shopee.weight_kg → erro missing_weight.
+ * Dimensões: PIM completo → PIM; PIM parcial → incomplete_dimensions (não
+ * mistura com manual); PIM vazio → manual (tudo ou nada); nada → omitido.
+ */
+export function resolveEffectivePhysical(draft: Pick<ChannelListingDraft, 'channelOptions' | 'shippingDimensions'>): EffectivePhysical {
+  const o = readShopeeOptions(draft)
+  const pim = draft.shippingDimensions ?? null
+  const errors: ValidationIssue[] = []
+  const invalid = pim?.invalid ?? []
+
+  let weightKg: number | null = null
+  let weightSource: PhysicalSource = 'none'
+  if (invalid.some((f) => f.startsWith('weightKg@'))) {
+    errors.push({ code: 'invalid_weight', message: 'Peso cadastrado no produto/variação é inválido (kg, maior que zero).' })
+  } else if (pim?.weightKg != null) {
+    weightKg = pim.weightKg; weightSource = 'pim'
+  } else if (o.weight_kg != null) {
+    weightKg = o.weight_kg; weightSource = 'manual'
+  }
+  if (weightSource === 'none' && errors.length === 0) {
+    errors.push({ code: 'missing_weight', message: 'Peso (kg) é obrigatório na Shopee: cadastre-o no produto (Dados físicos) ou na variação.' })
+  } else if (weightKg != null && !(typeof weightKg === 'number' && Number.isFinite(weightKg) && weightKg > 0)) {
+    errors.push({ code: 'invalid_weight', message: 'Peso inválido (kg, maior que zero).' })
+  }
+
+  let dimension: EffectivePhysical['dimension'] = null
+  let dimensionSource: PhysicalSource = 'none'
+  const pimDims = pim ? [pim.heightCm, pim.lengthCm, pim.widthCm] : [null, null, null]
+  if (invalid.some((f) => /^(lengthCm|widthCm|heightCm)@/.test(f))) {
+    errors.push({ code: 'invalid_dimensions', message: 'Dimensões cadastradas no produto/variação são inválidas (cm inteiros, maiores que zero).' })
+  } else if (pim?.dimensionsPartial || (pimDims.some((x) => x != null) && !pimDims.every((x) => x != null))) {
+    errors.push({ code: 'incomplete_dimensions', message: 'Dimensões do produto incompletas: cadastre comprimento, largura e altura juntas (ou nenhuma).' })
+  } else if (pimDims.every((x) => x != null)) {
+    if (!pimDims.every(isPosInt)) errors.push({ code: 'invalid_dimensions', message: 'Dimensões precisam ser inteiros positivos (cm).' })
+    else { dimension = { package_height: pim!.heightCm!, package_length: pim!.lengthCm!, package_width: pim!.widthCm! }; dimensionSource = 'pim' }
+  } else if (o.dimension) {
+    const d = o.dimension
+    const parts = [d.package_height, d.package_length, d.package_width]
+    const given = parts.filter((p) => p != null)
+    if (given.length > 0 && given.length < 3) {
+      errors.push({ code: 'incomplete_dimensions', message: 'Dimensões: informe altura, comprimento e largura juntas (ou nenhuma).' })
+    } else if (given.length === 3 && !parts.every(isPosInt)) {
+      errors.push({ code: 'invalid_dimensions', message: 'Dimensões precisam ser inteiros positivos (cm).' })
+    } else if (given.length === 3) {
+      dimension = { package_height: d.package_height!, package_length: d.package_length!, package_width: d.package_width! }; dimensionSource = 'manual'
+    }
+  }
+  return { weightKg, weightSource, dimension, dimensionSource, errors }
+}
+
+// ─── Fiscal (tax_info): só dados do PRODUTO já existentes no PIM ─────────────
+
+/** measure_unit aceitos pela doc de add_item (BR). */
+export const SHOPEE_MEASURE_UNITS = ['AMPOLA', 'BALDE', 'BANDEJ', 'BARRA', 'BISNAG', 'BLOCO', 'BOBINA', 'BOMB', 'CAPS', 'CART', 'CENTO', 'CJ', 'CM', 'CM2', 'CX', 'CX2', 'CX3', 'CX5', 'CX10', 'CX15', 'CX20', 'CX25', 'CX50', 'CX100', 'DISP', 'DUZIA', 'EMBAL', 'FARDO', 'FOLHA', 'FRASCO', 'GALAO', 'GF', 'GRAMAS', 'JOGO', 'KG', 'KIT', 'LATA', 'LITRO', 'M', 'M2', 'M3', 'MILHEI', 'ML', 'MWH', 'PACOTE', 'PALETE', 'PARES', 'PC', 'POTE', 'K', 'RESMA', 'ROLO', 'SACO', 'SACOLA', 'TAMBOR', 'TANQUE', 'TON', 'TUBO', 'UN', 'VASIL', 'VIDRO'] as const
+
+/** unidade_med do Qarvon → vocabulário Shopee quando o código difere. */
+const MEASURE_UNIT_ALIASES: Record<string, string> = { PAR: 'PARES', L: 'LITRO', G: 'GRAMAS' }
+
+export interface ShopeeTaxInfo { ncm?: string; cest?: string; origin?: string; measure_unit?: string }
+
+/**
+ * tax_info a partir de draft.fiscalInfo. Tudo opcional na doc: ausente →
+ * omitido (sem aviso, para não poluir last_error). Presente e mal formado → erro (evita rejeição
+ * da Shopee com dado fiscal errado). Nunca envia CFOP/CSOSN.
+ */
+export function buildTaxInfo(draft: Pick<ChannelListingDraft, 'fiscalInfo'>): { taxInfo: ShopeeTaxInfo | null; errors: ValidationIssue[]; warnings: ValidationIssue[] } {
+  const f = draft.fiscalInfo ?? null
+  const errors: ValidationIssue[] = []
+  const warnings: ValidationIssue[] = []
+  const tax: ShopeeTaxInfo = {}
+  const ncmRaw = (f?.ncm ?? '').toString().trim()
+  if (ncmRaw) {
+    const ncm = ncmRaw.replace(/\D/g, '')
+    if (/^\d{8}$/.test(ncm)) tax.ncm = ncm
+    else errors.push({ code: 'invalid_ncm', message: `NCM do produto inválido ("${ncmRaw}"): precisa ter 8 dígitos.` })
+  }
+  const cestRaw = (f?.cest ?? '').toString().trim()
+  if (cestRaw) {
+    const cest = cestRaw.replace(/\D/g, '')
+    if (/^\d{7}$/.test(cest)) tax.cest = cest
+    else errors.push({ code: 'invalid_cest', message: `CEST do produto inválido ("${cestRaw}"): precisa ter 7 dígitos.` })
+  }
+  if (f?.origin != null) {
+    if (Number.isInteger(f.origin) && f.origin >= 0 && f.origin <= 8) tax.origin = String(f.origin)
+    else errors.push({ code: 'invalid_origin', message: 'Origem da mercadoria inválida (0 a 8).' })
+  }
+  const unitRaw = (f?.measureUnit ?? '').toString().trim().toUpperCase()
+  if (unitRaw) {
+    const unit = MEASURE_UNIT_ALIASES[unitRaw] ?? unitRaw
+    if ((SHOPEE_MEASURE_UNITS as readonly string[]).includes(unit)) tax.measure_unit = unit
+    else warnings.push({ code: 'measure_unit_not_supported', message: `Unidade "${unitRaw}" não existe na lista da Shopee: measure_unit não será enviado.` })
+  }
+  return { taxInfo: Object.keys(tax).length ? tax : null, errors, warnings }
+}
+
 // ─── Validação local (sem API) ───────────────────────────────────────────────
 
 /**
  * Tudo o que dá para bloquear SEM chamar a Shopee. Peso é SEMPRE exigido
- * explicitamente (o Qarvon não tem coluna de peso — nunca há valor padrão).
+ * (PIM ou override manual) — nunca há valor padrão.
  */
 export function validateDraftLocally(draft: ChannelListingDraft): ValidationIssue[] {
   const o = readShopeeOptions(draft)
@@ -79,22 +197,8 @@ export function validateDraftLocally(draft: ChannelListingDraft): ValidationIssu
   if (!draft.pictureUrls?.length) errors.push({ code: 'missing_images', message: 'Nenhuma imagem pública do Media Hub.' })
   if (!/^\d{1,12}$/.test(String(draft.categoryId ?? '')) || Number(draft.categoryId) <= 0) errors.push({ code: 'invalid_category', message: 'Categoria Shopee ausente ou inválida.' })
 
-  if (o.weight_kg == null) {
-    errors.push({ code: 'missing_weight', message: 'Peso (kg) é obrigatório na Shopee e o Qarvon não tem peso cadastrado: informe-o na publicação.' })
-  } else if (!(typeof o.weight_kg === 'number' && Number.isFinite(o.weight_kg) && o.weight_kg > 0)) {
-    errors.push({ code: 'invalid_weight', message: 'Peso inválido (kg, maior que zero).' })
-  }
-
-  const d = o.dimension
-  if (d) {
-    const parts = [d.package_height, d.package_length, d.package_width]
-    const given = parts.filter((p) => p != null)
-    if (given.length > 0 && given.length < 3) {
-      errors.push({ code: 'incomplete_dimensions', message: 'Dimensões: informe altura, comprimento e largura juntas (ou nenhuma).' })
-    } else if (given.length === 3 && !parts.every(isPosInt)) {
-      errors.push({ code: 'invalid_dimensions', message: 'Dimensões precisam ser inteiros positivos (cm).' })
-    }
-  }
+  errors.push(...resolveEffectivePhysical(draft).errors)
+  errors.push(...buildTaxInfo(draft).errors)
 
   if (o.condition == null || String(o.condition).trim() === '') {
     errors.push({ code: 'missing_condition', message: 'Condição (NEW/USED) é obrigatória na Shopee Brasil.' })
@@ -138,6 +242,7 @@ function attributeFilled(a: ShopeeAttributeInput | undefined): boolean {
 
 export function validateAgainstRequirements(draft: ChannelListingDraft, req: ShopeeRequirementsSnapshot): { errors: ValidationIssue[]; warnings: ValidationIssue[]; resolved: ResolvedShopeeChoices } {
   const o = readShopeeOptions(draft)
+  const physical = resolveEffectivePhysical(draft)
   const errors: ValidationIssue[] = []
   const warnings: ValidationIssue[] = []
 
@@ -210,10 +315,11 @@ export function validateAgainstRequirements(draft: ChannelListingDraft, req: Sho
     errors.push(o.logistic_channel_id != null
       ? { code: 'invalid_logistic_channel', message: `Canal logístico ${o.logistic_channel_id} não está habilitado/utilizável nesta loja.` }
       : { code: 'logistics_unavailable', message: 'Nenhum canal logístico habilitado na loja Shopee.' })
-  } else if (typeof o.weight_kg === 'number') {
-    const out = weightOutsideChannel(channel, o.weight_kg)
+  } else if (typeof physical.weightKg === 'number') {
+    const out = weightOutsideChannel(channel, physical.weightKg)
     if (out) errors.push({ code: 'weight_out_of_channel_limits', message: out })
   }
+  warnings.push(...buildTaxInfo(draft).warnings)
   if (req.brand.truncated) warnings.push({ code: 'brand_list_truncated', message: 'Lista de marcas parcial (muitas páginas).' })
 
   return { errors, warnings, resolved: { attributeList, brand, logisticChannelId: channel?.logistics_channel_id ?? null } }
@@ -234,11 +340,14 @@ export function buildAddItemBody(draft: ChannelListingDraft, inputs: AddItemInpu
   const o = readShopeeOptions(draft)
   if (!inputs.choices.logisticChannelId) throw new Error('buildAddItemBody: canal logístico ausente')
   if (inputs.imageIds.length === 0) throw new Error('buildAddItemBody: sem image_id')
-  const d = o.dimension
+  const physical = resolveEffectivePhysical(draft)
+  if (physical.errors.length || physical.weightKg == null) throw new Error('buildAddItemBody: peso/dimensões inválidos')
+  const tax = buildTaxInfo(draft)
+  if (tax.errors.length) throw new Error('buildAddItemBody: dados fiscais inválidos')
   const body: Record<string, unknown> = {
     original_price: Math.round(draft.price * 100) / 100,
     description: draft.description!.trim(),
-    weight: o.weight_kg,
+    weight: physical.weightKg,
     item_name: draft.title.trim(),
     item_status: (o.item_status as ShopeeItemStatus | null | undefined) ?? 'NORMAL',
     logistic_info: [{ logistic_id: inputs.choices.logisticChannelId, enabled: true }],
@@ -248,9 +357,8 @@ export function buildAddItemBody(draft: ChannelListingDraft, inputs: AddItemInpu
     condition: o.condition,
     seller_stock: [{ stock: draft.quantity }],
   }
-  if (d && d.package_height != null && d.package_length != null && d.package_width != null) {
-    body.dimension = { package_height: d.package_height, package_length: d.package_length, package_width: d.package_width }
-  }
+  if (physical.dimension) body.dimension = physical.dimension
+  if (tax.taxInfo) body.tax_info = tax.taxInfo
   if (inputs.choices.attributeList.length) {
     body.attribute_list = inputs.choices.attributeList.map((a) => ({
       attribute_id: a.attribute_id,

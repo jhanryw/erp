@@ -339,6 +339,61 @@ describe('Shopee — publicação simples pelo núcleo genérico', () => {
   })
 })
 
+describe('Shopee — dados físicos e fiscais vindos do PIM pelo core', () => {
+  const withPim = (productPhysical: Record<string, unknown>, variationPhysical: Record<string, unknown> | null = null, fiscal: ProductSource['fiscal'] = null) => {
+    products[0] = { ...products[0], physical: productPhysical, fiscal, variations: [{ ...products[0].variations[0], physical: variationPhysical }] }
+  }
+
+  it('peso/dimensões do PRODUTO chegam ao adapter via draft e vão ao add_item (sem weight_kg manual)', async () => {
+    withPim({ weight_kg: '0.350', package_length_cm: 25, package_width_cm: 18, package_height_cm: 4 })
+    const { results } = await publishListings(session, shopeeInput(shopA, { weight_kg: undefined }), deps())
+    expect(results[0]).toMatchObject({ status: 'published' })
+    expect(sapi.shop.addItemCalls[0].body).toMatchObject({ weight: 0.35, dimension: { package_height: 4, package_length: 25, package_width: 18 } })
+  })
+
+  it('override da VARIAÇÃO tem prioridade sobre o produto e sobre o manual', async () => {
+    withPim({ weight_kg: 0.35, package_length_cm: 25, package_width_cm: 18, package_height_cm: 4 }, { weight_kg_override: 0.5, package_height_cm_override: 6 })
+    await publishListings(session, shopeeInput(shopA, { weight_kg: 9 }), deps())
+    expect(sapi.shop.addItemCalls[0].body).toMatchObject({ weight: 0.5, dimension: { package_height: 6, package_length: 25, package_width: 18 } })
+  })
+
+  it('dimensão parcial no PIM bloqueia antes de qualquer upload', async () => {
+    withPim({ weight_kg: 0.35, package_width_cm: 18 })
+    const { results } = await publishListings(session, shopeeInput(shopA), deps())
+    expect((results[0] as { message: string }).message).toContain('incomplete_dimensions')
+    expect(addItems()).toBe(0)
+  })
+
+  it('sem peso no PIM nem manual → missing_weight', async () => {
+    withPim({})
+    const { results } = await publishListings(session, shopeeInput(shopA, { weight_kg: null }), deps())
+    expect((results[0] as { message: string }).message).toContain('missing_weight')
+    expect(addItems()).toBe(0)
+  })
+
+  it('fiscal do produto (NCM/CEST/origem) → tax_info no add_item', async () => {
+    withPim({ weight_kg: 0.3 }, null, { ncm: '62121000', cest: null, origin: 0, measureUnit: 'UN' })
+    await publishListings(session, shopeeInput(shopA), deps())
+    expect(sapi.shop.addItemCalls[0].body.tax_info).toEqual({ ncm: '62121000', origin: '0', measure_unit: 'UN' })
+  })
+
+  it('NCM inválido no produto → invalid_ncm, nada criado', async () => {
+    withPim({ weight_kg: 0.3 }, null, { ncm: '999', cest: null, origin: null, measureUnit: null })
+    const { results } = await publishListings(session, shopeeInput(shopA), deps())
+    expect((results[0] as { message: string }).message).toContain('invalid_ncm')
+    expect(addItems()).toBe(0)
+  })
+
+  it('Mercado Livre ignora shippingDimensions/fiscalInfo (publica igual)', async () => {
+    withPim({ weight_kg: 0.3, package_width_cm: 18 }, null, { ncm: '999', cest: null, origin: null, measureUnit: null })
+    const ml = await publishListings(session, {
+      productId: 1, categoryId: 'MLB1234', commonAttributes: [{ id: 'BRAND', value_name: 'Santtorini' }, { id: 'MODEL', value_name: 'Renda' }],
+      requiredAttributeIds: ['BRAND', 'MODEL'], variations: [{ productVariationId: 11, attributes: [{ id: 'SIZE', value_name: 'M' }] }],
+    }, deps())
+    expect(ml.results[0]).toMatchObject({ status: 'published' })
+  })
+})
+
 describe('Shopee — resolver de canal e requisitos (shopeeChannel)', () => {
   const request = () => ({ config: SHOPEE_CONFIG, store: sdb.store(), fetchImpl: sapi.fetch, sleep: async () => {} })
 

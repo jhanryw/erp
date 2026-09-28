@@ -33,7 +33,7 @@ export interface ShopeePublishRequirements {
     no_brand_option: ShopeeBrand | null
     truncated: boolean
   }
-  weight: { required: true; unit: 'kg'; source: 'publish_input' }
+  weight: { required: true; unit: 'kg'; source: 'pim_then_publish_input' }
   dimensions: { required: false; unit: 'cm'; all_or_none: true; fields: ['package_height', 'package_length', 'package_width'] }
   condition: { required: true; values: readonly string[]; source: string }
   logistics: {
@@ -73,7 +73,7 @@ export function toPublishRequirements(snap: ShopeeRequirementsSnapshot): ShopeeP
       no_brand_option: snap.brand.no_brand_option,
       truncated: snap.brand.truncated,
     },
-    weight: { required: true, unit: 'kg', source: 'publish_input' },
+    weight: { required: true, unit: 'kg', source: 'pim_then_publish_input' },
     dimensions: { required: false, unit: 'cm', all_or_none: true, fields: ['package_height', 'package_length', 'package_width'] },
     condition: { required: true, values: SHOPEE_CONDITIONS, source: 'v2.product.add_item (Update Log 2026-09-01: "Condition is required for BR")' },
     logistics: { channels: snap.logistics, usable, default_channel_id: usable[0]?.logistics_channel_id ?? null },

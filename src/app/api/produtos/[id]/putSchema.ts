@@ -20,10 +20,21 @@ export const variantToAddSchema = z.object({
 // Ambos os campos opcionais: só o que o cliente enviar é alterado
 // (ver buildVariationOverridePatch). null limpa o override (volta a
 // herdar do produto-pai); undefined mantém o valor atual no banco.
+// Dados físicos de envio (PIM, genérico): peso em kg (> 0), dimensões em cm
+// inteiros (> 0). null limpa; ausente mantém. Espelha os CHECKs da
+// migration 202609281100_products_shipping_dimensions.
+export const weightKgField = z.coerce.number().positive().max(10_000_000).nullable().optional()
+export const dimensionCmField = z.coerce.number().int().positive().max(2_000_000_000).nullable().optional()
+
 export const variantToUpdateSchema = z.object({
   id: z.coerce.number().int().positive(),
   price_override: z.coerce.number().positive().nullable().optional(),
   wholesale_price_override: z.coerce.number().positive().nullable().optional(),
+  // Overrides físicos (NULL = herda do produto).
+  weight_kg_override: weightKgField,
+  package_length_cm_override: dimensionCmField,
+  package_width_cm_override: dimensionCmField,
+  package_height_cm_override: dimensionCmField,
 })
 
 // Todos os campos do produto são opcionais — suporta update parcial.
@@ -71,4 +82,9 @@ export const putSchema = z.object({
   wholesale_price: wholesalePriceFieldSchema(),
   // Canal de atacado — participação explícita do produto no catálogo público.
   wholesale_enabled: z.boolean().optional(),
+  // Dados físicos de envio (genéricos — Shopee/ML/Nuvemshop/frete).
+  weight_kg: weightKgField,
+  package_length_cm: dimensionCmField,
+  package_width_cm: dimensionCmField,
+  package_height_cm: dimensionCmField,
 }).partial()
