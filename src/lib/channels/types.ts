@@ -11,7 +11,7 @@
  * nunca consulta estoque, nunca sabe o que é kit e nunca recebe composição.
  */
 
-export type ChannelProvider = 'mercadolivre'
+export type ChannelProvider = 'mercadolivre' | 'shopee'
 
 /** Status LOCAL do vínculo (Qarvon). Nunca é o texto cru do canal. */
 export type ListingLocalStatus = 'draft' | 'publishing' | 'active' | 'paused' | 'error' | 'closed'

@@ -17,6 +17,7 @@ const SETTINGS_SECTIONS = [
   { href: '/configuracoes/parametros', icon: Settings, title: 'Parâmetros do Sistema', description: 'Estoque mínimo, período RFM e demais parâmetros.' },
   { href: '/configuracoes/nuvemshop', icon: Globe, title: 'Nuvemshop', description: 'Sincronize produtos e estoque com a loja online.' },
   { href: '/configuracoes/mercadolivre', icon: ShoppingBag, title: 'Mercado Livre', description: 'Canal de venda: conecte a conta de vendedor da empresa.' },
+  { href: '/configuracoes/shopee', icon: ShoppingBag, title: 'Shopee', description: 'Canal de venda: conecte as lojas Shopee da empresa.' },
   { href: '/configuracoes/fiscal', icon: Receipt, title: 'Fiscal', description: 'Fundação de emissão de NF-e via Focus NFe (homologação).' },
   { href: '/configuracoes/atacado', icon: Store, title: 'Atacado — Catálogo Online', description: 'Status, logo, WhatsApp, pedido mínimo, exibição, Meta Pixel e banners da vitrine pública.' },
 ]
