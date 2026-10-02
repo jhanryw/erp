@@ -75,6 +75,7 @@ async function getFlowData(ym: string, companyId: number) {
       .from('finance_entries')
       .select('type, amount, reference_date, paid_at')
       .eq('company_id', companyId)
+      .neq('payment_status', 'pending')
       .or(
         `and(paid_at.gte.${start},paid_at.lte.${end}),` +
         `and(paid_at.is.null,reference_date.gte.${start},reference_date.lte.${end})`
@@ -87,15 +88,31 @@ async function getFlowData(ym: string, companyId: number) {
       .from('finance_entries')
       .select('type, amount, reference_date, paid_at')
       .eq('company_id', companyId)
+      .neq('payment_status', 'pending')
       .or(`paid_at.lt.${start},and(paid_at.is.null,reference_date.lt.${start})`) as unknown as {
         data: EntryRow[] | null
         error: { message: string } | null
       },
   ])
 
+  // Previsto (pendentes com vencimento no período) — fora do caixa realizado.
+  const { data: pendingRows } = (await admin
+    .from('finance_entries')
+    .select('type, amount')
+    .eq('company_id', companyId)
+    .eq('payment_status', 'pending')
+    .gte('reference_date', start)
+    .lte('reference_date', end)) as unknown as { data: { type: 'income' | 'expense'; amount: number }[] | null }
+  let pendingIncome = 0
+  let pendingExpense = 0
+  for (const e of pendingRows ?? []) {
+    if (e.type === 'income') pendingIncome += Number(e.amount)
+    else pendingExpense += Number(e.amount)
+  }
+
   if (periodRes.error) {
     console.error('Erro ao buscar fluxo:', periodRes.error.message)
-    return { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0 }
+    return { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0, pendingIncome, pendingExpense }
   }
 
   // Saldo inicial: tudo antes do período, pela data efetiva
@@ -132,7 +149,7 @@ async function getFlowData(ym: string, companyId: number) {
   // Inverter para exibição (mais recente no topo)
   rows.reverse()
 
-  return { rows, totalIncome, totalExpense, periodBalance, initialBalance }
+  return { rows, totalIncome, totalExpense, periodBalance, initialBalance, pendingIncome, pendingExpense }
 }
 
 export default async function FluxoCaixaPage({
@@ -147,9 +164,9 @@ export default async function FluxoCaixaPage({
     ? searchParams.month!
     : currentYearMonth()
 
-  const { rows, totalIncome, totalExpense, periodBalance, initialBalance } = companyId
+  const { rows, totalIncome, totalExpense, periodBalance, initialBalance, pendingIncome, pendingExpense } = companyId
     ? await getFlowData(ym, companyId)
-    : { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0 }
+    : { rows: [], totalIncome: 0, totalExpense: 0, periodBalance: 0, initialBalance: 0, pendingIncome: 0, pendingExpense: 0 }
 
   const prevMonth = shiftMonth(ym, -1)
   const nextMonth = shiftMonth(ym, 1)
@@ -205,6 +222,12 @@ export default async function FluxoCaixaPage({
           </p>
         </div>
       </div>
+
+      <p className="text-xs text-text-muted">
+        Previsto (pendente, não incluído acima): a receber{' '}
+        <span className="font-semibold text-success">{formatCurrency(pendingIncome)}</span> · a pagar{' '}
+        <span className="font-semibold text-error">{formatCurrency(pendingExpense)}</span>
+      </p>
 
       <Card>
         {/* Saldo inicial */}

@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
-import { financeEntrySchema, normalizeFinanceEntryPayment } from '@/lib/validators'
+import { financeEntrySchema, normalizeFinanceEntryPayment, financeEntryPaymentStatus } from '@/lib/validators'
 import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
@@ -31,6 +31,7 @@ export async function POST(request: Request) {
   const insertPayload = {
     ...parsed.data,
     ...normalizeFinanceEntryPayment(parsed.data),
+    payment_status: financeEntryPaymentStatus(parsed.data),
     created_by: user.id,
     company_id: user.company_id,
   }

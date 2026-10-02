@@ -77,6 +77,7 @@ type EntryRow = {
   notes: string | null
   payment_method: string | null
   paid_at: string | null
+  payment_status: 'paid' | 'pending'
   cash_movement_id: number | null
   sale_id: number | null
   stock_lot_id: number | null
@@ -154,7 +155,7 @@ async function getEntries(
   let query = (admin as any)
     .from('finance_entries')
     .select(
-      'id, type, category, description, amount, reference_date, notes, payment_method, paid_at, cash_movement_id, sale_id, stock_lot_id, marketing_cost_id, return_id, created_at',
+      'id, type, category, description, amount, reference_date, notes, payment_method, paid_at, payment_status, cash_movement_id, sale_id, stock_lot_id, marketing_cost_id, return_id, created_at',
       { count: 'exact' },
     )
     .eq('company_id', companyId)
@@ -168,8 +169,8 @@ async function getEntries(
   }
   if (filters.type) query = query.eq('type', filters.type)
   if (filters.category) query = query.eq('category', filters.category)
-  if (filters.status === 'paid') query = query.not('paid_at', 'is', null)
-  if (filters.status === 'pending') query = query.is('paid_at', null)
+  if (filters.status === 'paid') query = query.eq('payment_status', 'paid')
+  if (filters.status === 'pending') query = query.eq('payment_status', 'pending')
 
   // created_at é TIMESTAMPTZ — o limite superior precisa ser "< dia seguinte
   // 00:00", nunca "<= data" (que truncaria o dia inteiro do createdTo, já
@@ -471,7 +472,9 @@ export default async function LancamentosPage({
                         <TableCell>
                           <div className="space-y-1">
                             <span className={entry.payment_method ? 'text-text-secondary' : 'text-text-muted italic'}>
-                              {entry.payment_method ? (PAYMENT_METHOD_LABELS[entry.payment_method] ?? entry.payment_method) : 'Pendente'}
+                              {entry.payment_method
+                                ? (PAYMENT_METHOD_LABELS[entry.payment_method] ?? entry.payment_method)
+                                : entry.payment_status === 'pending' ? 'Pendente' : '—'}
                             </span>
                             {pendingCashLink && (
                               <div>

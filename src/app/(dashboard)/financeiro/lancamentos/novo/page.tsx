@@ -150,7 +150,8 @@ function NovoLancamentoForm() {
             {...register('amount')}
           />
           <Input
-            label="Data de competência"
+            label="Vencimento / competência"
+            hint="Pode ser data futura (conta a pagar/receber)."
             required
             type="date"
             error={errors.reference_date?.message}
@@ -164,20 +165,18 @@ function NovoLancamentoForm() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <Select
             label="Forma de pagamento"
-            required={entryType === 'expense'}
-            placeholder={entryType === 'expense' ? 'Selecione' : undefined}
-            hint={entryType === 'income' ? 'Deixe em branco se a venda ainda não foi recebida.' : undefined}
+            hint="Escolha 'Pendente' para agendar uma conta ainda não paga/recebida."
             error={errors.payment_method?.message}
             {...register('payment_method')}
           >
-            {entryType === 'income' && <option value="">Pendente — ainda não recebida</option>}
+            <option value="">{entryType === 'income' ? 'Pendente — ainda não recebida' : 'Pendente — ainda não paga'}</option>
             {PAYMENT_METHODS.map((m) => (
               <option key={m.value} value={m.value}>{m.label}</option>
             ))}
           </Select>
           <Input
-            label="Data do recebimento/pagamento"
-            required={entryType === 'expense'}
+            label="Data do pagamento/recebimento"
+            hint="Só quando já foi pago. Não pode ser futura."
             type="date"
             max={toISODate(new Date())}
             error={errors.paid_at?.message}

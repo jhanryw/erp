@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { financeEntrySchema, normalizeFinanceEntryPayment } from '@/lib/validators'
+import { financeEntrySchema, normalizeFinanceEntryPayment, financeEntryPaymentStatus } from '@/lib/validators'
 import { brazilDate } from '@/lib/utils/date'
 
 const today = brazilDate()
@@ -127,11 +127,55 @@ describe('financeEntrySchema — despesa (regressão)', () => {
     reference_date: today,
   }
 
-  it('continua exigindo payment_method e paid_at juntos para despesa', () => {
-    const missingBoth = financeEntrySchema.safeParse(expenseBase)
-    expect(missingBoth.success).toBe(false)
+  it('exige payment_method e paid_at juntos (ou nenhum) para despesa', () => {
+    expect(financeEntrySchema.safeParse({ ...expenseBase, payment_method: 'pix' }).success).toBe(false)
+    expect(financeEntrySchema.safeParse({ ...expenseBase, paid_at: today }).success).toBe(false)
+    expect(financeEntrySchema.safeParse({ ...expenseBase, payment_method: 'pix', paid_at: today }).success).toBe(true)
+  })
+})
 
-    const complete = financeEntrySchema.safeParse({ ...expenseBase, payment_method: 'pix', paid_at: today })
-    expect(complete.success).toBe(true)
+function addDays(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10)
+}
+
+describe('financeEntrySchema — despesa pendente / vencimento futuro', () => {
+  const pending = (due: string, type: 'expense' | 'income' = 'expense') => ({
+    type,
+    category: type === 'expense' ? ('operational' as const) : ('other_income' as const),
+    description: 'Conta de energia',
+    amount: 1000,
+    reference_date: due,
+  })
+
+  it.each([
+    ['ontem', -1], ['hoje', 0], ['+10 dias', 10], ['+3 meses', 92],
+  ])('aceita despesa pendente com vencimento %s', (_l, off) => {
+    const parsed = financeEntrySchema.safeParse(pending(addDays(today, off as number)))
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(normalizeFinanceEntryPayment(parsed.data)).toEqual({ payment_method: null, paid_at: null })
+    expect(financeEntryPaymentStatus(parsed.data)).toBe('pending')
+  })
+
+  it('aceita receita futura pendente', () => {
+    const parsed = financeEntrySchema.safeParse(pending(addDays(today, 30), 'income'))
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(financeEntryPaymentStatus(parsed.data)).toBe('pending')
+  })
+
+  it('pagamento de conta com vencimento futuro: paid_at real, status paid, vencimento preservado', () => {
+    const due = addDays(today, 10)
+    const parsed = financeEntrySchema.safeParse({ ...pending(due), payment_method: 'pix', paid_at: today })
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(financeEntryPaymentStatus(parsed.data)).toBe('paid')
+    expect(parsed.data.reference_date).toBe(due)
+    expect(normalizeFinanceEntryPayment(parsed.data).paid_at).toBe(today)
+  })
+
+  it('continua rejeitando paid_at futuro', () => {
+    const r = financeEntrySchema.safeParse({ ...pending(addDays(today, 10)), payment_method: 'pix', paid_at: addDays(today, 10) })
+    expect(r.success).toBe(false)
   })
 })

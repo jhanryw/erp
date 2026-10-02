@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
-import { financeEntrySchema, normalizeFinanceEntryPayment } from '@/lib/validators'
+import { financeEntrySchema, normalizeFinanceEntryPayment, financeEntryPaymentStatus } from '@/lib/validators'
 import { NextResponse } from 'next/server'
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -86,7 +86,15 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   // do supabase-js OMITE a chave e o UPDATE preserva o valor antigo da coluna
   // em vez de limpá-la — normalizeFinanceEntryPayment garante `null` explícito
   // nos dois campos juntos, nunca só um deles.
-  const updatePayload = { ...parsed.data, ...normalizeFinanceEntryPayment(parsed.data) }
+  // Registro legado/automático (paid, paid_at nulo) editado sem informar
+  // pagamento continua realizado em reference_date — não vira pendente por
+  // acidente. Qualquer registro com paid_at pode voltar a pendente.
+  const isLegacyRealized = before.payment_status === 'paid' && before.paid_at == null
+  const updatePayload = {
+    ...parsed.data,
+    ...normalizeFinanceEntryPayment(parsed.data),
+    payment_status: parsed.data.paid_at || isLegacyRealized ? 'paid' : financeEntryPaymentStatus(parsed.data),
+  }
   const { error, count } = (await (admin as any)
     .from('finance_entries')
     .update(updatePayload, { count: 'exact' })

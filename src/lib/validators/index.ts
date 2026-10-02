@@ -299,16 +299,12 @@ export type MediaUsageFormData = z.infer<typeof mediaUsageSchema>
 // server-side POST/PUT de /api/financeiro/lancamentos (Entrega 2 — correção
 // Caixa × Financeiro).
 //
-// payment_method/paid_at são obrigatórios juntos para despesas (type='expense'):
-// despesa lançada manualmente aqui é sempre um pagamento já feito — não existe
-// "despesa pendente" neste fluxo (Contas a Pagar pertence a um módulo futuro).
+// payment_method/paid_at: ambos preenchidos = lançamento pago/recebido; ambos
+// vazios = pendente (conta a pagar/receber, qualquer vencimento — passado,
+// hoje ou futuro; vencimento = reference_date). Nunca só um dos dois
+// (constraint fe_payment_method_paid_at_together). Vale para despesa e receita.
 //
-// Para receitas (type='income') os dois campos são opcionais — uma venda pode
-// ficar pendente de recebimento — mas nunca isolados: a constraint de banco
-// fe_payment_method_paid_at_together exige os dois juntos ou nenhum, então o
-// superRefine abaixo espelha essa regra também para receita, não só despesa.
-//
-// paid_at não pode ser data futura: comparação de string 'yyyy-MM-dd' contra
+// paid_at (data real do pagamento) não pode ser data futura: comparação de string 'yyyy-MM-dd' contra
 // brazilDate() (fuso fixo America/Fortaleza), mesmo formato de reference_date.
 //
 // cash_movement_id NÃO faz parte deste schema propositalmente — é preenchido
@@ -339,39 +335,22 @@ export const financeEntrySchema = z
   })
   .strict()
   .superRefine((data, ctx) => {
-    if (data.type === 'expense') {
-      if (!data.payment_method) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['payment_method'],
-          message: 'Forma de pagamento obrigatória para despesas.',
-        })
-      }
-      if (!data.paid_at) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['paid_at'],
-          message: 'Data de pagamento obrigatória para despesas.',
-        })
-      }
-    } else {
-      // Receita: payment_method e paid_at podem ficar os dois vazios (venda
-      // pendente), mas nunca só um dos dois — mesma regra de
-      // fe_payment_method_paid_at_together, do lado do formulário.
-      if (data.payment_method && !data.paid_at) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['paid_at'],
-          message: 'Informe a data de recebimento para registrar o pagamento.',
-        })
-      }
-      if (!data.payment_method && data.paid_at) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ['payment_method'],
-          message: 'Informe a forma de pagamento para registrar o recebimento.',
-        })
-      }
+    // Despesa ou receita: payment_method e paid_at juntos (realizado) ou
+    // nenhum dos dois (pendente/agendado) — mesma regra de
+    // fe_payment_method_paid_at_together. Vencimento = reference_date.
+    if (data.payment_method && !data.paid_at) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['paid_at'],
+        message: 'Informe a data de recebimento para registrar o pagamento.',
+      })
+    }
+    if (!data.payment_method && data.paid_at) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payment_method'],
+        message: 'Informe a forma de pagamento para registrar o recebimento.',
+      })
     }
     if (data.paid_at && data.paid_at > brazilDate()) {
       ctx.addIssue({
@@ -393,6 +372,10 @@ export type FinanceEntryFormData = z.infer<typeof financeEntrySchema>
 // edição "recebido → pendente" (só paid_at explicitamente nulado,
 // payment_method omitido e mantido) violava fe_payment_method_paid_at_together.
 // Forçar `?? null` nos dois campos, sempre juntos, elimina essa classe de bug.
+export function financeEntryPaymentStatus(data: FinanceEntryFormData): 'paid' | 'pending' {
+  return data.paid_at ? 'paid' : 'pending'
+}
+
 export function normalizeFinanceEntryPayment(data: FinanceEntryFormData): {
   payment_method: FinanceEntryFormData['payment_method'] | null
   paid_at: string | null
