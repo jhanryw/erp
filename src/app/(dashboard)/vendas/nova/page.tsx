@@ -14,8 +14,6 @@ import { saleSchema, type SaleFormData, type PaymentEntry } from '@/lib/validato
 import { formatCurrency } from '@/lib/utils/currency'
 import { useDebounce } from '@/hooks/useDebounce'
 import { computeSubtotal, computeGrandTotal, computeItemAdjustmentFromListPrice } from '@/lib/sales/pricing'
-import { createAutoPrintController } from '@/lib/sales/autoPrintTab'
-import { resolvePostSalePrintTarget } from '@/lib/sales/resolvePostSalePrintTarget'
 import { resolveFocusResourceUrl } from '@/lib/fiscal/resolveFocusResourceUrl'
 import { DeliveryAddressForm, type DeliveryRecipientValue } from '@/components/vendas/DeliveryAddressForm'
 import { FiscalRecipientFields, EMPTY_FISCAL_RECIPIENT, type FiscalRecipientValue } from '@/components/vendas/FiscalRecipientFields'
@@ -123,21 +121,6 @@ export default function NovaVendaPage() {
   const router      = useRouter()
   const submitting  = useRef(false)
   const supabase    = createClient()
-
-  // Comprovante não fiscal — impressão automática ao finalizar (retirada e
-  // entrega). Controller puro/testável em src/lib/sales/autoPrintTab.ts —
-  // aqui só instancia com o window.open real do navegador.
-  const autoPrintRef = useRef<ReturnType<typeof createAutoPrintController>>()
-  if (!autoPrintRef.current) {
-    autoPrintRef.current = createAutoPrintController({
-      openBlankWindow: () => window.open('about:blank', '_blank'),
-    })
-  }
-  const handleFinalizarClick = () => autoPrintRef.current!.handleFinalizarClick()
-  // Validação do react-hook-form falhou (campo obrigatório faltando etc.) —
-  // onSubmit nunca chega a rodar. Fecha a aba about:blank em vez de deixá-la
-  // parada pra sempre.
-  const handleFinalizarInvalid = () => autoPrintRef.current!.reset()
 
   const debouncedCustomer = useDebounce(customerSearch, 300)
 
@@ -542,7 +525,6 @@ export default function NovaVendaPage() {
   async function onSubmit(data: SaleFormData) {
     if (submitting.current) return
     if (!canFinalize) {
-      autoPrintRef.current!.reset()
       toast.error('Pagamentos incompletos', {
         description: `Falta ${formatCurrency(saldoRestante)} para totalizar a venda.`,
       })
@@ -558,7 +540,6 @@ export default function NovaVendaPage() {
 
     if (!responsibleSellerId) {
       submitting.current = false
-      autoPrintRef.current!.reset()
       toast.error('Selecione o vendedor responsável antes de confirmar a venda.')
       return
     }
@@ -581,7 +562,6 @@ export default function NovaVendaPage() {
         json = JSON.parse(text)
       } catch {
         submitting.current = false
-        autoPrintRef.current!.reset()
         toast.error('Erro ao registrar venda', {
           description: res.status === 401 || res.status === 403
             ? 'Sessão expirada. Faça login novamente.'
@@ -591,7 +571,6 @@ export default function NovaVendaPage() {
       }
       if (!res.ok) {
         submitting.current = false
-        autoPrintRef.current!.reset()
         // json.error pode ser objeto Zod — serializar para evitar React error #31
         const errMsg = typeof json.error === 'string'
           ? json.error
@@ -608,60 +587,24 @@ export default function NovaVendaPage() {
       // tentada). Sempre INFORMATIVO, nunca bloqueia a navegação — a venda
       // já foi criada com sucesso independente do resultado fiscal.
       const fiscal = json.fiscal as { requested: 'nfce' | 'nfe'; status: string; reason: string | null; danfe_path?: string | null; environment?: 'homologacao' | 'producao' | null } | undefined
-      const fiscalPrint = json.fiscalPrint as { autoPrint: boolean; printNonFiscalReceipt: boolean } | undefined
-      // Regra definitiva de impressão/QR Code — precedência (documento
-      // fiscal recém-autorizado sempre vence sobre o comprovante não
-      // fiscal) extraída pra função pura testável, ver resolvePostSalePrintTarget.ts.
-      // Simplificação da arquitetura de impressão (pós-testes reais): o
-      // destino agora é sempre o DANFE OFICIAL da Focus (nunca mais
-      // /vendas/[id]/nfce) — ver resolvePostSalePrintTarget.ts. `environment`
-      // é o ambiente REAL do documento (`fiscal.environment`, vindo de
-      // `fiscal_documents.environment` via executeFiscalPolicy) — nunca um
-      // literal fixo aqui.
-      const printTarget = resolvePostSalePrintTarget({
-        saleId: sale.id,
-        fiscal: fiscal ? { status: fiscal.status, requested: fiscal.requested, danfePath: fiscal.danfe_path ?? null, environment: fiscal.environment ?? null } : undefined,
-        fiscalPrint,
-      })
-      const autoPrintedFiscal = printTarget.reason === 'fiscal_authorized'
-      const missingDanfe = printTarget.reason === 'fiscal_authorized_missing_danfe'
+      // Impressão é pós-venda e OPCIONAL: nenhuma aba é pré-aberta e nenhum
+      // window.print() é disparado aqui. O comprovante é impresso pelo botão
+      // "Imprimir Comprovante" em /vendas/[id]; o DANFE fiscal autorizado
+      // fica disponível pelo botão do toast e pela tela da venda.
       if (fiscal) {
         const label = fiscal.requested === 'nfce' ? 'NFC-e' : 'NF-e'
         if (fiscal.status === 'authorized') {
-          // item 47 do pedido: auditei até onde o browser permite
-          // automatizar a impressão do DANFE fiscal com segurança. Duas
-          // abas about:blank pré-abertas no MESMO clique (uma pro
-          // comprovante comercial, outra pro DANFE) teriam suporte
-          // inconsistente entre navegadores e imprimiriam DOIS papéis na
-          // MESMA impressora térmica simultaneamente. Por isso só UMA aba
-          // é pré-aberta (autoPrintRef, abaixo) — sua URL final é decidida
-          // pela POLÍTICA da empresa (fiscalPrint), nunca pelas duas ao
-          // mesmo tempo. Se a política não mandar imprimir automaticamente,
-          // o botão de ação no toast cobre o caso (1 clique, GET puro,
-          // nunca reemite — ver getNfceDanfeData.ts).
-          //
-          // `fiscal.environment` é o ambiente REAL do documento
-          // (`fiscal_documents.environment`) — nunca um literal fixo. Sem
-          // ambiente real conhecido (não deveria acontecer pra um
-          // documento autorizado), nunca assume 'homologacao' — só não
-          // oferece o botão de ação (mesmo tratamento de danfe_path ausente).
           const focusDanfeUrl = fiscal.environment
             ? resolveFocusResourceUrl({ path: fiscal.danfe_path ?? null, environment: fiscal.environment })
             : null
-          if (missingDanfe) {
-            // Nunca finge que está tudo certo nem oferece um botão que
-            // levaria a lugar nenhum — autorizado é fato (SEFAZ confirmou),
-            // só o link local do DANFE ainda não chegou.
+          if (focusDanfeUrl) {
+            toast.success(`${label} autorizada!`, {
+              action: { label: 'Abrir DANFE', onClick: () => window.open(focusDanfeUrl, '_blank', 'noopener,noreferrer') },
+            })
+          } else {
             toast.warning(`${label} autorizada — DANFE da Focus ainda não disponível`, {
               description: 'Consulte a tela da venda em alguns instantes ou use "Verificar status".',
             })
-          } else {
-            toast.success(
-              autoPrintedFiscal ? `${label} autorizada! Abrindo DANFE...` : `${label} autorizada!`,
-              !autoPrintedFiscal && focusDanfeUrl ? {
-                action: { label: 'Abrir DANFE', onClick: () => window.open(focusDanfeUrl, '_blank') },
-              } : undefined,
-            )
           }
         } else if (fiscal.status === 'pending') {
           toast.info(`${label} enviada — processando na SEFAZ`, { description: 'Acompanhe o status na tela da venda.' })
@@ -672,32 +615,9 @@ export default function NovaVendaPage() {
         }
       }
 
-      // Impressão automática — controlada pela política da empresa
-      // (Configurações → Fiscal), não mais hardcoded. A ÚNICA aba
-      // about:blank pré-aberta no clique (autoPrintRef) é redirecionada
-      // pra UM destino: o comprovante não fiscal (se a política pedir) OU
-      // o DANFE NFC-e (se a política pedir emissão+impressão automática e
-      // a NFC-e saiu autorizada agora) — nunca os dois na mesma aba/clique
-      // (ver comentário acima). Se nenhum dos dois estiver ligado pra esta
-      // operação (ex.: entrega — nem comprovante nem DANFE automáticos por
-      // padrão), a aba pré-aberta é só fechada, sem imprimir nada.
-      const printUrl = printTarget.url
-
-      if (printUrl) {
-        const printed = autoPrintRef.current!.redirectToReceipt(printUrl)
-        if (!printed) {
-          toast.info('Impressão automática não pôde ser aberta (pop-up bloqueado)', {
-            description: 'Use os botões de impressão na página da venda.',
-          })
-        }
-      } else {
-        autoPrintRef.current!.reset()
-      }
-
       router.push(`/vendas/${sale.id}`)
     } catch (err) {
       submitting.current = false
-      autoPrintRef.current!.reset()
       toast.error('Erro inesperado', {
         description: err instanceof Error ? err.message : 'Verifique o console para detalhes.',
       })
@@ -749,7 +669,7 @@ export default function NovaVendaPage() {
         </div>
       )}
 
-      <form id="sale-form" onSubmit={handleSubmit(onSubmit, handleFinalizarInvalid)}>
+      <form id="sale-form" onSubmit={handleSubmit(onSubmit)}>
 
         {/* ── Sticky bar mobile ──────────────────────────────────── */}
         <div className="lg:hidden fixed bottom-16 left-0 right-0 z-20 bg-bg-elevated/95 backdrop-blur-md border-t border-border shadow-elevated">
@@ -758,7 +678,6 @@ export default function NovaVendaPage() {
               <Button
                 type="submit"
                 form="sale-form"
-                onClick={handleFinalizarClick}
                 loading={isSubmitting}
                 disabled={!canFinalize}
                 className="w-full h-12 text-base font-semibold"
@@ -1707,7 +1626,6 @@ export default function NovaVendaPage() {
                   </Button>
                   <Button
                     type="submit"
-                    onClick={handleFinalizarClick}
                     loading={isSubmitting}
                     disabled={!canFinalize}
                     className="flex-1 h-11 hidden sm:flex"
@@ -1791,7 +1709,6 @@ export default function NovaVendaPage() {
                 <Button
                   type="submit"
                   form="sale-form"
-                  onClick={handleFinalizarClick}
                   loading={isSubmitting}
                   disabled={!canFinalize}
                   className="w-full mt-2"
