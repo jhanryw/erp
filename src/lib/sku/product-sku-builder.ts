@@ -55,3 +55,39 @@ export async function createProductSkuBuilder(meta: ProductSkuMeta, companyId: n
   return ({ corCode, tamanhoCode }) =>
     buildDynamicSkuBase({ tipoSkuCode: context.tipoSkuCode, modeloSkuCode, corCode, tamanhoCode, ano: meta.ano })
 }
+
+/**
+ * Sufixo de identidade do produto (product_sku_identities.discriminator).
+ * A importação/RPC (_build_variant_sku) embute o discriminador (2 dígitos,
+ * omitido quando <= 1) no fim do SKU de cada variante, o que distingue
+ * produtos que compartilham o mesmo SKU-base. A edição precisa seguir a
+ * mesma convenção, senão a variante nova nasce "sem dono" (ou ganha um
+ * sufixo de colisão arbitrário que pode coincidir com o de outro produto).
+ *
+ * Seguro por construção — só embute quando o produto já está na convenção:
+ *   - sem sku_identity_id, ou discriminador <= 1  → '' (comportamento antigo)
+ *   - com variantes: só embute se alguma variante existente de 12 dígitos
+ *     já termina com o discriminador (produtos da era pré-RPC têm variantes
+ *     sem ele e continuam como estão);
+ *   - sem variantes: embute (produto da era RPC).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function resolveVariantIdentitySuffix(product: { id: number; sku_identity_id?: number | null }, admin: any): Promise<string> {
+  if (!product.sku_identity_id) return ''
+  const { data: identity } = await admin
+    .from('product_sku_identities')
+    .select('discriminator')
+    .eq('id', product.sku_identity_id)
+    .maybeSingle()
+  const d = Number(identity?.discriminator)
+  if (!Number.isFinite(d) || d <= 1) return ''
+  const suffix = String(d).padStart(2, '0')
+
+  const { data: variations } = await admin
+    .from('product_variations')
+    .select('sku_variation')
+    .eq('product_id', product.id)
+  const skus = ((variations ?? []) as { sku_variation: string }[]).map(v => v.sku_variation)
+  if (skus.length === 0) return suffix
+  return skus.some(s => s.length === 12 && s.endsWith(suffix)) ? suffix : ''
+}

@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
-import { createProductSkuBuilder } from '@/lib/sku/product-sku-builder'
+import { createProductSkuBuilder, resolveVariantIdentitySuffix } from '@/lib/sku/product-sku-builder'
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
@@ -386,11 +386,11 @@ export async function PUT(
     // Esses campos são necessários pelo generateSKU() e ficam gravados no produto.
     const { data: productMeta, error: metaError } = await admin
       .from('products')
-      .select('tipo, modelo, ano, sku_scheme')
+      .select('tipo, modelo, ano, sku_scheme, sku_identity_id')
       .eq('id', productId)
       .eq('company_id', user.company_id)
       .single() as unknown as {
-        data: { tipo: string; modelo: string; ano: string; sku_scheme: string | null } | null
+        data: { tipo: string; modelo: string; ano: string; sku_scheme: string | null; sku_identity_id: number | null } | null
         error: { message: string } | null
       }
 
@@ -416,6 +416,8 @@ export async function PUT(
         { status: 422 },
       )
     }
+
+    const identitySuffix = await resolveVariantIdentitySuffix({ id: productId, sku_identity_id: productMeta.sku_identity_id }, admin)
 
     for (const [variationIdx, v] of variations_to_add.entries()) {
 
@@ -495,7 +497,7 @@ export async function PUT(
       // Gerar SKU base no servidor — nunca usa valor vindo do cliente
       let baseSku: string
       try {
-        baseSku = buildSkuBase({ corCode: colorSkuCode, tamanhoCode: sizeSkuCode })
+        baseSku = buildSkuBase({ corCode: colorSkuCode, tamanhoCode: sizeSkuCode }) + identitySuffix
       } catch (err) {
         console.error('[produtos][PUT] erro ao gerar SKU', {
           produtoId: productId, variationIdx,
@@ -515,18 +517,54 @@ export async function PUT(
         colorSkuCode, sizeSkuCode, baseSku,
       })
 
-      // Inserir com desvio automático de sufixo + retry por race condition
-      const insertResult = await insertVariationWithRetry(
-        baseSku,
-        {
-          product_id:    productId,
-          cost_override: v.cost_override ?? null,
-          price_override: v.price_override ?? null,
-          wholesale_price_override: v.wholesale_price_override ?? null,
-          active: true,
-        },
-        admin,
-      )
+      // Com sufixo de identidade o SKU é determinístico (mesma convenção da RPC
+      // de importação): colisão = mesma cor/tamanho já existe neste produto.
+      // Nunca "desviar" para outro sufixo — ele pertenceria a outro produto.
+      if (identitySuffix) {
+        const { data: clash } = await admin
+          .from('product_variations').select('id').eq('sku_variation', baseSku).maybeSingle()
+        if (clash) {
+          return NextResponse.json(
+            { error: `Variação #${variationIdx + 1}: o SKU ${baseSku} já existe (cor/tamanho já cadastrados neste produto).` },
+            { status: 409 },
+          )
+        }
+      }
+
+      const variationPayload = {
+        product_id:    productId,
+        cost_override: v.cost_override ?? null,
+        price_override: v.price_override ?? null,
+        wholesale_price_override: v.wholesale_price_override ?? null,
+        active: true,
+      }
+
+      let insertResult: Awaited<ReturnType<typeof insertVariationWithRetry>>
+      if (identitySuffix) {
+        // SKU determinístico: insert direto, SEM desvio de sufixo. Corrida que
+        // ocupe o SKU entre a checagem e o insert vira 409, nunca outro sufixo.
+        const { data: pv, error: insErr } = await (admin as any)
+          .from('product_variations')
+          .insert({ ...variationPayload, sku_variation: baseSku })
+          .select('id')
+          .single() as unknown as {
+            data: { id: number } | null
+            error: { code: string; message: string; details?: string | null; hint?: string | null } | null
+          }
+        if (insErr?.code === '23505') {
+          return NextResponse.json(
+            { error: `Variação #${variationIdx + 1}: o SKU ${baseSku} já existe (cor/tamanho já cadastrados neste produto).` },
+            { status: 409 },
+          )
+        }
+        insertResult = !insErr && pv
+          ? { ok: true, pv, varSku: baseSku }
+          : { ok: false, message: insErr?.message ?? 'Erro desconhecido ao inserir variação.', fatal: true,
+              code: insErr?.code ?? null, details: insErr?.details ?? null, hint: insErr?.hint ?? null }
+      } else {
+        // Inserção com desvio automático de sufixo + retry por race condition (comportamento anterior)
+        insertResult = await insertVariationWithRetry(baseSku, variationPayload, admin)
+      }
 
       if (!insertResult.ok) {
         console.error('[produtos][PUT] falha ao inserir variação', {

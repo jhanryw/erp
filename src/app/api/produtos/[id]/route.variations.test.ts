@@ -16,57 +16,7 @@ vi.mock('@/services/produtos.service', () => ({
   deleteProductCascade: vi.fn(),
 }))
 
-type Row = Record<string, any>
-type Tables = Record<string, Row[]>
-
-/** Fake mínimo de PostgREST: eq/like/in/single/maybeSingle/insert/update/delete + embed !inner de type_attribute_values. */
-function fakeAdmin(tables: Tables) {
-  let nextId = 1000
-  return {
-    from(table: string) {
-      const filters: ((r: Row) => boolean)[] = []
-      let mode: 'select' | 'insert' | 'update' | 'delete' = 'select'
-      let payload: Row | null = null
-      let single = false
-      const q: any = {
-        select() { return q },
-        insert(v: Row) { mode = 'insert'; payload = v; return q },
-        update(v: Row) { mode = 'update'; payload = v; return q },
-        delete() { mode = 'delete'; return q },
-        eq(col: string, val: unknown) {
-          if (!col.includes('.')) filters.push(r => r[col] === val)
-          return q
-        },
-        in(col: string, vals: unknown[]) { filters.push(r => vals.includes(r[col])); return q },
-        like(col: string, pat: string) { const p = pat.replace(/%$/, ''); filters.push(r => String(r[col]).startsWith(p)); return q },
-        order() { return q },
-        single() { single = true; return q },
-        maybeSingle() { single = true; return q },
-        then(res: any, rej: any) { return Promise.resolve(run()).then(res, rej) },
-      }
-      function run() {
-        tables[table] ??= []
-        if (mode === 'insert') {
-          const rows = Array.isArray(payload) ? payload : [payload!]
-          const out = rows.map(r => ({ id: nextId++, ...r }))
-          tables[table].push(...out)
-          return { data: single ? out[0] : out, error: null }
-        }
-        const rows = tables[table].filter(r => filters.every(f => f(r)))
-        if (mode === 'update') { rows.forEach(r => Object.assign(r, payload)); return { data: rows, error: null } }
-        if (mode === 'delete') { tables[table] = tables[table].filter(r => !rows.includes(r)); return { data: null, error: null } }
-        let out: Row[] = rows
-        if (table === 'type_attribute_values') {
-          out = rows.map(r => ({ ...r, variation_values: tables.variation_values.find(v => v.id === r.variation_value_id) }))
-            .filter(r => r.variation_values?.active)
-        }
-        return { data: single ? (out[0] ?? null) : out, error: null }
-      }
-      return q
-    },
-    rpc: async () => ({ data: null, error: null }),
-  }
-}
+import { fakeAdmin, type Tables } from '@/lib/sku/fakeCatalogAdmin.testutil'
 
 let tables: Tables
 const put = (id: number, body: unknown) =>
@@ -109,6 +59,59 @@ beforeEach(() => {
   ;(getProductSnapshot as any).mockImplementation(async (id: number, companyId: number) => {
     const p = tables.products.find(x => x.id === id && x.company_id === companyId)
     return p ? { ...p } : null
+  })
+})
+
+describe('PUT /api/produtos/[id] — identidade (discriminador) do produto', () => {
+  const seed = (d: number | null, existing: string[]) => {
+    tables.products.push({ id: 9, name: 'Dyn', sku: '151900002607', tipo: 'cinta', modelo: 'Short', sku_scheme: 'dynamic', sku_identity_id: d === null ? null : 77, company_id: 1, category_id: 1, supplier_id: null, brand_id: null, origin: 'own_brand', base_cost: 10, base_price: 50, active: true, product_kind: 'standard', ano: '2026' })
+    if (d !== null) (tables.product_sku_identities ??= []).push({ id: 77, discriminator: d })
+    existing.forEach((sku, i) => tables.product_variations.push({ id: 500 + i, product_id: 9, sku_variation: sku }))
+  }
+
+  it('produto da era RPC (variantes terminam no discriminador): nova variante embute o discriminador', async () => {
+    seed(7, ['151911012607'])
+    expect((await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })).status).toBe(200)
+    expect(skus(9)).toContain('151938032607')
+  })
+
+  it('mesma cor/tamanho no produto com discriminador → 409, sem sufixo arbitrário', async () => {
+    seed(7, ['151938032607'])
+    const res = await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(409)
+    expect(skus(9)).toEqual(['151938032607'])
+  })
+
+  it('corrida: SKU ocupado entre a checagem e o insert (23505) → 409, nunca outro sufixo', async () => {
+    seed(7, ['151911012607'])
+    const real = fakeAdmin(tables)
+    ;(createAdminClient as any).mockReturnValue({
+      ...real,
+      from(t: string) {
+        const q = real.from(t)
+        if (t !== 'product_variations') return q
+        const ins = q.insert.bind(q)
+        q.insert = (v: any) => (v.sku_variation === '151938032607'
+          ? { select: () => ({ single: async () => ({ data: null, error: { code: '23505', message: 'dup' } }) }) }
+          : ins(v))
+        return q
+      },
+    })
+    const res = await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(409)
+    expect(skus(9)).toEqual(['151911012607'])
+  })
+
+  it('produto da era antiga (variantes sem discriminador) mantém o comportamento anterior', async () => {
+    seed(7, ['1519110126'])
+    expect((await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })).status).toBe(200)
+    expect(skus(9)).toContain('1519380326')
+  })
+
+  it('sem identidade ou discriminador 1 → sem sufixo', async () => {
+    seed(null, [])
+    expect((await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })).status).toBe(200)
+    expect(skus(9)).toEqual(['1519380326'])
   })
 })
 
