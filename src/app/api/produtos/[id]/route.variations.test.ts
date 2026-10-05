@@ -1,0 +1,175 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { requireRole } from '@/lib/supabase/session'
+import { createAdminClient } from '@/lib/supabase/admin'
+import { getProductSnapshot } from '@/services/produtos.service'
+import { initializeStock } from '@/services/estoque.service'
+import { PUT } from './route'
+
+vi.mock('@/lib/supabase/session', () => ({ requireRole: vi.fn() }))
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }))
+vi.mock('@/lib/audit/log', () => ({ auditLog: vi.fn() }))
+vi.mock('@/services/estoque.service', () => ({ initializeStock: vi.fn() }))
+vi.mock('@/services/produtos.service', () => ({
+  getProductSnapshot: vi.fn(),
+  checkPriceChange: vi.fn().mockResolvedValue({ warning: undefined }),
+  canDeleteProduct: vi.fn(),
+  deleteProductCascade: vi.fn(),
+}))
+
+type Row = Record<string, any>
+type Tables = Record<string, Row[]>
+
+/** Fake mínimo de PostgREST: eq/like/in/single/maybeSingle/insert/update/delete + embed !inner de type_attribute_values. */
+function fakeAdmin(tables: Tables) {
+  let nextId = 1000
+  return {
+    from(table: string) {
+      const filters: ((r: Row) => boolean)[] = []
+      let mode: 'select' | 'insert' | 'update' | 'delete' = 'select'
+      let payload: Row | null = null
+      let single = false
+      const q: any = {
+        select() { return q },
+        insert(v: Row) { mode = 'insert'; payload = v; return q },
+        update(v: Row) { mode = 'update'; payload = v; return q },
+        delete() { mode = 'delete'; return q },
+        eq(col: string, val: unknown) {
+          if (!col.includes('.')) filters.push(r => r[col] === val)
+          return q
+        },
+        in(col: string, vals: unknown[]) { filters.push(r => vals.includes(r[col])); return q },
+        like(col: string, pat: string) { const p = pat.replace(/%$/, ''); filters.push(r => String(r[col]).startsWith(p)); return q },
+        order() { return q },
+        single() { single = true; return q },
+        maybeSingle() { single = true; return q },
+        then(res: any, rej: any) { return Promise.resolve(run()).then(res, rej) },
+      }
+      function run() {
+        tables[table] ??= []
+        if (mode === 'insert') {
+          const rows = Array.isArray(payload) ? payload : [payload!]
+          const out = rows.map(r => ({ id: nextId++, ...r }))
+          tables[table].push(...out)
+          return { data: single ? out[0] : out, error: null }
+        }
+        const rows = tables[table].filter(r => filters.every(f => f(r)))
+        if (mode === 'update') { rows.forEach(r => Object.assign(r, payload)); return { data: rows, error: null } }
+        if (mode === 'delete') { tables[table] = tables[table].filter(r => !rows.includes(r)); return { data: null, error: null } }
+        let out: Row[] = rows
+        if (table === 'type_attribute_values') {
+          out = rows.map(r => ({ ...r, variation_values: tables.variation_values.find(v => v.id === r.variation_value_id) }))
+            .filter(r => r.variation_values?.active)
+        }
+        return { data: single ? (out[0] ?? null) : out, error: null }
+      }
+      return q
+    },
+    rpc: async () => ({ data: null, error: null }),
+  }
+}
+
+let tables: Tables
+const put = (id: number, body: unknown) =>
+  PUT(new Request('http://x', { method: 'PUT', body: JSON.stringify(body) }), { params: { id: String(id) } })
+const skus = (productId: number) =>
+  tables.product_variations.filter(v => v.product_id === productId).map(v => v.sku_variation).sort()
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  const base = { company_id: 1, category_id: 1, supplier_id: null, brand_id: null, origin: 'own_brand', base_cost: 10, base_price: 50, active: true, product_kind: 'standard', ano: '2026' }
+  tables = {
+    // 1: Cinta/Short dinâmico (o caso do bug) · 2: Cinta/Liga legado · 3: Cinta/Liga dinâmico
+    products: [
+      { id: 1, name: 'Short Cinta', sku: '1519000026', tipo: 'cinta', modelo: 'Short', sku_scheme: 'dynamic', ...base },
+      { id: 2, name: 'Cinta Liga antiga', sku: '1501000026', tipo: 'cinta', modelo: 'liga', sku_scheme: 'legacy', ...base },
+      { id: 3, name: 'Cinta Liga nova', sku: '1515000026', tipo: 'cinta', modelo: 'Liga', sku_scheme: 'dynamic', ...base },
+      { id: 4, name: 'Cinta Short legado inválido', sku: 'x', tipo: 'cinta', modelo: 'Short', sku_scheme: 'legacy', ...base },
+    ],
+    product_types: [{ id: 10, company_id: 1, slug: 'cinta', sku_code: '15' }],
+    variation_types: [{ id: 100, slug: 'modelo', value_governance: 'type_restricted' }],
+    type_attributes: [{ id: 1, product_type_id: 10, variation_type_id: 100, active: true }],
+    variation_values: [
+      { id: 200, variation_type_id: 100, value: 'Liga', slug: 'liga', sku_code: '15', active: true },
+      { id: 201, variation_type_id: 100, value: 'Short', slug: 'short', sku_code: '19', active: true },
+      { id: 300, variation_type_id: 1, value: 'Preto', slug: 'preto', sku_code: '38', active: true },
+      { id: 301, variation_type_id: 1, value: 'Nude', slug: 'nude', sku_code: '39', active: true },
+      { id: 400, variation_type_id: 2, value: 'M', slug: 'm', sku_code: '03', active: true },
+      { id: 401, variation_type_id: 2, value: 'G', slug: 'g', sku_code: '04', active: true },
+    ],
+    type_attribute_values: [
+      { product_type_id: 10, variation_value_id: 200, active: true },
+      { product_type_id: 10, variation_value_id: 201, active: true },
+    ],
+    product_variations: [],
+    product_variation_attributes: [],
+  }
+  ;(createAdminClient as any).mockReturnValue(fakeAdmin(tables))
+  ;(requireRole as any).mockResolvedValue({ user: { id: 'u', role: 'gerente', company_id: 1 }, response: null })
+  ;(initializeStock as any).mockResolvedValue({ ok: true })
+  ;(getProductSnapshot as any).mockImplementation(async (id: number, companyId: number) => {
+    const p = tables.products.find(x => x.id === id && x.company_id === companyId)
+    return p ? { ...p } : null
+  })
+})
+
+describe('PUT /api/produtos/[id] — novas variações', () => {
+  it('Cinta/Short (dinâmico): adiciona variação com SKU do PIM (tipo 15, modelo 19)', async () => {
+    const res = await put(1, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(200)
+    expect(skus(1)).toEqual(['1519380326'])
+    expect(tables.product_variation_attributes).toHaveLength(2)
+  })
+
+  it('várias novas variações no mesmo salvamento: SKUs distintos e corretos', async () => {
+    const res = await put(1, { variations_to_add: [
+      { color_value_id: 300, size_value_id: 400 },
+      { color_value_id: 300, size_value_id: 401 },
+      { color_value_id: 301, size_value_id: 400 },
+    ] })
+    expect(res.status).toBe(200)
+    expect(skus(1)).toEqual(['1519380326', '1519380426', '1519390326'])
+  })
+
+  it('mesma combinação repetida recebe sufixo único (02), sem colidir', async () => {
+    const res = await put(1, { variations_to_add: [
+      { color_value_id: 300, size_value_id: 400 },
+      { color_value_id: 300, size_value_id: 400 },
+    ] })
+    expect(res.status).toBe(200)
+    expect(skus(1)).toEqual(['1519380326', '151938032602'])
+  })
+
+  it('produto legado (Cinta/liga, sku_scheme=legacy) continua pelo mapa estático (liga=01)', async () => {
+    const res = await put(2, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(200)
+    expect(skus(2)).toEqual(['1501380326'])
+  })
+
+  it('Cinta/Liga dinâmico usa o código do PIM (15), não o legado (01)', async () => {
+    const res = await put(3, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(200)
+    expect(skus(3)).toEqual(['1515380326'])
+  })
+
+  it('combinação realmente incompatível (legacy + Short) é rejeitada sem gravar nada', async () => {
+    const res = await put(4, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(422)
+    expect(skus(4)).toEqual([])
+  })
+
+  it('dinâmico com Modelo desvinculado do Tipo no PIM é rejeitado com lista de válidos', async () => {
+    tables.type_attribute_values = tables.type_attribute_values.filter(l => l.variation_value_id !== 201)
+    const res = await put(1, { variations_to_add: [{ color_value_id: 300 }] })
+    expect(res.status).toBe(422)
+    expect((await res.json()).error).toContain('Modelos válidos: Liga')
+    expect(skus(1)).toEqual([])
+  })
+
+  it('edição de variação existente não altera o SKU', async () => {
+    tables.product_variations.push({ id: 1, product_id: 1, sku_variation: '1519380326', price_override: null, wholesale_price_override: null })
+    const res = await put(1, { variations_to_update: [{ id: 1, price_override: 59.9 }] })
+    expect(res.status).toBe(200)
+    expect(tables.product_variations[0].sku_variation).toBe('1519380326')
+    expect(tables.product_variations[0].price_override).toBe(59.9)
+  })
+})

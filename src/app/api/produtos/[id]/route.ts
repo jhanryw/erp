@@ -4,7 +4,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { canDeleteProduct, deleteProductCascade, getProductSnapshot, checkPriceChange } from '@/services/produtos.service'
-import { generateSKUFromCodes } from '@/lib/sku/sku-map'
+import { createProductSkuBuilder } from '@/lib/sku/product-sku-builder'
 import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-dynamic'
 import { insertVariationWithRetry } from '@/lib/sku/sku-unique'
 import { initializeStock } from '@/services/estoque.service'
@@ -386,10 +386,11 @@ export async function PUT(
     // Esses campos são necessários pelo generateSKU() e ficam gravados no produto.
     const { data: productMeta, error: metaError } = await admin
       .from('products')
-      .select('tipo, modelo, ano')
+      .select('tipo, modelo, ano, sku_scheme')
       .eq('id', productId)
+      .eq('company_id', user.company_id)
       .single() as unknown as {
-        data: { tipo: string; modelo: string; ano: string } | null
+        data: { tipo: string; modelo: string; ano: string; sku_scheme: string | null } | null
         error: { message: string } | null
       }
 
@@ -401,6 +402,18 @@ export async function PUT(
       return NextResponse.json(
         { error: 'Produto não possui tipo/modelo/ano definidos. Não é possível gerar SKU para novas variações.' },
         { status: 422 }
+      )
+    }
+
+    // Esquema (legacy/dynamic) do produto decide a fonte de tipo/modelo —
+    // mesma regra do POST. Resolvido uma vez; falha aqui bloqueia o salvamento.
+    let buildSkuBase: Awaited<ReturnType<typeof createProductSkuBuilder>>
+    try {
+      buildSkuBase = await createProductSkuBuilder(productMeta, user.company_id, admin)
+    } catch (err) {
+      return NextResponse.json(
+        { error: `Erro ao gerar SKU das novas variações: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 422 },
       )
     }
 
@@ -482,13 +495,7 @@ export async function PUT(
       // Gerar SKU base no servidor — nunca usa valor vindo do cliente
       let baseSku: string
       try {
-        baseSku = generateSKUFromCodes({
-          tipo:         productMeta.tipo,
-          modelo:       productMeta.modelo,
-          corCode:      colorSkuCode,
-          tamanhoCode:  sizeSkuCode,
-          ano:          productMeta.ano,
-        })
+        baseSku = buildSkuBase({ corCode: colorSkuCode, tamanhoCode: sizeSkuCode })
       } catch (err) {
         console.error('[produtos][PUT] erro ao gerar SKU', {
           produtoId: productId, variationIdx,
