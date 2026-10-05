@@ -74,19 +74,34 @@ export async function createProductSkuBuilder(meta: ProductSkuMeta, companyId: n
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function resolveVariantIdentitySuffix(product: { id: number; sku_identity_id?: number | null }, admin: any): Promise<string> {
   if (!product.sku_identity_id) return ''
-  const { data: identity } = await admin
+  // Fail closed: erro de consulta (ou identidade referenciada que não existe)
+  // NUNCA vira "produto sem identidade" — sem certeza, não se gera SKU.
+  const { data: identity, error: identityError } = await admin
     .from('product_sku_identities')
     .select('discriminator')
     .eq('id', product.sku_identity_id)
     .maybeSingle()
-  const d = Number(identity?.discriminator)
-  if (!Number.isFinite(d) || d <= 1) return ''
+  if (identityError) {
+    throw new Error(`Falha ao consultar a identidade do produto (product_sku_identities): ${identityError.message}`)
+  }
+  if (!identity) {
+    throw new Error(`Identidade ${product.sku_identity_id} do produto ${product.id} não encontrada em product_sku_identities.`)
+  }
+  const d = Number(identity.discriminator)
+  if (!Number.isFinite(d)) {
+    throw new Error(`Discriminador inválido na identidade ${product.sku_identity_id} do produto ${product.id}.`)
+  }
+  if (d <= 1) return ''
   const suffix = String(d).padStart(2, '0')
 
-  const { data: variations } = await admin
+  // Fail closed: erro de consulta NUNCA vira "sem variantes" (que embutiria o discriminador).
+  const { data: variations, error: variationsError } = await admin
     .from('product_variations')
     .select('sku_variation')
     .eq('product_id', product.id)
+  if (variationsError) {
+    throw new Error(`Falha ao consultar as variantes existentes do produto ${product.id}: ${variationsError.message}`)
+  }
   const skus = ((variations ?? []) as { sku_variation: string }[]).map(v => v.sku_variation)
   if (skus.length === 0) return suffix
   return skus.some(s => s.length === 12 && s.endsWith(suffix)) ? suffix : ''

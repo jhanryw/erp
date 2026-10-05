@@ -82,6 +82,48 @@ describe('PUT /api/produtos/[id] — identidade (discriminador) do produto', () 
     expect(skus(9)).toEqual(['151938032607'])
   })
 
+  // Admin que falha SÓ na consulta (select) da tabela indicada; demais operações são reais.
+  const failSelectOn = (table: string) => {
+    const real = fakeAdmin(tables)
+    ;(createAdminClient as any).mockReturnValue({
+      ...real,
+      from(t: string) {
+        if (t !== table) return real.from(t)
+        const failing: any = new Proxy({}, { get: (_, p) => p === 'then'
+          ? (res: any) => res({ data: null, error: { code: 'XX000', message: 'db indisponível' } })
+          : p === 'maybeSingle' || p === 'single' ? () => Promise.resolve({ data: null, error: { code: 'XX000', message: 'db indisponível' } })
+          : p === 'insert' ? real.from(t).insert : () => failing })
+        return failing
+      },
+    })
+  }
+
+  it('falha ao consultar a identidade → 500, nada inserido, sem fallback para SKU sem discriminador', async () => {
+    seed(7, ['151911012607'])
+    failSelectOn('product_sku_identities')
+    const res = await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(500)
+    expect(skus(9)).toEqual(['151911012607'])
+    expect(skus(9)).not.toContain('1519380326')
+  })
+
+  it('identidade referenciada inexistente → 500, nada inserido', async () => {
+    seed(7, ['151911012607'])
+    tables.product_sku_identities = []
+    const res = await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(500)
+    expect(skus(9)).toEqual(['151911012607'])
+  })
+
+  it('falha ao consultar variantes existentes → 500, nada inserido, sem embutir discriminador indevidamente', async () => {
+    seed(7, ['1519110126']) // era antiga: o correto seria NÃO embutir
+    failSelectOn('product_variations')
+    const res = await put(9, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+    expect(res.status).toBe(500)
+    expect(skus(9)).toEqual(['1519110126'])
+    expect(skus(9)).not.toContain('151938032607')
+  })
+
   it('corrida: SKU ocupado entre a checagem e o insert (23505) → 409, nunca outro sufixo', async () => {
     seed(7, ['151911012607'])
     const real = fakeAdmin(tables)
@@ -152,6 +194,16 @@ describe('PUT /api/produtos/[id] — novas variações', () => {
     const res = await put(3, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
     expect(res.status).toBe(200)
     expect(skus(3)).toEqual(['1515380326'])
+  })
+
+  it('dynamic: caixa/acento/espaços no Modelo gravado no produto resolvem para o mesmo código do PIM', async () => {
+    for (const modelo of ['SHORT', 'short', ' Short ', 'Shörт'.replace('ö', 'o').replace('т', 't')]) {
+      tables.product_variations = []
+      tables.products[0].modelo = modelo
+      const res = await put(1, { variations_to_add: [{ color_value_id: 300, size_value_id: 400 }] })
+      expect(res.status).toBe(200)
+      expect(skus(1)).toEqual(['1519380326'])
+    }
   })
 
   it('combinação realmente incompatível (legacy + Short) é rejeitada sem gravar nada', async () => {

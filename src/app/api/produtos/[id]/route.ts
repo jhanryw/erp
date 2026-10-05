@@ -417,7 +417,17 @@ export async function PUT(
       )
     }
 
-    const identitySuffix = await resolveVariantIdentitySuffix({ id: productId, sku_identity_id: productMeta.sku_identity_id }, admin)
+    let identitySuffix: string
+    try {
+      identitySuffix = await resolveVariantIdentitySuffix({ id: productId, sku_identity_id: productMeta.sku_identity_id }, admin)
+    } catch (err) {
+      // Fail closed: sem certeza da identidade/padrão das variantes, nada é gravado.
+      console.error('[produtos][PUT] não foi possível determinar a identidade do SKU', { produtoId: productId, err })
+      return NextResponse.json(
+        { error: `Não foi possível determinar o padrão de SKU deste produto: ${err instanceof Error ? err.message : String(err)}` },
+        { status: 500 },
+      )
+    }
 
     for (const [variationIdx, v] of variations_to_add.entries()) {
 

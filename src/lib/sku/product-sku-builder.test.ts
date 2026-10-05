@@ -13,6 +13,7 @@ function admin(opts: { governed?: boolean } = {}) {
     type_attribute_values: [
       { variation_values: { id: 200, value: 'Liga', slug: 'liga', sku_code: '15' } },
       { variation_values: { id: 201, value: 'Short', slug: 'short', sku_code: '19' } },
+      { variation_values: { id: 202, value: 'Básico com Bojo', slug: 'basico-com-bojo', sku_code: '35' } },
     ],
   }
   return {
@@ -34,7 +35,14 @@ describe('createProductSkuBuilder', () => {
 
   it('dynamic: modelo desconhecido lança com lista de válidos', async () => {
     await expect(createProductSkuBuilder({ tipo: 'cinta', modelo: 'Xyz', ano: '2026', sku_scheme: 'dynamic' }, 1, admin()))
-      .rejects.toThrow(/Modelos válidos: Liga, Short/)
+      .rejects.toThrow(/Modelos válidos: Básico com Bojo, Liga, Short/)
+  })
+
+  it('dynamic: normalização de caixa, acento, espaço e separador', async () => {
+    for (const modelo of ['Básico com Bojo', 'BÁSICO COM BOJO', 'basico com bojo', 'basico_com_bojo', 'basico-com-bojo', '  Básico  com   Bojo ']) {
+      const b = await createProductSkuBuilder({ tipo: 'cinta', modelo, ano: '2026', sku_scheme: 'dynamic' }, 1, admin())
+      expect(b({ corCode: '01', tamanhoCode: '02' })).toBe('1535010226')
+    }
   })
 
   it('dynamic: sem_modelo → MM 00', async () => {
