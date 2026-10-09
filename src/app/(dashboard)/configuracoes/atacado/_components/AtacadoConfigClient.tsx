@@ -155,6 +155,12 @@ export function AtacadoConfigClient({ companyId, initialSettings, initialBanners
         <BannerManager initialBanners={initialBanners} />
       </Card>
 
+      <Card className="p-5 space-y-2">
+        <h3 className="text-sm font-semibold text-text-primary">Cores do mesmo modelo</h3>
+        <p className="text-xs text-text-muted">Agrupe os produtos que são cores do mesmo modelo para o cliente alternar entre elas na página do produto.</p>
+        <Link href="/configuracoes/atacado/cores"><Button type="button" variant="secondary" size="sm">Gerenciar grupos de cores</Button></Link>
+      </Card>
+
       <Card className="p-5 space-y-4">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">Fotos das categorias</h3>

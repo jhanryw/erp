@@ -6,12 +6,13 @@ import { toast } from 'sonner'
 import { ImageOff, ShoppingCart } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../../_lib/CartContext'
-import { buildCartItem, variationLabel } from '../../_lib/cartItem'
-import { CatalogImage } from '../../_components/CatalogImage'
-import { QuantityStepper } from '../../_components/QuantityStepper'
 import { useWholesaleBasePath } from '../../_lib/WholesaleBasePathContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { trackViewContent, trackAddToCart } from '@/lib/wholesale/metaPixel'
+import { variationLabel } from '../../_lib/cartItem'
+import { buildCartLines, clampQuantity, familyProducts, summarizeSelection, type FamilyQuantities } from '../../_lib/familySelection'
+import { CatalogImage } from '../../_components/CatalogImage'
+import { QuantityStepper } from '../../_components/QuantityStepper'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
 
 export function ProductDetailClient({ product }: { product: WholesaleCatalogProduct }) {
@@ -19,93 +20,138 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
   const router = useRouter()
   const basePath = useWholesaleBasePath()
 
-  // Quantidade PENDENTE por variação — o cliente monta o pedido de várias
-  // variações (P/M/G) antes de adicionar tudo de uma vez (seção 8 do
-  // pedido) — nunca precisa reabrir o produto pra cada tamanho.
-  const [quantities, setQuantities] = useState<Record<number, number>>({})
+  const products = useMemo(() => familyProducts(product), [product])
+  const hasFamily = products.length > 1
+
+  // Produto (cor) em exibição + quantidades por VARIAÇÃO de todas as cores: trocar de cor não perde nada.
+  const [activeId, setActiveId] = useState(product.productId)
+  const [quantities, setQuantities] = useState<FamilyQuantities>({})
+  const active = products.find((p) => p.productId === activeId) ?? product
 
   useEffect(() => {
-    trackViewContent({
-      contentId: String(product.productId),
-      contentName: product.name,
-      value: product.priceFrom ?? 0,
-    })
+    trackViewContent({ contentId: String(product.productId), contentName: product.name, value: product.priceFrom ?? 0 })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product.productId])
 
-  const selectedTotal = useMemo(
-    () => product.variations.reduce((sum, v) => sum + (quantities[v.variationId] ?? 0) * v.price, 0),
-    [product.variations, quantities],
-  )
-  const selectedUnits = useMemo(
-    () => Object.values(quantities).reduce((sum, q) => sum + q, 0),
-    [quantities],
-  )
+  const summary = useMemo(() => summarizeSelection(products, quantities), [products, quantities])
 
-  function setQty(variationId: number, next: number, max: number | undefined) {
-    const clamped = Math.max(0, max != null ? Math.min(next, max) : next)
-    setQuantities((prev) => ({ ...prev, [variationId]: clamped }))
+  function selectColor(next: WholesaleCatalogProduct) {
+    setActiveId(next.productId)
+    // Mantém a URL compartilhável da cor em exibição sem recarregar a página.
+    try { window.history.replaceState(null, '', wholesaleHref(basePath, `/produto/${next.productId}`)) } catch { /* ignora */ }
+  }
+
+  function setQty(variationId: number, value: number) {
+    const variation = products.flatMap((p) => p.variations).find((v) => v.variationId === variationId)
+    if (!variation) return
+    setQuantities((prev) => ({ ...prev, [variationId]: clampQuantity(variation, value) }))
   }
 
   function handleAddToCart() {
-    const toAdd = product.variations.filter((v) => (quantities[v.variationId] ?? 0) > 0)
-    if (toAdd.length === 0) {
+    const lines = buildCartLines(products, quantities)
+    if (lines.length === 0) {
       toast.error('Escolha ao menos uma quantidade.')
       return
     }
-
-    for (const v of toAdd) {
-      const qty = quantities[v.variationId]
-      addItem(buildCartItem(product, v), qty)
-      trackAddToCart({ contentId: String(v.variationId), contentName: product.name, value: v.price, quantity: qty })
+    for (const { item, quantity } of lines) {
+      addItem(item, quantity)
+      trackAddToCart({ contentId: String(item.variationId), contentName: item.productName, value: item.displayPrice, quantity })
     }
-
-    toast.success(toAdd.length === 1 ? 'Adicionado ao carrinho!' : `${toAdd.length} variações adicionadas ao carrinho!`)
+    toast.success(lines.length === 1 ? 'Adicionado ao carrinho!' : `${summary.units} peças (${lines.length} itens) adicionadas ao carrinho!`)
     setQuantities({})
   }
+
+  const image = active.images[0]
 
   return (
     <div className="grid md:grid-cols-2 gap-8 md:gap-12">
       <div className="relative aspect-square rounded-xl bg-gray-50 flex items-center justify-center overflow-hidden">
-        {product.images[0] ? (
-          <CatalogImage src={product.images[0].url} alt={product.images[0].alt ?? product.name} sizes="(min-width: 768px) 50vw, 100vw" priority className="object-cover" />
+        {image ? (
+          // key: ao trocar de cor a imagem é a DA COR escolhida.
+          <CatalogImage key={active.productId} src={image.url} alt={image.alt ?? active.name} sizes="(min-width: 768px) 50vw, 100vw" priority className="object-cover" />
         ) : (
-          <ImageOff className="w-12 h-12 text-gray-300" />
+          <ImageOff aria-hidden className="w-12 h-12 text-gray-500" />
         )}
       </div>
 
       <div className="space-y-5">
         <div>
-          {product.brand && <p className="text-xs text-gray-500 uppercase tracking-wide">{product.brand}</p>}
-          <h1 className="text-xl font-semibold text-gray-900 mt-0.5">{product.name}</h1>
-          {product.category && <p className="text-sm text-gray-500 mt-0.5">{product.category}</p>}
+          {active.brand && <p className="text-xs text-gray-500 uppercase tracking-wide">{active.brand}</p>}
+          <h1 className="text-xl font-semibold text-gray-900 mt-0.5">{active.name}</h1>
+          {active.category && <p className="text-sm text-gray-500 mt-0.5">{active.category}</p>}
         </div>
 
-        {!product.purchasable && (
-          <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-sm text-amber-700 font-medium">
-            Produto indisponível no momento.
+        {hasFamily && (
+          <section aria-label="Cores" className="space-y-2">
+            <p className="text-sm font-medium text-gray-900">
+              Cor: <span className="font-normal text-gray-700">{active.colorLabel ?? active.name}</span>
+            </p>
+            <ul className="flex flex-wrap gap-2">
+              {products.map((p) => {
+                const selected = p.productId === activeId
+                const picked = summary.unitsByProduct[p.productId] ?? 0
+                const unavailable = !p.purchasable
+                const label = p.colorLabel ?? p.name
+                return (
+                  <li key={p.productId}>
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      aria-label={`${label}${unavailable ? ' — indisponível' : ''}${picked ? ` — ${picked} selecionadas` : ''}`}
+                      onClick={() => selectColor(p)}
+                      className={`relative flex w-[72px] flex-col items-center gap-1 rounded-lg border p-1.5 text-center transition-colors ${
+                        selected ? 'border-gray-900 ring-2 ring-gray-900' : 'border-gray-400 hover:border-gray-900'
+                      } ${unavailable ? 'bg-gray-50' : 'bg-white'}`}
+                    >
+                      <span className="relative block h-14 w-14 overflow-hidden rounded-md bg-gray-100">
+                        {p.images[0] ? (
+                          <CatalogImage src={p.images[0].url} alt="" sizes="56px" className={`object-cover ${unavailable ? 'opacity-40 grayscale' : ''}`} />
+                        ) : (
+                          <ImageOff aria-hidden className="m-auto mt-4 h-5 w-5 text-gray-500" />
+                        )}
+                      </span>
+                      <span className={`line-clamp-2 min-h-[2rem] text-[11px] leading-tight ${unavailable ? 'text-gray-500' : 'text-gray-900'}`}>{label}</span>
+                      {unavailable && <span className="text-[10px] leading-none text-gray-600">Indisponível</span>}
+                      {picked > 0 && (
+                        <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-gray-900 px-1 text-[11px] font-semibold text-white">
+                          {picked}
+                        </span>
+                      )}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </section>
+        )}
+
+        {!active.purchasable && (
+          <div className="rounded-lg bg-amber-50 border border-amber-300 px-3 py-2 text-sm text-amber-800 font-medium">
+            Esta cor está indisponível no momento.
           </div>
         )}
 
-        {product.purchasable && (
-          <div className="space-y-2">
-            {product.variations.map((v) => {
+        {active.purchasable && (
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-gray-900">Tamanho e quantidade</p>
+            {active.variations.map((v) => {
               const qty = quantities[v.variationId] ?? 0
+              // A cor já aparece no seletor de cores; só é repetida no rótulo quando o produto mistura várias cores.
+              const label = variationLabel(active.colorLabel ? v.attributes.filter((a) => a.type.toLowerCase() !== 'cor') : v.attributes, v.sku)
               return (
-                <div key={v.variationId} className={`flex items-center justify-between gap-3 py-2 border-b border-gray-100 ${!v.available ? 'opacity-40' : ''}`}>
+                <div key={v.variationId} className={`flex items-center justify-between gap-3 border-b border-gray-200 py-2.5 ${!v.available ? 'bg-gray-50' : ''}`}>
                   <div className="min-w-0">
-                    <p className="text-sm font-medium text-gray-800">{variationLabel(v.attributes, v.sku)}</p>
-                    <p className="text-sm text-gray-900 font-semibold">{formatCurrency(v.price)}</p>
+                    <p className={`text-sm font-medium ${v.available ? 'text-gray-900' : 'text-gray-500'}`}>{label}</p>
+                    <p className={`text-sm font-semibold ${v.available ? 'text-gray-900' : 'text-gray-500'}`}>{formatCurrency(v.price)}</p>
                     {v.available && v.lowStock && <p className="text-xs text-amber-700">Poucas unidades</p>}
-                    {!v.available && <p className="text-xs text-gray-500">Indisponível</p>}
+                    {!v.available && <p className="text-xs text-gray-600">Indisponível</p>}
                   </div>
-
                   <QuantityStepper
                     value={qty}
                     max={v.maxQuantity}
                     disabled={!v.available}
-                    label={`${product.name} ${variationLabel(v.attributes, v.sku)}`}
-                    onChange={(next) => setQty(v.variationId, next, v.maxQuantity)}
+                    label={`${active.colorLabel ?? active.name} ${label}`}
+                    onChange={(next) => setQty(v.variationId, next)}
                   />
                 </div>
               )
@@ -113,26 +159,29 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
           </div>
         )}
 
-        {product.purchasable && (
-          <div className="space-y-3 pt-1">
-            {selectedUnits > 0 && (
-              <div className="flex justify-between text-sm text-gray-600">
-                <span>{selectedUnits} un. selecionadas</span>
-                <span className="font-semibold text-gray-900">{formatCurrency(selectedTotal)}</span>
-              </div>
-            )}
-            <button
-              onClick={handleAddToCart}
-              disabled={selectedUnits === 0}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-full bg-gray-900 text-white text-sm font-medium hover:bg-gray-800 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              <ShoppingCart className="w-4 h-4" />
-              Adicionar ao carrinho
-            </button>
+        <div className="space-y-3 pt-1" aria-live="polite">
+          <div className="flex items-baseline justify-between text-sm text-gray-700">
+            <span>
+              {summary.units > 0
+                ? `${summary.units} ${summary.units === 1 ? 'peça selecionada' : 'peças selecionadas'}${Object.keys(summary.unitsByProduct).length > 1 ? ` em ${Object.keys(summary.unitsByProduct).length} cores` : ''}`
+                : 'Nenhuma peça selecionada'}
+            </span>
+            <span className="text-base font-semibold text-gray-900">{formatCurrency(summary.subtotal)}</span>
           </div>
-        )}
+          <button
+            type="button"
+            onClick={handleAddToCart}
+            aria-disabled={summary.units === 0}
+            className={`w-full flex items-center justify-center gap-2 py-3.5 rounded-full text-sm font-medium transition-colors ${
+              summary.units === 0 ? 'bg-gray-200 text-gray-700' : 'bg-gray-900 text-white hover:bg-gray-800 active:bg-black'
+            }`}
+          >
+            <ShoppingCart aria-hidden className="w-4 h-4" />
+            {summary.units === 0 ? 'Escolha as quantidades' : `Adicionar ${summary.units} ${summary.units === 1 ? 'peça' : 'peças'} ao carrinho`}
+          </button>
+        </div>
 
-        <button onClick={() => router.push(wholesaleHref(basePath, '/carrinho'))} className="text-xs text-gray-500 hover:text-gray-700 underline">
+        <button type="button" onClick={() => router.push(wholesaleHref(basePath, '/carrinho'))} className="text-sm text-gray-700 hover:text-gray-900 underline">
           Ver carrinho
         </button>
       </div>

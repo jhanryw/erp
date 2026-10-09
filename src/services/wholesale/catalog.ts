@@ -72,6 +72,13 @@ export interface WholesaleCatalogProduct {
   priceFrom: number | null
   /** false quando NENHUMA variação está vendável. */
   purchasable: boolean
+  /** Cor do produto (valor único do atributo "Cor" das variações); `null` se não houver ou houver várias. */
+  colorLabel?: string | null
+  /**
+   * Outras cores do MESMO modelo (grupo explícito `products.color_group_id`, da mesma empresa e visíveis no atacado).
+   * Só preenchido no detalhe do produto; vazio quando o produto não pertence a um grupo.
+   */
+  family?: WholesaleCatalogProduct[]
 }
 
 interface CatalogFilters {
@@ -239,7 +246,20 @@ function toCatalogProduct(
     variations: catalogVariations,
     priceFrom: sellablePrices.length > 0 ? Math.min(...sellablePrices) : null,
     purchasable: sellablePrices.length > 0,
+    colorLabel: colorOf(evaluated, attrsByVariation),
+    family: [],
   }
+}
+
+/** Cor do produto = único valor do atributo "Cor" entre as variações (várias cores no mesmo produto → `null`). */
+function colorOf(evaluated: EvaluatedVariation[], attrsByVariation: Record<number, { type: string; value: string }[]>): string | null {
+  const colors = new Set<string>()
+  for (const { row } of evaluated) {
+    for (const a of attrsByVariation[row.id] ?? []) {
+      if (a.type.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() === 'cor') colors.add(a.value)
+    }
+  }
+  return colors.size === 1 ? [...colors][0] : null
 }
 
 interface VisibleProduct {
@@ -480,11 +500,45 @@ export async function getWholesaleProductDetail(companyId: number, productId: nu
     loadImagesByProduct(companyId, [productId]),
   ])
 
-  return toCatalogProduct(
+  const detail = toCatalogProduct(
     product,
     evaluateVariations(product, variations, stockByVariation),
     attrsByVariation,
     imagesByProduct[productId] ?? [],
     settings.showStockQuantity,
   )
+  detail.family = await loadColorFamily(admin, companyId, productId, settings)
+  return detail
+}
+
+/**
+ * Outras cores do mesmo modelo, a partir do grupo EXPLÍCITO do produto (nunca por semelhança de nome).
+ * Consulta tolerante: se a coluna `color_group_id` ainda não existe (migration não aplicada) ou falhar,
+ * o produto simplesmente aparece sem outras cores — a página nunca quebra por causa disso.
+ */
+async function loadColorFamily(admin: Admin, companyId: number, productId: number, settings: WholesaleSiteSettings): Promise<WholesaleCatalogProduct[]> {
+  const { data: own, error } = await (admin as any)
+    .from('products').select('color_group_id').eq('company_id', companyId).eq('id', productId).maybeSingle() as
+    { data: { color_group_id: number | null } | null; error: { message: string } | null }
+  if (error || !own?.color_group_id) return []
+
+  const { data: members, error: membersError } = await (admin as any)
+    .from('products').select('id').eq('company_id', companyId).eq('color_group_id', own.color_group_id).neq('id', productId) as
+    { data: { id: number }[] | null; error: { message: string } | null }
+  if (membersError || !members || members.length === 0) return []
+
+  // Visíveis = mesma regra da vitrine (ativo, habilitado no atacado, vendável ou "mostrar sem estoque").
+  const memberIds = new Set(members.map((m) => m.id))
+  const visible = (await loadAllVisibleProducts(admin, companyId, settings)).filter((v) => memberIds.has(v.product.id))
+  if (visible.length === 0) return []
+
+  const variationIds = visible.flatMap((v) => v.evaluated.map((e) => e.row.id))
+  const [attrsByVariation, imagesByProduct] = await Promise.all([
+    loadAttributesByVariation(admin as any, variationIds),
+    loadImagesByProduct(companyId, visible.map((v) => v.product.id)),
+  ])
+
+  return visible
+    .map(({ product, evaluated }) => toCatalogProduct(product, evaluated, attrsByVariation, imagesByProduct[product.id] ?? [], settings.showStockQuantity))
+    .sort((a, b) => (a.colorLabel ?? a.name).localeCompare(b.colorLabel ?? b.name, 'pt-BR'))
 }

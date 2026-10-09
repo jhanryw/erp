@@ -111,6 +111,7 @@ export function createFakeAdmin(tables: FakeTables, options: FakeAdminOptions = 
         else filters.push((r) => r[col] === value)
         return q
       },
+      neq(col: string, value: unknown) { filters.push((r) => r[col] !== value); return q },
       in(col: string, values: unknown[]) { filters.push((r) => values.includes(r[col])); return q },
       ilike(col: string, pattern: string) {
         const needle = pattern.replace(/%/g, '').toLowerCase()
