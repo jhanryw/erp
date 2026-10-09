@@ -16,6 +16,13 @@ export type FakeTables = Record<string, Row[]>
 const RELATIONS: Record<string, Record<string, { table: string; fk: string }>> = {
   products: { suppliers: { table: 'suppliers', fk: 'supplier_id' }, brands: { table: 'brands', fk: 'brand_id' }, categories: { table: 'categories', fk: 'category_id' } },
   media_usages: { media: { table: 'media', fk: 'media_id' } },
+  wholesale_site_banners: {
+    media: { table: 'media', fk: 'media_id' },
+    mobile_media: { table: 'media', fk: 'mobile_media_id' },
+    categories: { table: 'categories', fk: 'link_category_id' },
+    products: { table: 'products', fk: 'link_product_id' },
+  },
+  wholesale_category_covers: { media: { table: 'media', fk: 'media_id' } },
   product_variations: { products: { table: 'products', fk: 'product_id' } },
   stock_balances: { stock_locations: { table: 'stock_locations', fk: 'stock_location_id' } },
   product_variation_attributes: {
@@ -73,6 +80,11 @@ export function createFakeAdmin(tables: FakeTables, options: FakeAdminOptions = 
     const embedFilters: { embed: string; field: string; value: unknown }[] = []
     const orders: { col: string; asc: boolean }[] = []
     let updateValues: Row | null = null
+    let insertValues: Row[] | null = null
+    let upsertOn: string[] | null = null
+    let deleting = false
+    let deleteCount = false
+    const idSeq = tables.__seq ?? ((tables as any).__seq = [{ n: 1000 }])
     let rangeFrom = 0
     let rangeTo = Number.POSITIVE_INFINITY
 
@@ -85,6 +97,15 @@ export function createFakeAdmin(tables: FakeTables, options: FakeAdminOptions = 
         return q
       },
       update(values: Row) { updateValues = values; return q },
+      insert(values: Row | Row[]) { insertValues = Array.isArray(values) ? values : [values]; return q },
+      upsert(values: Row | Row[], opts?: { onConflict?: string }) {
+        insertValues = Array.isArray(values) ? values : [values]
+        upsertOn = (opts?.onConflict ?? 'id').split(',').map((c) => c.trim())
+        return q
+      },
+      delete(opts?: { count?: string }) { deleting = true; deleteCount = !!opts?.count; return q },
+      is(col: string, value: unknown) { filters.push((r) => (r[col] ?? null) === value); return q },
+      single() { q._single = true; return q },
       eq(col: string, value: unknown) {
         if (col.includes('.')) { const [embed, field] = col.split('.'); embedFilters.push({ embed, field, value }) }
         else filters.push((r) => r[col] === value)
@@ -125,10 +146,28 @@ export function createFakeAdmin(tables: FakeTables, options: FakeAdminOptions = 
     }
 
     function run() {
-      let rows = (tables[table] ?? []).filter((r) => filters.every((f) => f(r)))
+      tables[table] = tables[table] ?? []
+      if (insertValues) {
+        const touched: Row[] = []
+        for (const values of insertValues) {
+          const existing = upsertOn ? tables[table].find((r) => upsertOn!.every((c) => r[c] === values[c])) : undefined
+          if (existing) { Object.assign(existing, values); touched.push(existing); continue }
+          const row = { id: ++idSeq[0].n, ...values }
+          tables[table].push(row)
+          touched.push(row)
+        }
+        const keep = new Set(touched)
+        filters.push((r) => keep.has(r))
+      }
+      if (deleting) {
+        const doomed = tables[table].filter((r) => filters.every((f) => f(r)))
+        tables[table] = tables[table].filter((r) => !doomed.includes(r))
+        return { data: null, error: null, count: deleteCount ? doomed.length : undefined }
+      }
+      let rows = tables[table].filter((r) => filters.every((f) => f(r)))
       if (updateValues) {
         for (const r of rows) Object.assign(r, updateValues)
-        return { data: rows.map((r) => ({ ...r })), error: null }
+        rows = rows.map((r) => ({ ...r }))
       }
       rows = rows.map(attachEmbeds).filter((r): r is Row => r != null)
       for (const { col, asc } of [...orders].reverse()) {

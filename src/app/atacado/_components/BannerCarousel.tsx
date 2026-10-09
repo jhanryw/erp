@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import Image from 'next/image'
+import { getImageProps } from 'next/image'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
@@ -19,21 +19,60 @@ function bannerHref(basePath: string, banner: WholesaleBanner): string | null {
   }
 }
 
-function BannerImage({ banner, basePath }: { banner: WholesaleBanner; basePath: string }) {
+/** Só mostra textos quando o banner pede (`showText`) E há algo para mostrar. */
+export function bannerHasText(banner: WholesaleBanner): boolean {
+  return banner.showText && !!(banner.title || banner.subtitle || banner.ctaLabel)
+}
+
+function BannerImage({ banner, basePath, priority }: { banner: WholesaleBanner; basePath: string; priority: boolean }) {
   const href = bannerHref(basePath, banner)
   const isExternal = banner.link.type === 'url'
+  const hasMobile = !!banner.mobileImageUrl
+  const alt = banner.altText ?? banner.title ?? ''
 
-  const img = (
-    // aspect-ratio fixo + object-cover: crop previsível em qualquer tamanho de tela (seção 21 do pedido), sem altura fixa gigante.
-    <div className="relative w-full aspect-[21/9] sm:aspect-[3/1] overflow-hidden rounded-xl bg-gray-100">
-      <Image src={banner.imageUrl} alt={banner.altText ?? ''} fill className="object-cover" priority />
+  // Direção de arte com <picture>: o navegador baixa SÓ a imagem do seu breakpoint (nunca as duas),
+  // ambas otimizadas pelo next/image. Sem imagem mobile, a desktop é recortada (object-cover) em 16:9.
+  const common = { alt, fill: true, sizes: '100vw', quality: 80 } as const
+  const { props: desktop } = getImageProps({ ...common, src: banner.imageUrl })
+  const mobile = hasMobile ? getImageProps({ ...common, src: banner.mobileImageUrl as string }).props : null
+  const { srcSet: desktopSrcSet, ...img } = desktop
+
+  const showText = bannerHasText(banner)
+
+  const slide = (
+    <div
+      className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${hasMobile ? 'aspect-[4/5]' : 'aspect-[16/9]'}`}
+    >
+      <picture>
+        {mobile && <source media="(max-width: 639px)" srcSet={mobile.srcSet} sizes="100vw" />}
+        <source media="(min-width: 640px)" srcSet={desktopSrcSet} sizes="100vw" />
+        {/* eslint-disable-next-line jsx-a11y/alt-text */}
+        <img {...img} alt={alt} className="object-cover" fetchPriority={priority ? 'high' : undefined} loading={priority ? 'eager' : 'lazy'} />
+      </picture>
+
+      {showText && (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/15 to-transparent sm:bg-gradient-to-r sm:from-black/55 sm:via-black/10 sm:to-transparent" />
+          <div className="absolute inset-x-0 bottom-0 sm:inset-y-0 sm:right-auto sm:flex sm:items-center p-5 sm:p-10 sm:max-w-[55%]">
+            <div className="space-y-2 sm:space-y-3">
+              {banner.title && <h2 className="font-serif text-2xl sm:text-4xl leading-tight text-white">{banner.title}</h2>}
+              {banner.subtitle && <p className="text-sm sm:text-base text-white/90 leading-snug">{banner.subtitle}</p>}
+              {banner.ctaLabel && href && (
+                <span className="inline-block mt-1 rounded-full bg-white px-5 py-2.5 text-sm font-medium text-gray-900">
+                  {banner.ctaLabel}
+                </span>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 
-  if (!href) return img
+  if (!href) return slide
   return isExternal
-    ? <a href={href} target="_blank" rel="noopener noreferrer">{img}</a>
-    : <Link href={href}>{img}</Link>
+    ? <a href={href} target="_blank" rel="noopener noreferrer" aria-label={alt || banner.ctaLabel || undefined}>{slide}</a>
+    : <Link href={href} aria-label={alt || banner.ctaLabel || undefined}>{slide}</Link>
 }
 
 export function BannerCarousel({ banners }: { banners: WholesaleBanner[] }) {
@@ -58,7 +97,7 @@ export function BannerCarousel({ banners }: { banners: WholesaleBanner[] }) {
   }
 
   if (!multiple) {
-    return <BannerImage banner={banners[0]} basePath={basePath} />
+    return <BannerImage banner={banners[0]} basePath={basePath} priority />
   }
 
   return (
@@ -72,7 +111,7 @@ export function BannerCarousel({ banners }: { banners: WholesaleBanner[] }) {
         touchStartX.current = null
       }}
     >
-      <BannerImage banner={banners[index]} basePath={basePath} />
+      <BannerImage key={banners[index].id} banner={banners[index]} basePath={basePath} priority={index === 0} />
 
       <button
         onClick={() => go(-1)}

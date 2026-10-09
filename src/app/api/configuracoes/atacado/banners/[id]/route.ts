@@ -3,11 +3,14 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireRole } from '@/lib/supabase/session'
-import { updateWholesaleBanner, deleteWholesaleBanner, wholesaleBannerLinkSchema } from '@/services/wholesale/banners'
+import { updateWholesaleBanner, deleteWholesaleBanner, wholesaleBannerLinkSchema, wholesaleBannerContentShape } from '@/services/wholesale/banners'
 
 const patchSchema = z.object({
   isActive: z.boolean().optional(),
   link: wholesaleBannerLinkSchema.optional(),
+  mediaPublicId: z.string().uuid().optional(),
+  mobileMediaPublicId: z.string().uuid().nullable().optional(),
+  ...wholesaleBannerContentShape,
 })
 
 // ─── PATCH /api/configuracoes/atacado/banners/[id] ─────────────────────────────

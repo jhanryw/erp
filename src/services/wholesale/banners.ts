@@ -37,6 +37,21 @@ export const wholesaleBannerLinkSchema = z.discriminatedUnion('type', [
   }),
 ])
 
+/**
+ * Texto opcional: aparado; vazio vira `null` (limpa o campo). Chave AUSENTE continua
+ * `undefined` — num PATCH isso significa "não mexer", nunca "apagar". Limites espelham o CHECK da migration.
+ */
+const optionalText = (max: number) =>
+  z.string().trim().max(max).nullable().optional().transform((v) => (v === undefined ? undefined : v ? v : null))
+
+/** Campos de conteúdo do banner — única definição, reaproveitada por POST e PATCH. */
+export const wholesaleBannerContentShape = {
+  title: optionalText(80),
+  subtitle: optionalText(160),
+  ctaLabel: optionalText(30),
+  showText: z.boolean().optional(),
+}
+
 export interface WholesaleBannerLink {
   type: BannerLinkType
   categorySlug?: string
@@ -47,8 +62,16 @@ export interface WholesaleBannerLink {
 export interface WholesaleBanner {
   id: number
   mediaPublicId: string
+  /** Imagem desktop (e fallback do mobile). */
   imageUrl: string
+  /** Imagem específica para celular; `null` → usa a desktop. */
+  mobileImageUrl: string | null
   altText: string | null
+  title: string | null
+  subtitle: string | null
+  ctaLabel: string | null
+  /** false → só a imagem, sem textos sobrepostos. */
+  showText: boolean
   isActive: boolean
   sortOrder: number
   link: WholesaleBannerLink
@@ -60,18 +83,26 @@ interface BannerRow {
   sort_order: number
   link_type: BannerLinkType
   link_url: string | null
+  title: string | null
+  subtitle: string | null
+  cta_label: string | null
+  show_text: boolean
+  mobile_media: MediaEmbed | MediaEmbed[] | null
   media: { public_id: string; alt_text: string | null; visibility: 'public' | 'private'; storage_key: string | null; external_url: string | null } | { public_id: string; alt_text: string | null; visibility: 'public' | 'private'; storage_key: string | null; external_url: string | null }[] | null
   categories: { slug: string } | { slug: string }[] | null
   products: { id: number } | { id: number }[] | null
 }
+
+type MediaEmbed = { public_id: string; alt_text: string | null; visibility: 'public' | 'private'; storage_key: string | null; external_url: string | null }
 
 function one<T>(v: T | T[] | null): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : v
 }
 
 const BANNER_SELECT = `
-  id, is_active, sort_order, link_type, link_url,
+  id, is_active, sort_order, link_type, link_url, title, subtitle, cta_label, show_text,
   media:media_id(public_id, alt_text, visibility, storage_key, external_url),
+  mobile_media:mobile_media_id(public_id, alt_text, visibility, storage_key, external_url),
   categories:link_category_id(slug),
   products:link_product_id(id)
 `
@@ -89,12 +120,19 @@ async function fromRow(row: BannerRow): Promise<WholesaleBanner> {
   // Reaproveita `resolveMediaUrl` do Media Hub (mesma função que resolve
   // imagem de produto/logo) — nunca uma segunda lógica de URL de storage.
   const resolved = media ? await resolveMediaUrl(media as any) : null
+  const mobileMedia = one(row.mobile_media)
+  const mobileResolved = mobileMedia ? await resolveMediaUrl(mobileMedia as any) : null
 
   return {
     id: row.id,
     mediaPublicId: media?.public_id ?? '',
     imageUrl: resolved?.ok ? resolved.data.url : '',
+    mobileImageUrl: mobileResolved?.ok ? mobileResolved.data.url : null,
     altText: media?.alt_text ?? null,
+    title: row.title ?? null,
+    subtitle: row.subtitle ?? null,
+    ctaLabel: row.cta_label ?? null,
+    showText: row.show_text ?? true,
     isActive: row.is_active,
     sortOrder: row.sort_order,
     link,
@@ -123,11 +161,21 @@ export async function getActiveWholesaleBanners(companyId: number): Promise<Whol
     .eq('is_active', true)
     .order('sort_order', { ascending: true }) as { data: any[] | null }
 
-  return Promise.all((data ?? []).map(fromRow))
+  // Banner cuja imagem desktop não resolve nunca vai para a vitrine (src vazio quebraria o next/image).
+  const banners = await Promise.all((data ?? []).map(fromRow))
+  return banners.filter((b) => b.imageUrl !== '')
 }
 
-export interface CreateWholesaleBannerInput {
+export interface WholesaleBannerContentInput {
+  title?: string | null
+  subtitle?: string | null
+  ctaLabel?: string | null
+  showText?: boolean
+}
+
+export interface CreateWholesaleBannerInput extends WholesaleBannerContentInput {
   mediaPublicId: string
+  mobileMediaPublicId?: string | null
   link: WholesaleBannerLink
 }
 
@@ -142,6 +190,7 @@ async function resolveMediaId(admin: ReturnType<typeof createAdminClient>, compa
     .eq('company_id', companyId)
     .eq('public_id', mediaPublicId)
     .eq('visibility', 'public')
+    .eq('active', true)
     .maybeSingle() as { data: { id: number } | null }
   return data?.id ?? null
 }
@@ -151,6 +200,12 @@ export async function createWholesaleBanner(companyId: number, input: CreateWhol
 
   const mediaId = await resolveMediaId(admin, companyId, input.mediaPublicId)
   if (!mediaId) return { ok: false, error: 'Imagem não encontrada ou não pertence a esta empresa.', status: 404 }
+
+  let mobileMediaId: number | null = null
+  if (input.mobileMediaPublicId) {
+    mobileMediaId = await resolveMediaId(admin, companyId, input.mobileMediaPublicId)
+    if (!mobileMediaId) return { ok: false, error: 'Imagem mobile não encontrada ou não pertence a esta empresa.', status: 404 }
+  }
 
   if (input.link.type === 'category') {
     const ok = await categoryBelongsToCompany(admin, companyId, input.link.categorySlug)
@@ -176,6 +231,12 @@ export async function createWholesaleBanner(companyId: number, input: CreateWhol
     .insert({
       company_id: companyId,
       media_id: mediaId,
+      is_active: true,
+      mobile_media_id: mobileMediaId,
+      title: input.title ?? null,
+      subtitle: input.subtitle ?? null,
+      cta_label: input.ctaLabel ?? null,
+      show_text: input.showText ?? true,
       sort_order: nextSortOrder,
       ...(await resolvedLinkColumns(admin, companyId, input.link)),
     })
@@ -212,9 +273,13 @@ async function resolvedLinkColumns(admin: ReturnType<typeof createAdminClient>, 
   return { link_type: 'none', link_category_id: null, link_product_id: null, link_url: null }
 }
 
-export interface UpdateWholesaleBannerInput {
+export interface UpdateWholesaleBannerInput extends WholesaleBannerContentInput {
   isActive?: boolean
   link?: WholesaleBannerLink
+  /** Troca a imagem desktop. */
+  mediaPublicId?: string
+  /** Define a imagem mobile; `null` remove (volta a usar a desktop). */
+  mobileMediaPublicId?: string | null
 }
 
 export async function updateWholesaleBanner(companyId: number, bannerId: number, patch: UpdateWholesaleBannerInput): Promise<BannerMutationResult> {
@@ -238,6 +303,24 @@ export async function updateWholesaleBanner(companyId: number, bannerId: number,
   }
 
   const updates: Record<string, unknown> = {}
+  if (patch.mediaPublicId !== undefined) {
+    const mediaId = await resolveMediaId(admin, companyId, patch.mediaPublicId)
+    if (!mediaId) return { ok: false, error: 'Imagem não encontrada ou não pertence a esta empresa.', status: 404 }
+    updates.media_id = mediaId
+  }
+  if (patch.mobileMediaPublicId !== undefined) {
+    if (patch.mobileMediaPublicId === null) {
+      updates.mobile_media_id = null
+    } else {
+      const mobileId = await resolveMediaId(admin, companyId, patch.mobileMediaPublicId)
+      if (!mobileId) return { ok: false, error: 'Imagem mobile não encontrada ou não pertence a esta empresa.', status: 404 }
+      updates.mobile_media_id = mobileId
+    }
+  }
+  if (patch.title !== undefined) updates.title = patch.title
+  if (patch.subtitle !== undefined) updates.subtitle = patch.subtitle
+  if (patch.ctaLabel !== undefined) updates.cta_label = patch.ctaLabel
+  if (patch.showText !== undefined) updates.show_text = patch.showText
   if (patch.isActive !== undefined) updates.is_active = patch.isActive
   if (patch.link !== undefined) Object.assign(updates, await resolvedLinkColumns(admin, companyId, patch.link))
 

@@ -3,7 +3,7 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireRole } from '@/lib/supabase/session'
-import { listWholesaleBanners, createWholesaleBanner, wholesaleBannerLinkSchema } from '@/services/wholesale/banners'
+import { listWholesaleBanners, createWholesaleBanner, wholesaleBannerLinkSchema, wholesaleBannerContentShape } from '@/services/wholesale/banners'
 
 // ─── GET /api/configuracoes/atacado/banners — todos (ativos e inativos) ───────
 
@@ -20,7 +20,9 @@ export async function GET() {
 
 const postSchema = z.object({
   mediaPublicId: z.string().uuid(),
+  mobileMediaPublicId: z.string().uuid().nullable().optional(),
   link: wholesaleBannerLinkSchema,
+  ...wholesaleBannerContentShape,
 })
 
 export async function POST(request: Request) {

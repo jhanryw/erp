@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Image from 'next/image'
 import { toast } from 'sonner'
-import { ImagePlus, Trash2, ChevronUp, ChevronDown, Link2 } from 'lucide-react'
+import { ImagePlus, Trash2, ChevronUp, ChevronDown, Link2, Pencil, Smartphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import type { WholesaleBanner, BannerLinkType } from '@/services/wholesale/banners'
 
@@ -67,11 +67,139 @@ function LinkEditor({
   )
 }
 
+type LinkValue = { type: BannerLinkType; categorySlug?: string; productId?: number; url?: string }
+
+const inputCls = 'w-full text-xs rounded-lg border border-border bg-bg-input text-text-primary px-2 py-1.5'
+
+/** Envia uma imagem pública ao Media Hub e devolve o `public_id` (ou `null` após avisar o erro). */
+async function uploadPublicImage(file: File): Promise<string | null> {
+  const formData = new FormData()
+  formData.append('file', file)
+  formData.append('visibility', 'public')
+  const res = await fetch('/api/media', { method: 'POST', body: formData })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    toast.error('Erro ao enviar imagem', { description: json.error })
+    return null
+  }
+  return json.media.public_id as string
+}
+
+function BannerEditor({
+  banner,
+  categories,
+  onSaved,
+}: {
+  banner: WholesaleBanner
+  categories: CategoryOption[]
+  onSaved: (banner: WholesaleBanner) => void
+}) {
+  const [title, setTitle] = useState(banner.title ?? '')
+  const [subtitle, setSubtitle] = useState(banner.subtitle ?? '')
+  const [ctaLabel, setCtaLabel] = useState(banner.ctaLabel ?? '')
+  const [showText, setShowText] = useState(banner.showText)
+  const [link, setLink] = useState<LinkValue>(banner.link)
+  const [saving, setSaving] = useState(false)
+  const desktopRef = useRef<HTMLInputElement>(null)
+  const mobileRef = useRef<HTMLInputElement>(null)
+
+  async function patch(body: Record<string, unknown>, okMessage: string) {
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/configuracoes/atacado/banners/${banner.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        toast.error('Erro ao salvar banner', { description: typeof json.error === 'string' ? json.error : undefined })
+        return
+      }
+      onSaved(json.banner)
+      toast.success(okMessage)
+    } catch {
+      toast.error('Erro de rede ao salvar banner')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function replaceImage(file: File | undefined, field: 'mediaPublicId' | 'mobileMediaPublicId') {
+    if (!file) return
+    setSaving(true)
+    const publicId = await uploadPublicImage(file)
+    setSaving(false)
+    if (publicId) await patch({ [field]: publicId }, 'Imagem atualizada')
+  }
+
+  return (
+    <div className="space-y-3 p-3 rounded-lg border border-border bg-bg-card">
+      <div className="grid sm:grid-cols-2 gap-2">
+        <label className="space-y-1 text-xs text-text-muted">
+          Título (opcional)
+          <input className={inputCls} maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} />
+        </label>
+        <label className="space-y-1 text-xs text-text-muted">
+          Texto do botão (opcional)
+          <input className={inputCls} maxLength={30} value={ctaLabel} onChange={(e) => setCtaLabel(e.target.value)} placeholder="Ex.: Ver coleção" />
+        </label>
+        <label className="space-y-1 text-xs text-text-muted sm:col-span-2">
+          Subtítulo (opcional)
+          <input className={inputCls} maxLength={160} value={subtitle} onChange={(e) => setSubtitle(e.target.value)} />
+        </label>
+      </div>
+
+      <label className="flex items-center gap-2 text-xs cursor-pointer">
+        <input type="checkbox" checked={showText} onChange={(e) => setShowText(e.target.checked)} className="w-3.5 h-3.5 accent-brand" />
+        Exibir textos sobre a imagem (desmarque se a própria imagem já contém as informações)
+      </label>
+
+      <div>
+        <p className="text-xs text-text-muted mb-1">Destino do clique (o botão só aparece quando há destino)</p>
+        <LinkEditor link={link} onChange={setLink} categories={categories} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <input ref={desktopRef} type="file" accept={ACCEPTED_MIME} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; void replaceImage(f, 'mediaPublicId') }} />
+        <input ref={mobileRef} type="file" accept={ACCEPTED_MIME} className="hidden" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; void replaceImage(f, 'mobileMediaPublicId') }} />
+        <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={() => desktopRef.current?.click()}>
+          <ImagePlus className="w-3.5 h-3.5" /> Trocar imagem desktop
+        </Button>
+        <Button type="button" variant="secondary" size="sm" disabled={saving} onClick={() => mobileRef.current?.click()}>
+          <Smartphone className="w-3.5 h-3.5" /> {banner.mobileImageUrl ? 'Trocar imagem mobile' : 'Enviar imagem mobile'}
+        </Button>
+        {banner.mobileImageUrl && (
+          <Button type="button" variant="ghost" size="sm" disabled={saving} onClick={() => patch({ mobileMediaPublicId: null }, 'Imagem mobile removida')}>
+            Remover mobile
+          </Button>
+        )}
+      </div>
+      <p className="text-[11px] text-text-muted">Tamanhos ideais: desktop 1920×640 px (proporção 3:1) · mobile 1080×1350 px (4:5). Sem imagem mobile, a desktop é recortada ao centro.</p>
+
+      <div className="flex justify-end">
+        <Button
+          type="button" size="sm" loading={saving}
+          onClick={() => {
+            if (link.type === 'category' && !link.categorySlug) return void toast.error('Selecione a categoria de destino.')
+            if (link.type === 'product' && !link.productId) return void toast.error('Informe o ID do produto de destino.')
+            if (link.type === 'url' && !link.url) return void toast.error('Informe a URL de destino.')
+            void patch({ title, subtitle, ctaLabel, showText, link }, 'Banner salvo')
+          }}
+        >
+          Salvar alterações
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function BannerManager({ initialBanners }: { initialBanners: WholesaleBanner[] }) {
   const [banners, setBanners] = useState<WholesaleBanner[]>(initialBanners)
   const [categories, setCategories] = useState<CategoryOption[]>([])
   const [uploading, setUploading] = useState(false)
   const [newLink, setNewLink] = useState<{ type: BannerLinkType; categorySlug?: string; productId?: number; url?: string }>({ type: 'none' })
+  const [editingId, setEditingId] = useState<number | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -101,21 +229,13 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
 
     setUploading(true)
     try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('visibility', 'public')
-
-      const uploadRes = await fetch('/api/media', { method: 'POST', body: formData })
-      const uploadJson = await uploadRes.json()
-      if (!uploadRes.ok) {
-        toast.error('Erro ao enviar imagem', { description: uploadJson.error })
-        return
-      }
+      const publicId = await uploadPublicImage(file)
+      if (!publicId) return
 
       const createRes = await fetch('/api/configuracoes/atacado/banners', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mediaPublicId: uploadJson.media.public_id, link: newLink }),
+        body: JSON.stringify({ mediaPublicId: publicId, link: newLink }),
       })
       const createJson = await createRes.json()
       if (!createRes.ok) {
@@ -125,7 +245,8 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
 
       setBanners((prev) => [...prev, createJson.banner])
       setNewLink({ type: 'none' })
-      toast.success('Banner adicionado!')
+      setEditingId(createJson.banner.id)
+      toast.success('Banner adicionado! Complete os textos e a imagem mobile, se quiser.')
     } catch {
       toast.error('Erro de rede ao enviar banner')
     } finally {
@@ -185,7 +306,8 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
       {banners.length === 0 && <p className="text-xs text-text-muted italic">Nenhum banner cadastrado ainda.</p>}
 
       {banners.map((banner, index) => (
-        <div key={banner.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-border bg-bg-overlay">
+        <div key={banner.id} className="space-y-2">
+        <div className="flex items-center gap-3 p-2.5 rounded-lg border border-border bg-bg-overlay">
           <div className="w-20 h-12 rounded-md overflow-hidden bg-bg-card shrink-0 relative">
             {banner.imageUrl && <Image src={banner.imageUrl} alt={banner.altText ?? 'Banner'} fill className="object-cover" />}
           </div>
@@ -193,6 +315,8 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
           <div className="flex-1 min-w-0 flex items-center gap-2 text-xs text-text-muted">
             <Link2 className="w-3.5 h-3.5 shrink-0" />
             <span className="truncate">
+              {banner.title && <strong className="text-text-primary mr-2">{banner.title}</strong>}
+              {banner.mobileImageUrl && <span className="mr-2">📱</span>}
               {banner.link.type === 'none' && 'Sem link'}
               {banner.link.type === 'category' && `Categoria: ${banner.link.categorySlug}`}
               {banner.link.type === 'product' && `Produto #${banner.link.productId}`}
@@ -211,10 +335,22 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
               <input type="checkbox" checked={banner.isActive} onChange={() => toggleActive(banner)} className="w-3.5 h-3.5 accent-brand" />
               Ativo
             </label>
+            <button onClick={() => setEditingId(editingId === banner.id ? null : banner.id)} aria-label="Editar banner" className="p-1 text-text-muted hover:text-text-primary">
+              <Pencil className="w-4 h-4" />
+            </button>
             <button onClick={() => handleDelete(banner)} className="p-1 text-text-muted hover:text-error">
               <Trash2 className="w-4 h-4" />
             </button>
           </div>
+        </div>
+        {editingId === banner.id && (
+          <BannerEditor
+            key={`${banner.id}-${banner.mobileImageUrl ?? ''}-${banner.imageUrl}`}
+            banner={banner}
+            categories={categories}
+            onSaved={(updated) => setBanners((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))}
+          />
+        )}
         </div>
       ))}
 
