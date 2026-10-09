@@ -19,7 +19,7 @@ export function QuickAddButton({ product, basePath }: { product: WholesaleCatalo
 
   if (!product.purchasable || options.length === 0) return null
 
-  const cls = 'mt-2 flex w-full items-center justify-center gap-1.5 rounded-full border border-gray-200 py-2 text-xs font-medium text-gray-800 transition-colors hover:border-gray-900 hover:bg-gray-900 hover:text-white active:scale-[0.98]'
+  const cls = 'mt-2 flex w-full items-center justify-center gap-1.5 rounded-full border border-gray-500 py-2 text-xs font-medium text-gray-800 transition-colors hover:border-gray-900 hover:bg-gray-900 hover:text-white active:scale-[0.98]'
 
   if (options.length > 1) {
     return <Link href={wholesaleHref(basePath, `/produto/${product.productId}`)} className={cls}>Escolher opções</Link>

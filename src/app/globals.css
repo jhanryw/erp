@@ -131,3 +131,10 @@
     @apply hover:bg-white/[0.03] cursor-pointer transition-colors;
   }
 }
+
+/* Site público de atacado: foco visível em qualquer controle (WCAG 2.4.7) */
+.atacado-root :focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+  border-radius: 6px;
+}

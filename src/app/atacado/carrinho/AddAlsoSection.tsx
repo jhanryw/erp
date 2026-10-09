@@ -65,7 +65,7 @@ function RecommendationCard({ product }: { product: WholesaleCatalogProduct }) {
           aria-label={`Variação de ${product.name}`}
           value={selected.variationId}
           onChange={(e) => setSelectedId(Number(e.target.value))}
-          className="mt-1.5 w-full rounded-lg border border-gray-200 bg-white px-2 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+          className="mt-1.5 w-full rounded-lg border border-gray-500 bg-white px-2 py-2 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
         >
           {options.map((v) => (
             <option key={v.variationId} value={v.variationId}>

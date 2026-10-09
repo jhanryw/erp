@@ -15,7 +15,7 @@ export function CatalogInactiveNotice({ displayName, whatsappPhone }: { displayN
           href={contactUrl}
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#25D366] text-white text-sm font-medium hover:brightness-95 transition-all"
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-[#0F7A3F] text-white text-sm font-medium hover:brightness-95 transition-all"
         >
           <MessageCircle className="w-4 h-4" />
           Falar pelo WhatsApp

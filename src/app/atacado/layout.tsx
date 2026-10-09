@@ -56,7 +56,9 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
         {settings?.pixelEnabled && settings.pixelId && (
           <MetaPixelLoader pixelEnabled={settings.pixelEnabled} pixelId={settings.pixelId} />
         )}
-        <div className="min-h-screen flex flex-col bg-white">
+        {/* O site público é SEMPRE claro: sem isto, texto sem cor explícita herdava o tema do ERP (claro sobre
+            branco no modo escuro do sistema) e os controles nativos (select/input) viravam escuros. */}
+        <div className="atacado-root min-h-screen flex flex-col bg-white text-gray-900" style={{ colorScheme: 'light' }}>
           <header className="border-b border-gray-100 bg-white sticky top-0 z-40">
             <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2.5">
               <Link href={wholesaleHref(basePath, '/')} className="order-1 flex items-center gap-2 min-w-0">
@@ -94,7 +96,7 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
 
           <footer className="border-t border-gray-100 py-6 mt-10">
             {/* Texto puro (React escapa); \n do campo multilinha vira quebra de linha. */}
-            <div className="max-w-6xl mx-auto px-4 text-xs text-gray-400 text-center space-y-1">
+            <div className="max-w-6xl mx-auto px-4 text-xs text-gray-500 text-center space-y-1">
               {texts.footerLines.map((line, i) => <p key={i} className="min-h-[1em]">{line}</p>)}
             </div>
           </footer>

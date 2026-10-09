@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { Minus, Plus, Trash2, ImageOff, ShoppingBag, MessageCircle } from 'lucide-react'
+import { Trash2, ImageOff, ShoppingBag, MessageCircle } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart, type CartItem } from '../_lib/CartContext'
 import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
@@ -12,6 +12,7 @@ import { trackInitiateCheckout } from '@/lib/wholesale/metaPixel'
 import { applyValidationToCart, type ValidationResponse } from '../_lib/cartSync'
 import { AddAlsoSection } from './AddAlsoSection'
 import { CatalogImage } from '../_components/CatalogImage'
+import { QuantityStepper } from '../_components/QuantityStepper'
 
 interface Props {
   minimumOrderAmount: number
@@ -175,13 +176,13 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
   if (confirmed) {
     return (
       <div className="py-12 max-w-md mx-auto text-center space-y-4">
-        <MessageCircle className="w-10 h-10 text-[#25D366] mx-auto" />
+        <MessageCircle className="w-10 h-10 text-[#0F7A3F] mx-auto" />
         <h1 className="text-xl font-semibold text-gray-900">Pedido {confirmed.code} registrado</h1>
         <p className="text-sm text-gray-500">
           {confirmed.totalItems} peça{confirmed.totalItems !== 1 ? 's' : ''} · {formatCurrency(confirmed.subtotal)}.
           Envie a mensagem no WhatsApp para finalizarmos seu pedido.
         </p>
-        <a href={confirmed.whatsappUrl} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-[#25D366] text-white text-sm font-medium hover:brightness-95">
+        <a href={confirmed.whatsappUrl} className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-full bg-[#0F7A3F] text-white text-sm font-medium hover:brightness-95">
           <MessageCircle className="w-4 h-4" /> Abrir WhatsApp
         </a>
         <div>
@@ -194,7 +195,7 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
   if (items.length === 0) {
     return (
       <div className="py-16 text-center space-y-3">
-        <ShoppingBag className="w-10 h-10 text-gray-300 mx-auto" />
+        <ShoppingBag aria-hidden className="w-10 h-10 text-gray-500 mx-auto" />
         <p className="text-gray-500">Seu carrinho está vazio.</p>
         <Link href={wholesaleHref(basePath, '/')} className="inline-block text-sm text-gray-900 font-medium hover:underline">
           Ver catálogo
@@ -219,26 +220,19 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-800 truncate">{item.productName}</p>
-              {item.attributes && <p className="text-xs text-gray-400">{item.attributes}</p>}
+              {item.attributes && <p className="text-xs text-gray-500">{item.attributes}</p>}
               <p className="text-sm font-semibold text-gray-900 mt-1">{formatCurrency(item.displayPrice)}</p>
             </div>
             <div className="flex flex-col items-end justify-between">
-              <button onClick={() => removeItem(item.variationId)} className="text-gray-300 hover:text-red-500">
+              <button onClick={() => removeItem(item.variationId)} aria-label="Remover item" className="p-1.5 text-gray-500 hover:text-red-600">
                 <Trash2 className="w-4 h-4" />
               </button>
-              <div className="flex items-center border border-gray-200 rounded-lg">
-                <button onClick={() => updateQuantity(item.variationId, item.quantity - 1)} className="p-1.5 text-gray-500 hover:text-gray-900">
-                  <Minus className="w-3.5 h-3.5" />
-                </button>
-                <span className="w-8 text-center text-xs font-medium tabular-nums">{item.quantity}</span>
-                <button
-                  onClick={() => updateQuantity(item.variationId, item.quantity + 1)}
-                  disabled={item.maxQuantity != null && item.quantity >= item.maxQuantity}
-                  className="p-1.5 text-gray-500 hover:text-gray-900 disabled:opacity-30 disabled:hover:text-gray-500"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              </div>
+              <QuantityStepper
+                value={item.quantity}
+                max={item.maxQuantity ?? 9999}
+                label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
+                onChange={(next) => updateQuantity(item.variationId, next)}
+              />
             </div>
           </div>
         ))}
@@ -261,11 +255,11 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
         {minimum > 0 && minimumOrderNote && <p className="whitespace-pre-line text-xs text-gray-500">{minimumOrderNote}</p>}
 
         {belowMinimum ? (
-          <p className="text-sm text-amber-600 font-medium">
+          <p className="text-sm text-amber-700 font-medium">
             Faltam {formatCurrency(missingForMinimum)} para atingir o pedido mínimo de {formatCurrency(minimum)}.
           </p>
         ) : (
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-500">
             {checking ? 'Atualizando preços e disponibilidade…' : 'O valor final é sempre conferido no envio do pedido, com preço e disponibilidade atuais.'}
           </p>
         )}
@@ -274,19 +268,19 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
           <input
             type="text" autoComplete="name" placeholder="Seu nome" value={customerName} maxLength={80}
             onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+            className="w-full px-3 py-2.5 rounded-lg border border-gray-500 text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
           />
           <input
             type="tel" inputMode="tel" autoComplete="tel" placeholder="Seu WhatsApp (com DDD)" value={customerPhone} maxLength={20}
             onChange={(e) => setCustomerPhone(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+            className="w-full px-3 py-2.5 rounded-lg border border-gray-500 text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
           />
         </div>
 
         <button
           onClick={handleCheckout}
           disabled={sending || checking || belowMinimum}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-full bg-[#25D366] text-white text-sm font-medium hover:brightness-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+          className="w-full flex items-center justify-center gap-2 py-3 rounded-full bg-[#0F7A3F] text-white text-sm font-medium hover:brightness-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <MessageCircle className="w-4 h-4" />
           {sending ? 'Enviando pedido...' : checking ? 'Atualizando...' : 'Enviar pedido pelo WhatsApp'}
