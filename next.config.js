@@ -1,18 +1,13 @@
+const { buildSupabaseImagePatterns } = require('./config/supabase-image-patterns')
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   output: 'standalone',
   images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: '*.supabase.co',
-        pathname: '/storage/v1/object/public/**',
-      },
-      {
-        protocol: 'http',
-        hostname: 'localhost',
-      },
-    ],
+    // Derivado de NEXT_PUBLIC_SUPABASE_URL (build) — ver config/supabase-image-patterns.js.
+    remotePatterns: buildSupabaseImagePatterns(process.env.NEXT_PUBLIC_SUPABASE_URL, {
+      production: process.env.NODE_ENV === 'production',
+    }),
   },
   experimental: {
     serverComponentsExternalPackages: [],

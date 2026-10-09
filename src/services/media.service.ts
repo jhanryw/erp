@@ -25,6 +25,7 @@ import { randomUUID, createHash } from 'crypto'
 import { createAdminClient } from '@/lib/supabase/admin'
 import type { Database, MediaVisibility, MediaUsageEntityType, MediaUsageRole } from '@/types/database.types'
 import type { ServiceOutcome } from './produtos.service'
+import { logMediaEvent } from '@/lib/media/log'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -205,6 +206,7 @@ export async function createMediaFromUpload(
     .upload(storageKey, input.buffer, { contentType: input.mimeType, upsert: false })
 
   if (uploadError) {
+    logMediaEvent('media.upload_storage_failed', { companyId, mediaPublicId: publicId, bucket: rules.bucket, reason: uploadError.message })
     return failure(`Falha no upload para o Storage: ${uploadError.message}`, 502)
   }
 
@@ -228,8 +230,15 @@ export async function createMediaFromUpload(
     .single() as unknown as { data: Media | null; error: { code: string; message: string } | null }
 
   if (insertError) {
-    // Objeto já gravado no Storage (storageKey acima) — órfão temporário,
-    // sem rollback automático nesta entrega. Ver docs/media-hub-storage.md.
+    logMediaEvent('media.upload_db_failed', { companyId, mediaPublicId: publicId, bucket: rules.bucket, reason: insertError.message })
+    // Compensação: remove SÓ o objeto que esta chamada acabou de gravar
+    // (chave gerada aqui, nunca vinda do cliente), para não deixar órfão.
+    const { error: removeError } = await admin.storage.from(rules.bucket).remove([storageKey])
+    if (removeError) {
+      logMediaEvent('media.upload_orphan_cleanup_failed', { companyId, mediaPublicId: publicId, bucket: rules.bucket, reason: removeError.message })
+    } else {
+      logMediaEvent('media.upload_orphan_cleaned', { companyId, mediaPublicId: publicId, bucket: rules.bucket })
+    }
     return failure(insertError.message, 500)
   }
 
@@ -318,6 +327,29 @@ export async function resolveMediaUrl(
 
   const expiresAt = new Date(Date.now() + PRIVATE_URL_TTL_SECONDS * 1000).toISOString()
   return success({ url: data.signedUrl, expiresAt })
+}
+
+/**
+ * Item cuja URL não resolve continua omitido da lista (não derruba a
+ * listagem inteira), mas deixa de sumir em silêncio: registra um log
+ * estruturado para que "imagem não aparece" seja diagnosticável.
+ */
+function logUnresolved(
+  media: Media,
+  reason: string,
+  companyId: number,
+  entityType: MediaUsageEntityType,
+  entityId: string,
+): void {
+  logMediaEvent('media.url_resolve_failed', {
+    companyId,
+    mediaPublicId: media.public_id,
+    bucket: bucketForVisibility(media.visibility),
+    visibility: media.visibility,
+    entityType,
+    entityId,
+    reason,
+  })
 }
 
 // ─── Vínculo de mídia com entidade (media_usages) ──────────────────────────────
@@ -540,7 +572,10 @@ export async function listMediaByEntity(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const result = resolved[i]
-    if (!result.ok) continue
+    if (!result.ok) {
+      logUnresolved(row.media, result.error, companyId, entityType, entityId)
+      continue
+    }
 
     items.push({
       usage_id: row.id,
@@ -603,7 +638,10 @@ export async function listPrimaryMediaByEntities(
   const rows = data ?? []
   for (let i = 0; i < rows.length; i++) {
     const result = resolved[i]
-    if (!result.ok) continue
+    if (!result.ok) {
+      logUnresolved(rows[i].media, result.error, companyId, entityType, rows[i].entity_id)
+      continue
+    }
     items.push({ entity_id: rows[i].entity_id, url: result.data.url })
   }
 
@@ -653,7 +691,10 @@ export async function listMediaByEntities(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const result = resolved[i]
-    if (!result.ok) continue
+    if (!result.ok) {
+      logUnresolved(row.media, result.error, companyId, entityType, row.entity_id)
+      continue
+    }
 
     items.push({
       entity_id: row.entity_id,

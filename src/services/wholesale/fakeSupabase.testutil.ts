@@ -42,7 +42,7 @@ interface Embed { name: string; inner: boolean }
 function parseEmbeds(select: string): Embed[] {
   const embeds: Embed[] = []
   for (const token of splitTopLevel(select)) {
-    const m = token.match(/^(?:(\w+):(\w+)|(\w+))(!inner)?\(/)
+    const m = token.match(/^(?:(\w+):(\w+)|(\w+))(!inner)?\s*\(/)
     if (!m) continue
     embeds.push({ name: (m[1] ?? m[3]) as string, inner: !!m[4] })
   }
