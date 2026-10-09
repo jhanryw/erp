@@ -31,23 +31,33 @@ function BannerImage({ banner, basePath, priority }: { banner: WholesaleBanner; 
   const alt = banner.altText ?? banner.title ?? ''
 
   // Direção de arte com <picture>: o navegador baixa SÓ a imagem do seu breakpoint (nunca as duas),
-  // ambas otimizadas pelo next/image. Sem imagem mobile, a desktop é recortada (object-cover) em 16:9.
+  // ambas otimizadas pelo next/image (via /_next/image, com sharp em produção).
+  //
+  // Recorte: banner SEM textos sobrepostos é arte pronta (o texto faz parte da imagem) — nunca é recortado:
+  // `object-contain` mostra a arte inteira em qualquer largura. `object-cover` só quando há texto sobreposto
+  // pelo site, ou seja, a imagem é uma foto de fundo e o recorte nas bordas não remove informação.
   const common = { alt, fill: true, sizes: '100vw', quality: 80 } as const
   const { props: desktop } = getImageProps({ ...common, src: banner.imageUrl })
   const mobile = hasMobile ? getImageProps({ ...common, src: banner.mobileImageUrl as string }).props : null
-  const { srcSet: desktopSrcSet, ...img } = desktop
 
   const showText = bannerHasText(banner)
+  const artHasText = !showText
+  const fit = artHasText ? 'object-contain' : 'object-cover'
+  // Celular: imagem mobile dedicada → quadrada. Sem ela: arte com texto aparece inteira na proporção 3:1 da
+  // versão desktop; foto de fundo (com texto do site por cima) usa 16:9 recortado.
+  const mobileAspect = hasMobile ? 'aspect-square' : artHasText ? 'aspect-[3/1]' : 'aspect-[16/9]'
 
   const slide = (
-    <div
-      className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${hasMobile ? 'aspect-square' : 'aspect-[16/9]'}`}
-    >
+    <div className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${mobileAspect}`}>
+      {/*
+        A <img> carrega o srcSet COMPLETO da desktop com sizes="100vw": sem imagem mobile (ou em telas ≥640 px) o
+        navegador escolhe a largura certa para a tela em vez de baixar a maior. Com imagem mobile, o <source>
+        de ≤639 px a substitui — e só uma das duas é baixada.
+      */}
       <picture>
         {mobile && <source media="(max-width: 639px)" srcSet={mobile.srcSet} sizes="100vw" />}
-        <source media="(min-width: 640px)" srcSet={desktopSrcSet} sizes="100vw" />
         {/* eslint-disable-next-line jsx-a11y/alt-text */}
-        <img {...img} alt={alt} className="object-cover" fetchPriority={priority ? 'high' : undefined} loading={priority ? 'eager' : 'lazy'} />
+        <img {...desktop} alt={alt} className={fit} fetchPriority={priority ? 'high' : undefined} loading={priority ? 'eager' : 'lazy'} />
       </picture>
 
       {showText && (

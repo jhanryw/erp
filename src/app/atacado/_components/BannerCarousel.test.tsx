@@ -46,15 +46,43 @@ describe('BannerCarousel', () => {
     const out = html([{ ...base, mobileImageUrl: 'https://cdn.test/m.jpg' }])
     expect(out).toContain('<picture>')
     expect(out).toContain('max-width: 639px')
-    expect(out).toContain('min-width: 640px')
     expect(out).toContain('aspect-square')
     expect(out).toContain(encodeURIComponent('https://cdn.test/m.jpg'))
     expect(out).toContain(encodeURIComponent('https://cdn.test/d.jpg'))
   })
 
-  it('sem imagem mobile: usa só a desktop, recortada em 16:9 no celular', () => {
+  it('sem imagem mobile e arte com texto: usa só a desktop, INTEIRA (contain, 3:1) — nunca recorta', () => {
     const out = html([base])
-    expect(out).toContain('aspect-[16/9]')
+    expect(out).toContain('aspect-[3/1]')
+    expect(out).toContain('object-contain')
+    expect(out).not.toContain('object-cover')
+    expect(out).not.toContain('aspect-[16/9]')
     expect(out).not.toContain('max-width: 639px')
+  })
+
+  it('foto de fundo com texto do site por cima: recorte (cover) permitido, 16:9 no celular', () => {
+    const out = html([{ ...base, title: 'Verão', link: { type: 'category', categorySlug: 'c' } }])
+    expect(out).toContain('object-cover')
+    expect(out).toContain('aspect-[16/9]')
+  })
+
+  it('imagem mobile dedicada de arte com texto: também sem recorte', () => {
+    const out = html([{ ...base, mobileImageUrl: 'https://cdn.test/m.jpg' }])
+    expect(out).toContain('object-contain')
+    expect(out).not.toContain('object-cover')
+  })
+
+  it('sem imagem mobile a <img> mantém o srcSet responsivo (não baixa a maior largura no celular)', () => {
+    const out = html([base])
+    const srcSet = /srcSet="([^"]+)"/.exec(out)?.[1] ?? ''
+    expect(srcSet.split(',').length).toBeGreaterThan(2) // várias larguras para o navegador escolher
+    expect(out).toContain('sizes="100vw"')
+  })
+
+  it('primeiro banner tem prioridade (eager + fetchPriority high); só o breakpoint corrente é baixado (picture)', () => {
+    const out = html([base, { ...base, id: 2 }])
+    expect(out).toContain('loading="eager"')
+    expect(out).toContain('fetchPriority="high"')
+    expect(out.match(/<picture>/g)).toHaveLength(1) // carrossel renderiza só o slide atual
   })
 })

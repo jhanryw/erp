@@ -24,6 +24,16 @@ export const metadata: Metadata = {
   title: { default: 'Catálogo de Atacado', template: '%s | Catálogo de Atacado' },
   description: 'Catálogo de atacado — preços e disponibilidade em tempo real, pedido direto pelo WhatsApp.',
   robots: 'index, follow',
+  // Marca Santtorini (monograma oficial já usado como ícone do app): arquivos estáticos em /public/icons —
+  // públicos, sem autenticação (o middleware não intercepta .png) e iguais em qualquer host.
+  icons: {
+    icon: [
+      { url: '/icons/atacado-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icons/atacado-48.png', sizes: '48x48', type: 'image/png' },
+      { url: '/icons/atacado-192.png', sizes: '192x192', type: 'image/png' },
+    ],
+    apple: [{ url: '/icons/atacado-180.png', sizes: '180x180', type: 'image/png' }],
+  },
 }
 
 export default async function AtacadoLayout({ children }: { children: React.ReactNode }) {
