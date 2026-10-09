@@ -24,6 +24,7 @@ import { listMediaByEntities } from '@/services/media.service'
 import { getWholesaleSiteSettings, type WholesaleSiteSettings } from './settings'
 import { selectAllInChunks, selectAllPages } from './queryBatching'
 import { loadAttributesByVariation } from './attributes'
+import { cachedForCompany, timed } from '@/lib/wholesale/ttlCache'
 import { rankBySeed, RECOMMENDATION_MAX } from './recommendations'
 import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
 import { loadCategoryCovers } from './categoryCovers'
@@ -132,21 +133,18 @@ type Admin = ReturnType<typeof createAdminClient>
 // ─── Carga de dados ─────────────────────────────────────────────────────────
 
 /** Produtos candidatos: da empresa, ativos E habilitados no atacado (+ busca/categoria). Colunas leves; paginado por `.range()`. */
-async function loadCandidateProducts(admin: Admin, companyId: number, filters: { search?: string; categoryId?: number }): Promise<ProductRow[]> {
-  return selectAllPages<ProductRow>((from, to) => {
-    let query = (admin as any)
+async function loadCandidateProducts(admin: Admin, companyId: number): Promise<ProductRow[]> {
+  return selectAllPages<ProductRow>((from, to) =>
+    (admin as any)
       .from('products')
       .select('id, name, active, wholesale_enabled, wholesale_price, category_id, brands:brand_id(name), categories:category_id(name, slug)')
       .eq('company_id', companyId)
       .eq('active', true)
       .eq('wholesale_enabled', true)
-
-    if (filters.search) query = query.ilike('name', `%${filters.search}%`)
-    // Filtro pela COLUNA category_id (identidade real) — nunca pelo slug, que pode se repetir na empresa.
-    if (filters.categoryId != null) query = query.eq('category_id', filters.categoryId)
-
-    return query.order('name', { ascending: true }).order('id', { ascending: true }).range(from, to)
-  })
+      .order('name', { ascending: true })
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
 }
 
 async function loadVariations(admin: Admin, productIds: number[]): Promise<VariationRow[]> {
@@ -249,6 +247,45 @@ interface VisibleProduct {
   evaluated: EvaluatedVariation[]
 }
 
+/**
+ * TODOS os produtos visíveis da empresa (ordem alfabética), com variações, preço e estoque avaliados.
+ * É a carga cara (produtos + variações + estoque): fica em cache curto por empresa (ver ttlCache.ts) e a
+ * chave inclui `showOutOfStock`, que muda quem é visível. Busca e categoria filtram ESTA lista em memória —
+ * a mesma regra de visibilidade para vitrine, categorias e recomendações, sem refazer a carga a cada filtro.
+ */
+async function loadAllVisibleProducts(admin: Admin, companyId: number, settings: WholesaleSiteSettings): Promise<VisibleProduct[]> {
+  return cachedForCompany(companyId, `visible:${settings.showOutOfStock ? 1 : 0}`, () =>
+    timed('visible-products', companyId, async () => {
+      const candidates = await timed('products', companyId, () => loadCandidateProducts(admin, companyId))
+      if (candidates.length === 0) return []
+
+      const variations = await timed('variations', companyId, () => loadVariations(admin, candidates.map((p) => p.id)))
+      const stockByVariation = await timed('stock', companyId, () => loadWholesaleStockByVariation(admin, companyId, variations.map((v) => v.id)))
+
+      const variationsByProduct = new Map<number, VariationRow[]>()
+      for (const v of variations) {
+        const list = variationsByProduct.get(v.product_id) ?? []
+        list.push(v)
+        variationsByProduct.set(v.product_id, list)
+      }
+
+      const all: VisibleProduct[] = candidates.map((product) => ({
+        product,
+        evaluated: evaluateVariations(product, variationsByProduct.get(product.id) ?? [], stockByVariation),
+      }))
+
+      // Por padrão a vitrine não mostra produto sem nenhuma variação vendável —
+      // configurável via wholesale_site_settings.show_out_of_stock.
+      return settings.showOutOfStock ? all : all.filter((p) => p.evaluated.some((e) => e.result.sellable))
+    }),
+  )
+}
+
+/** Universo de categorias da empresa (cache curto — muda raramente). */
+function loadCachedCategoryUniverse(admin: Admin, companyId: number) {
+  return cachedForCompany(companyId, 'category-universe', () => loadCategoryUniverse(admin, companyId))
+}
+
 /** Produtos visíveis na vitrine, já na ordem final (alfabética; Calcinhas primeiro fora de busca/categoria). */
 async function resolveVisibleProducts(
   admin: Admin,
@@ -259,43 +296,30 @@ async function resolveVisibleProducts(
   let categoryId: number | undefined
   if (filters.categorySlug) {
     // `categorySlug` é a chave pública (slug, ou slug~id quando repetido). Chave desconhecida/inativa → vitrine vazia.
-    const universe = await loadCategoryUniverse(admin, companyId)
+    const universe = await loadCachedCategoryUniverse(admin, companyId)
     const category = resolveCategoryKey(universe.filter((c) => c.active), filters.categorySlug)
     if (!category) return []
     categoryId = category.id
   }
-  const candidates = await loadCandidateProducts(admin, companyId, { search: filters.search, categoryId })
-  if (candidates.length === 0) return []
 
-  const variations = await loadVariations(admin, candidates.map((p) => p.id))
-  const stockByVariation = await loadWholesaleStockByVariation(admin, companyId, variations.map((v) => v.id))
+  let visible = await loadAllVisibleProducts(admin, companyId, settings)
 
-  const variationsByProduct = new Map<number, VariationRow[]>()
-  for (const v of variations) {
-    const list = variationsByProduct.get(v.product_id) ?? []
-    list.push(v)
-    variationsByProduct.set(v.product_id, list)
+  if (filters.search) {
+    const needle = filters.search.toLowerCase()
+    visible = visible.filter((v) => v.product.name.toLowerCase().includes(needle))
   }
+  // Filtro pela COLUNA category_id (identidade real) — nunca pelo slug, que pode se repetir na empresa.
+  if (categoryId != null) visible = visible.filter((v) => v.product.category_id === categoryId)
 
-  const all: VisibleProduct[] = candidates.map((product) => ({
-    product,
-    evaluated: evaluateVariations(product, variationsByProduct.get(product.id) ?? [], stockByVariation),
-  }))
-
-  // Por padrão a vitrine não mostra produto sem nenhuma variação vendável —
-  // configurável via wholesale_site_settings.show_out_of_stock.
-  const visible = settings.showOutOfStock ? all : all.filter((p) => p.evaluated.some((e) => e.result.sellable))
-
-  // Sort estável: dentro de cada grupo a ordem alfabética da query é preservada.
+  // Sort estável: dentro de cada grupo a ordem alfabética é preservada.
   const priority = (p: VisibleProduct) => (one(p.product.categories)?.slug === WHOLESALE_PRIORITY_CATEGORY_SLUG ? 0 : 1)
   return filters.search || filters.categorySlug ? visible : [...visible].sort((a, b) => priority(a) - priority(b))
 }
 
 // ─── API do módulo ──────────────────────────────────────────────────────────
 
-export async function getWholesaleCatalogPage(companyId: number, filters: CatalogFilters = {}): Promise<CatalogPage> {
+async function buildCatalogPage(companyId: number, filters: CatalogFilters, settings: WholesaleSiteSettings): Promise<CatalogPage> {
   const admin = createAdminClient()
-  const settings = await getWholesaleSiteSettings(companyId)
   const page = Math.max(1, filters.page ?? 1)
   const pageSize = Math.min(60, Math.max(1, filters.pageSize ?? 24))
   const offset = (page - 1) * pageSize
@@ -318,16 +342,37 @@ export async function getWholesaleCatalogPage(companyId: number, filters: Catalo
 }
 
 /**
+ * Página do catálogo. Sem busca, a página montada (com imagens e atributos) entra no cache curto por empresa —
+ * é o caso das visitas de campanha (home, categoria, paginação). Busca livre nunca é cacheada (chave ilimitada).
+ * Preço/estoque/disponibilidade continuam revalidados no servidor na validação do carrinho e no pedido.
+ */
+export async function getWholesaleCatalogPage(companyId: number, filters: CatalogFilters = {}): Promise<CatalogPage> {
+  const settings = await getWholesaleSiteSettings(companyId)
+  if (filters.search) return buildCatalogPage(companyId, filters, settings)
+
+  const key = [
+    'page', filters.categorySlug ?? '-', Math.max(1, filters.page ?? 1), filters.pageSize ?? 24,
+    settings.showOutOfStock ? 1 : 0, settings.showStockQuantity ? 1 : 0,
+  ].join(':')
+  return cachedForCompany(companyId, key, () => timed('catalog-page', companyId, () => buildCatalogPage(companyId, filters, settings)))
+}
+
+/**
  * Categorias com pelo menos 1 produto VISÍVEL no catálogo (mesma regra da vitrine — nunca mostra
  * categoria vazia, inativa nem categoria só com produto fora do atacado). Cada categoria sai com a
  * chave pública única e, com `withImages`, a foto do card: capa do ERP → foto de um produto → nenhuma.
  */
 export async function listWholesaleCategories(companyId: number, options: { withImages?: boolean } = {}): Promise<WholesaleCategory[]> {
-  const admin = createAdminClient()
   const settings = await getWholesaleSiteSettings(companyId)
+  const key = `categories:${options.withImages ? 1 : 0}:${settings.showOutOfStock ? 1 : 0}`
+  return cachedForCompany(companyId, key, () => timed('categories', companyId, () => buildCategories(companyId, options, settings)))
+}
+
+async function buildCategories(companyId: number, options: { withImages?: boolean }, settings: WholesaleSiteSettings): Promise<WholesaleCategory[]> {
+  const admin = createAdminClient()
   const [visible, universe] = await Promise.all([
     resolveVisibleProducts(admin, companyId, settings, {}),
-    loadCategoryUniverse(admin, companyId),
+    loadCachedCategoryUniverse(admin, companyId),
   ])
 
   const byId = new Map(universe.filter((c) => c.active).map((c) => [c.id, c]))

@@ -88,7 +88,7 @@ export async function resolveWholesaleCart(
   if (variationIds.length === 0) return { validation: { valid: true, items: [], summary: { subtotal: 0, minimumOrderAmount: 0, meetsMinimum: true, missingForMinimum: 0 } }, lines: [] }
 
   const admin = createAdminClient()
-  const settings = await getWholesaleSiteSettings(companyId)
+  const settings = await getWholesaleSiteSettings(companyId, { fresh: true })
 
   const variationRows = await selectAllInChunks<CartVariationRow, number>(variationIds, (chunk, from, to) =>
     (admin as any)

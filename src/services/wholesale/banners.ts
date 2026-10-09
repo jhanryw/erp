@@ -17,6 +17,7 @@
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveMediaUrl } from '@/services/media.service'
+import { cachedForCompany, invalidateWholesaleCompany } from '@/lib/wholesale/ttlCache'
 import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
 
 export type BannerLinkType = 'none' | 'category' | 'product' | 'url'
@@ -162,7 +163,12 @@ export async function listWholesaleBanners(companyId: number): Promise<Wholesale
 }
 
 /** Só banners ativos, ordenados — usado pelo catálogo público (carrossel/estático). */
-export async function getActiveWholesaleBanners(companyId: number): Promise<WholesaleBanner[]> {
+export function getActiveWholesaleBanners(companyId: number): Promise<WholesaleBanner[]> {
+  // Cache curto por empresa; toda mutação de banner no ERP invalida (ver mutações abaixo).
+  return cachedForCompany(companyId, 'banners', () => loadActiveWholesaleBanners(companyId))
+}
+
+async function loadActiveWholesaleBanners(companyId: number): Promise<WholesaleBanner[]> {
   const admin = createAdminClient()
   const { data } = await (admin as any)
     .from('wholesale_site_banners')
@@ -206,7 +212,7 @@ async function resolveMediaId(admin: ReturnType<typeof createAdminClient>, compa
   return data?.id ?? null
 }
 
-export async function createWholesaleBanner(companyId: number, input: CreateWholesaleBannerInput): Promise<BannerMutationResult> {
+async function createWholesaleBannerImpl(companyId: number, input: CreateWholesaleBannerInput): Promise<BannerMutationResult> {
   const admin = createAdminClient()
 
   const mediaId = await resolveMediaId(admin, companyId, input.mediaPublicId)
@@ -292,7 +298,7 @@ export interface UpdateWholesaleBannerInput extends WholesaleBannerContentInput 
   mobileMediaPublicId?: string | null
 }
 
-export async function updateWholesaleBanner(companyId: number, bannerId: number, patch: UpdateWholesaleBannerInput): Promise<BannerMutationResult> {
+async function updateWholesaleBannerImpl(companyId: number, bannerId: number, patch: UpdateWholesaleBannerInput): Promise<BannerMutationResult> {
   const admin = createAdminClient()
 
   const { data: existing } = await (admin as any)
@@ -346,7 +352,7 @@ export async function updateWholesaleBanner(companyId: number, bannerId: number,
   return { ok: true, data: await fromRow(data, await categoryKeysFor(companyId, [data])) }
 }
 
-export async function deleteWholesaleBanner(companyId: number, bannerId: number): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+async function deleteWholesaleBannerImpl(companyId: number, bannerId: number): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
   const admin = createAdminClient()
   const { error, count } = await (admin as any)
     .from('wholesale_site_banners')
@@ -364,7 +370,7 @@ export async function deleteWholesaleBanner(companyId: number, bannerId: number)
  * ordem desejada. Ignora silenciosamente qualquer id que não pertença à
  * empresa (nunca deixa um id de outra empresa alterar sort_order aqui).
  */
-export async function reorderWholesaleBanners(companyId: number, bannerIds: number[]): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
+async function reorderWholesaleBannersImpl(companyId: number, bannerIds: number[]): Promise<{ ok: true } | { ok: false; error: string; status: number }> {
   const admin = createAdminClient()
 
   const { data: owned } = await (admin as any)
@@ -382,4 +388,26 @@ export async function reorderWholesaleBanners(companyId: number, bannerIds: numb
   const failed = results.find((r: any) => r.error)
   if (failed) return { ok: false, error: failed.error.message, status: 500 }
   return { ok: true }
+}
+
+// Mutações: executam e descartam o cache da empresa para o site refletir a mudança na hora.
+export async function createWholesaleBanner(...args: Parameters<typeof createWholesaleBannerImpl>) {
+  const result = await createWholesaleBannerImpl(...args)
+  invalidateWholesaleCompany(args[0])
+  return result
+}
+export async function updateWholesaleBanner(...args: Parameters<typeof updateWholesaleBannerImpl>) {
+  const result = await updateWholesaleBannerImpl(...args)
+  invalidateWholesaleCompany(args[0])
+  return result
+}
+export async function deleteWholesaleBanner(...args: Parameters<typeof deleteWholesaleBannerImpl>) {
+  const result = await deleteWholesaleBannerImpl(...args)
+  invalidateWholesaleCompany(args[0])
+  return result
+}
+export async function reorderWholesaleBanners(...args: Parameters<typeof reorderWholesaleBannersImpl>) {
+  const result = await reorderWholesaleBannersImpl(...args)
+  invalidateWholesaleCompany(args[0])
+  return result
 }

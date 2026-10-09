@@ -16,6 +16,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { listMediaByEntity } from '@/services/media.service'
+import { cachedForCompany, invalidateWholesaleCompany, timed } from '@/lib/wholesale/ttlCache'
 import { EMPTY_SITE_TEXTS, type WholesaleSiteTexts } from './siteTexts'
 
 export interface WholesaleSiteSettings {
@@ -101,7 +102,7 @@ function fromRow(row: SettingsRow): WholesaleSiteSettings {
   }
 }
 
-export async function getWholesaleSiteSettings(companyId: number): Promise<WholesaleSiteSettings> {
+async function readWholesaleSiteSettings(companyId: number): Promise<WholesaleSiteSettings> {
   const admin = createAdminClient()
   const { data, error } = await (admin as any)
     .from('wholesale_site_settings')
@@ -144,6 +145,17 @@ export type UpdateSettingsResult =
  * ausente já corrigido em produtos (não há campo aqui com essa forma de
  * schema, mas o padrão de merge explícito é mantido por consistência).
  */
+/**
+ * Configuração do catálogo (lida em todo carregamento do layout/página/APIs) — cache curto por empresa;
+ * a gravação pela tela do ERP invalida na hora. Erro de banco nunca é cacheado (a promise rejeita).
+ */
+export function getWholesaleSiteSettings(companyId: number, options: { fresh?: boolean } = {}): Promise<WholesaleSiteSettings> {
+  // `fresh`: leitura direta do banco, sem cache — usada na validação do carrinho e na criação do pedido
+  // (pedido mínimo e catálogo ativo sempre lidos na hora da operação).
+  if (options.fresh) return readWholesaleSiteSettings(companyId)
+  return cachedForCompany(companyId, 'settings', () => timed('settings', companyId, () => readWholesaleSiteSettings(companyId)))
+}
+
 function mergeTexts(current: WholesaleSiteTexts, patch: Partial<WholesaleSiteTexts> | undefined): WholesaleSiteTexts {
   const merged = { ...current }
   for (const key of Object.keys(patch ?? {}) as (keyof WholesaleSiteTexts)[]) {
@@ -157,7 +169,7 @@ export async function updateWholesaleSiteSettings(
   patch: UpdateWholesaleSiteSettingsInput,
 ): Promise<UpdateSettingsResult> {
   const admin = createAdminClient()
-  const current = await getWholesaleSiteSettings(companyId)
+  const current = await readWholesaleSiteSettings(companyId)
 
   const merged: WholesaleSiteSettings = {
     catalogActive: patch.catalogActive ?? current.catalogActive,
@@ -200,6 +212,7 @@ export async function updateWholesaleSiteSettings(
     .single() as { data: SettingsRow | null; error: { message: string } | null }
 
   if (error || !data) return { ok: false, error: error?.message ?? 'Falha ao salvar configuração.', status: 500 }
+  invalidateWholesaleCompany(companyId)
   return { ok: true, data: fromRow(data) }
 }
 
@@ -209,7 +222,9 @@ export async function updateWholesaleSiteSettings(
  * (entity_type='company', role='logo') — nunca uma segunda tabela/URL.
  */
 export async function getWholesaleCompanyLogoUrl(companyId: number): Promise<string | null> {
-  const result = await listMediaByEntity('company', String(companyId), companyId)
-  if (!result.ok) return null
-  return result.data.find((m) => m.role === 'logo')?.url ?? null
+  return cachedForCompany(companyId, 'logo', async () => {
+    const result = await listMediaByEntity('company', String(companyId), companyId)
+    if (!result.ok) return null
+    return result.data.find((m) => m.role === 'logo')?.url ?? null
+  })
 }

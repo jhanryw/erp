@@ -9,6 +9,7 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveMediaUrl } from '@/services/media.service'
 import { loadCategoryUniverse } from './categoryKeys'
+import { invalidateWholesaleCompany } from '@/lib/wholesale/ttlCache'
 
 type Admin = ReturnType<typeof createAdminClient>
 
@@ -85,6 +86,7 @@ export async function setCategoryCover(companyId: number, categoryId: number, me
     .from('wholesale_category_covers')
     .upsert({ company_id: companyId, category_id: categoryId, media_id: media.id }, { onConflict: 'company_id,category_id' })
   if (error) return { ok: false, error: error.message, status: 500 }
+  invalidateWholesaleCompany(companyId)
   return { ok: true }
 }
 
@@ -97,5 +99,6 @@ export async function removeCategoryCover(companyId: number, categoryId: number)
     .eq('category_id', categoryId) as { error: { message: string } | null; count: number | null }
   if (error) return { ok: false, error: error.message, status: 500 }
   if (!count) return { ok: false, error: 'Esta categoria não tem capa.', status: 404 }
+  invalidateWholesaleCompany(companyId)
   return { ok: true }
 }
