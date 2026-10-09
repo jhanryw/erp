@@ -14,6 +14,9 @@ import { AddAlsoSection } from './AddAlsoSection'
 
 interface Props {
   minimumOrderAmount: number
+  /** Texto informativo configurável — NUNCA o valor do mínimo (esse vem de `minimumOrderAmount`). */
+  minimumOrderNote?: string | null
+  addAlsoTitle?: string
 }
 
 const CUSTOMER_KEY = 'santtorini_wholesale_customer_v1'
@@ -31,7 +34,7 @@ function newIdempotencyKey(): string {
 
 const signatureOf = (items: CartItem[]) => items.map((i) => `${i.variationId}:${i.quantity}`).join('|')
 
-export function CarrinhoClient({ minimumOrderAmount }: Props) {
+export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, addAlsoTitle }: Props) {
   const { items, updateQuantity, removeItem, syncItems, clear, ready, totalDisplayValue } = useCart()
   const basePath = useWholesaleBasePath()
   const [sending, setSending] = useState(false)
@@ -241,7 +244,7 @@ export function CarrinhoClient({ minimumOrderAmount }: Props) {
         ))}
       </div>
 
-      <AddAlsoSection />
+      <AddAlsoSection title={addAlsoTitle} />
 
       <div className="space-y-3">
         <div className="flex justify-between text-sm">
@@ -254,6 +257,8 @@ export function CarrinhoClient({ minimumOrderAmount }: Props) {
             <span className="text-gray-700">{formatCurrency(minimum)}</span>
           </div>
         )}
+
+        {minimum > 0 && minimumOrderNote && <p className="whitespace-pre-line text-xs text-gray-500">{minimumOrderNote}</p>}
 
         {belowMinimum ? (
           <p className="text-sm text-amber-600 font-medium">

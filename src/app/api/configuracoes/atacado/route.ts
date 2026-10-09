@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { requireRole } from '@/lib/supabase/session'
 import { getWholesaleSiteSettings, updateWholesaleSiteSettings } from '@/services/wholesale/settings'
 import { normalizePhoneBR } from '@/lib/utils/phone'
+import { wholesaleSiteTextsSchema } from '@/services/wholesale/siteTexts'
 
 // ─── GET /api/configuracoes/atacado — configuração do catálogo público ────────
 
@@ -30,6 +31,8 @@ const putSchema = z.object({
   showCategories: z.boolean().optional(),
   pixelEnabled: z.boolean().optional(),
   pixelId: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().max(60).nullable().optional()),
+  // Personalização de textos (null/vazio = padrão). `.strict()` rejeita chave desconhecida — nada além dos 8 textos.
+  texts: wholesaleSiteTextsSchema.strict().optional(),
 }).partial()
 
 export async function PUT(request: Request) {

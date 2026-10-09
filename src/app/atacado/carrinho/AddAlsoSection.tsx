@@ -86,7 +86,7 @@ function RecommendationCard({ product }: { product: WholesaleCatalogProduct }) {
   )
 }
 
-export function AddAlsoSection() {
+export function AddAlsoSection({ title = 'Adicione também' }: { title?: string }) {
   const { items, ready } = useCart()
   const [products, setProducts] = useState<WholesaleCatalogProduct[]>([])
 
@@ -116,7 +116,7 @@ export function AddAlsoSection() {
 
   return (
     <section aria-labelledby="adicione-tambem" className="space-y-3 pt-2">
-      <h2 id="adicione-tambem" className="font-serif text-xl text-gray-900">Adicione também</h2>
+      <h2 id="adicione-tambem" className="font-serif text-xl text-gray-900">{title}</h2>
       <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {visible.map((product) => <RecommendationCard key={product.productId} product={product} />)}
       </ul>

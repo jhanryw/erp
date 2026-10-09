@@ -44,7 +44,7 @@ function CategoryCard({ category, basePath, priority }: { category: WholesaleCat
   )
 }
 
-export function CategoryGrid({ categories, basePath }: { categories: WholesaleCategory[]; basePath: string }) {
+export function CategoryGrid({ categories, basePath, title = 'Nossas categorias' }: { categories: WholesaleCategory[]; basePath: string; title?: string }) {
   if (categories.length === 0) return null
 
   return (
@@ -52,7 +52,7 @@ export function CategoryGrid({ categories, basePath }: { categories: WholesaleCa
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-brand">Compre por categoria</p>
-          <h2 id="categorias-titulo" className="font-serif text-2xl text-gray-900 sm:text-3xl">Nossas categorias</h2>
+          <h2 id="categorias-titulo" className="font-serif text-2xl text-gray-900 sm:text-3xl">{title}</h2>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">

@@ -11,6 +11,7 @@ import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { getWholesaleSiteSettings, getWholesaleCompanyLogoUrl } from '@/services/wholesale/settings'
 import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
+import { resolveSiteTexts } from '@/services/wholesale/siteTexts'
 
 // Configuração/catálogo nunca vêm do cache de dados do Next.
 export const dynamic = 'force-dynamic'
@@ -36,6 +37,7 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
   // só logo, mensagem e WhatsApp. Ignora `children` de propósito — nenhuma
   // rota interna (carrinho, produto/[id]) deve vazar conteúdo enquanto
   // desativado.
+  const texts = resolveSiteTexts(settings?.texts, settings?.displayName ?? null)
   const inactive = !!tenant && !!settings && !settings.catalogActive
 
   return (
@@ -81,8 +83,9 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
           </main>
 
           <footer className="border-t border-gray-100 py-6 mt-10">
-            <div className="max-w-6xl mx-auto px-4 text-xs text-gray-400 text-center">
-              {settings?.displayName ?? 'Atacado'} — vendas por atacado
+            {/* Texto puro (React escapa); \n do campo multilinha vira quebra de linha. */}
+            <div className="max-w-6xl mx-auto px-4 text-xs text-gray-400 text-center space-y-1">
+              {texts.footerLines.map((line, i) => <p key={i} className="min-h-[1em]">{line}</p>)}
             </div>
           </footer>
         </div>

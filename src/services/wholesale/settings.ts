@@ -16,6 +16,7 @@
 
 import { createAdminClient } from '@/lib/supabase/admin'
 import { listMediaByEntity } from '@/services/media.service'
+import { EMPTY_SITE_TEXTS, type WholesaleSiteTexts } from './siteTexts'
 
 export interface WholesaleSiteSettings {
   catalogActive: boolean
@@ -28,6 +29,8 @@ export interface WholesaleSiteSettings {
   showCategories: boolean
   pixelEnabled: boolean
   pixelId: string | null
+  /** Textos personalizados (null = padrão do código). Nunca contém o valor do pedido mínimo. */
+  texts: WholesaleSiteTexts
 }
 
 // Preserva o comportamento atual do catálogo (que não tinha nenhuma
@@ -45,6 +48,7 @@ const DEFAULT_SETTINGS: WholesaleSiteSettings = {
   showCategories: true,
   pixelEnabled: false,
   pixelId: null,
+  texts: EMPTY_SITE_TEXTS,
 }
 
 interface SettingsRow {
@@ -58,7 +62,19 @@ interface SettingsRow {
   show_categories: boolean
   pixel_enabled: boolean
   pixel_id: string | null
+  hero_title?: string | null
+  hero_subtitle?: string | null
+  categories_title?: string | null
+  products_title?: string | null
+  add_also_title?: string | null
+  minimum_order_note?: string | null
+  empty_message?: string | null
+  footer_text?: string | null
 }
+
+const SETTINGS_COLUMNS =
+  'catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id, ' +
+  'hero_title, hero_subtitle, categories_title, products_title, add_also_title, minimum_order_note, empty_message, footer_text'
 
 function fromRow(row: SettingsRow): WholesaleSiteSettings {
   return {
@@ -72,6 +88,16 @@ function fromRow(row: SettingsRow): WholesaleSiteSettings {
     showCategories: row.show_categories,
     pixelEnabled: row.pixel_enabled,
     pixelId: row.pixel_id,
+    texts: {
+      heroTitle: row.hero_title ?? null,
+      heroSubtitle: row.hero_subtitle ?? null,
+      categoriesTitle: row.categories_title ?? null,
+      productsTitle: row.products_title ?? null,
+      addAlsoTitle: row.add_also_title ?? null,
+      minimumOrderNote: row.minimum_order_note ?? null,
+      emptyMessage: row.empty_message ?? null,
+      footerText: row.footer_text ?? null,
+    },
   }
 }
 
@@ -79,7 +105,7 @@ export async function getWholesaleSiteSettings(companyId: number): Promise<Whole
   const admin = createAdminClient()
   const { data, error } = await (admin as any)
     .from('wholesale_site_settings')
-    .select('catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id')
+    .select(SETTINGS_COLUMNS)
     .eq('company_id', companyId)
     .maybeSingle() as { data: SettingsRow | null; error: { message: string } | null }
 
@@ -101,6 +127,8 @@ export interface UpdateWholesaleSiteSettingsInput {
   showCategories?: boolean
   pixelEnabled?: boolean
   pixelId?: string | null
+  /** Parcial: campo ausente mantém o valor atual; `null` volta ao texto padrão. */
+  texts?: Partial<WholesaleSiteTexts>
 }
 
 export type UpdateSettingsResult =
@@ -116,6 +144,14 @@ export type UpdateSettingsResult =
  * ausente já corrigido em produtos (não há campo aqui com essa forma de
  * schema, mas o padrão de merge explícito é mantido por consistência).
  */
+function mergeTexts(current: WholesaleSiteTexts, patch: Partial<WholesaleSiteTexts> | undefined): WholesaleSiteTexts {
+  const merged = { ...current }
+  for (const key of Object.keys(patch ?? {}) as (keyof WholesaleSiteTexts)[]) {
+    if (patch![key] !== undefined) merged[key] = patch![key] as string | null
+  }
+  return merged
+}
+
 export async function updateWholesaleSiteSettings(
   companyId: number,
   patch: UpdateWholesaleSiteSettingsInput,
@@ -134,6 +170,7 @@ export async function updateWholesaleSiteSettings(
     showCategories: patch.showCategories ?? current.showCategories,
     pixelEnabled: patch.pixelEnabled ?? current.pixelEnabled,
     pixelId: patch.pixelId !== undefined ? patch.pixelId : current.pixelId,
+    texts: mergeTexts(current.texts, patch.texts),
   }
 
   const { data, error } = await (admin as any)
@@ -150,8 +187,16 @@ export async function updateWholesaleSiteSettings(
       show_categories: merged.showCategories,
       pixel_enabled: merged.pixelEnabled,
       pixel_id: merged.pixelId,
+      hero_title: merged.texts.heroTitle,
+      hero_subtitle: merged.texts.heroSubtitle,
+      categories_title: merged.texts.categoriesTitle,
+      products_title: merged.texts.productsTitle,
+      add_also_title: merged.texts.addAlsoTitle,
+      minimum_order_note: merged.texts.minimumOrderNote,
+      empty_message: merged.texts.emptyMessage,
+      footer_text: merged.texts.footerText,
     }, { onConflict: 'company_id' })
-    .select('catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id')
+    .select(SETTINGS_COLUMNS)
     .single() as { data: SettingsRow | null; error: { message: string } | null }
 
   if (error || !data) return { ok: false, error: error?.message ?? 'Falha ao salvar configuração.', status: 500 }

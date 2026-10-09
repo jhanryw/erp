@@ -1,5 +1,6 @@
 import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { getWholesaleSiteSettings } from '@/services/wholesale/settings'
+import { resolveSiteTexts } from '@/services/wholesale/siteTexts'
 import { CarrinhoClient } from './CarrinhoClient'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +12,13 @@ export default async function CarrinhoPage() {
 
   if (settings && !settings.catalogActive) return null // catálogo desativado (controle mestre)
 
+  const texts = resolveSiteTexts(settings?.texts, settings?.displayName ?? null)
+
   return (
-    <CarrinhoClient minimumOrderAmount={settings?.minimumOrderAmount ?? 0} />
+    <CarrinhoClient
+      minimumOrderAmount={settings?.minimumOrderAmount ?? 0}
+      minimumOrderNote={texts.minimumOrderNote}
+      addAlsoTitle={texts.addAlsoTitle}
+    />
   )
 }

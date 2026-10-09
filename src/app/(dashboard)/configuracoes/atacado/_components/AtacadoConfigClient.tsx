@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card'
 import { CompanyLogoManager } from './CompanyLogoManager'
 import { BannerManager } from './BannerManager'
 import { CategoryCoverManager } from './CategoryCoverManager'
+import { SiteTextsCard } from './SiteTextsCard'
 import type { WholesaleSiteSettings } from '@/services/wholesale/settings'
 import type { WholesaleBanner } from '@/services/wholesale/banners'
 
@@ -139,6 +140,8 @@ export function AtacadoConfigClient({ companyId, initialSettings, initialBanners
           disabled={!settings.pixelEnabled}
         />
       </Card>
+
+      <SiteTextsCard texts={settings.texts} onChange={(texts) => patch({ texts })} />
 
       <div className="flex justify-end">
         <Button onClick={handleSave} loading={saving}>Salvar configuração</Button>

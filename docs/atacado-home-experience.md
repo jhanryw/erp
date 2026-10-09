@@ -27,3 +27,14 @@ Reimplantar a imagem anterior. O código antigo ignora as colunas/tabela novas (
 - [ ] Categorias de mesmo slug (query 13 do docs/media-hub-verificacao-producao.sql) aparecem separadas.
 - [ ] Carrinho: "Adicione também" mostra 4–6 itens fora do carrinho; adicionar atualiza o total; pedido mínimo respeitado; envio abre o WhatsApp.
 - [ ] Catálogo desativado continua mostrando só logo/mensagem.
+
+## Personalização do site (textos)
+Configurações → Atacado → "Personalização do site": título/subtítulo da vitrine, título de categorias, título de produtos, título de "Adicione também", texto informativo do pedido mínimo, mensagem de lista vazia e rodapé. Campo vazio = texto padrão. Persistido em `wholesale_site_settings` (por `company_id`), lido a cada requisição — vale no site assim que salvar, sem deploy. Texto puro (HTML não é interpretado). O valor do pedido mínimo continua em "Pedido mínimo (R$)".
+
+Migration adicional (aplicar depois das duas anteriores): `202610091200_wholesale_site_texts.sql`.
+
+Checklist extra:
+- [ ] Editar cada texto no ERP, salvar e ver no site público sem deploy (recarregar a página).
+- [ ] Limpar um campo e confirmar que volta ao texto padrão.
+- [ ] Texto com `<b>` ou `<script>` aparece literalmente, sem formatar nem executar.
+- [ ] O mínimo do pedido continua bloqueando o envio conforme o valor configurado, independente do texto.
