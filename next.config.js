@@ -8,6 +8,12 @@ const nextConfig = {
     remotePatterns: buildSupabaseImagePatterns(process.env.NEXT_PUBLIC_SUPABASE_URL, {
       production: process.env.NODE_ENV === 'production',
     }),
+    // Arquivos do Media Hub têm nome = UUID e nunca são sobrescritos (trocar a foto gera outro UUID), então o
+    // resultado otimizado pode ficar em cache por 30 dias. O padrão do Next é 60 s: revalidava a cada minuto.
+    minimumCacheTTL: 60 * 60 * 24 * 30,
+    // Só tamanhos realmente usados pelo atacado (menos variantes = mais acertos de cache e menos CPU).
+    deviceSizes: [360, 414, 640, 768, 1024, 1280, 1920],
+    imageSizes: [64, 128, 256, 384],
   },
   experimental: {
     serverComponentsExternalPackages: [],

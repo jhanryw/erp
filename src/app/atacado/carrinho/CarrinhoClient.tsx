@@ -11,6 +11,7 @@ import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { trackInitiateCheckout } from '@/lib/wholesale/metaPixel'
 import { applyValidationToCart, type ValidationResponse } from '../_lib/cartSync'
 import { AddAlsoSection } from './AddAlsoSection'
+import { CatalogImage } from '../_components/CatalogImage'
 
 interface Props {
   minimumOrderAmount: number
@@ -209,10 +210,9 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
       <div className="space-y-3">
         {items.map((item) => (
           <div key={item.variationId} className="flex gap-3 py-3 border-b border-gray-100">
-            <div className="w-16 h-16 rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
+            <div className="relative w-16 h-16 rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
               {item.imageUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={item.imageUrl} alt={item.productName} className="w-full h-full object-cover" />
+                <CatalogImage src={item.imageUrl} alt={item.productName} sizes="64px" className="object-cover" />
               ) : (
                 <ImageOff className="w-5 h-5 text-gray-300" />
               )}

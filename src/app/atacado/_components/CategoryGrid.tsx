@@ -1,6 +1,6 @@
-import Image from 'next/image'
 import Link from 'next/link'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
+import { CatalogImage } from './CatalogImage'
 import type { WholesaleCategory } from '@/services/wholesale/catalog'
 
 /** Link da categoria: filtra a vitrine pela chave pública e rola até a lista de produtos. */
@@ -14,20 +14,14 @@ function CategoryCard({ category, basePath, priority }: { category: WholesaleCat
       href={categoryCardHref(basePath, category)}
       className="group relative block aspect-[4/5] overflow-hidden rounded-2xl bg-gradient-to-br from-stone-100 via-rose-50 to-stone-200 ring-1 ring-black/5"
     >
-      {category.imageUrl && category.imageSource === 'cover' && (
-        <Image
+      {category.imageUrl && (
+        <CatalogImage
           src={category.imageUrl}
           alt={category.imageAlt ?? ''}
-          fill
-          sizes="(min-width: 1024px) 280px, (min-width: 640px) 33vw, 50vw"
+          sizes="(min-width: 1152px) 270px, (min-width: 640px) 31vw, 47vw"
           priority={priority}
           className="object-cover transition-transform duration-500 group-hover:scale-[1.04]"
         />
-      )}
-      {category.imageUrl && category.imageSource === 'product' && (
-        // Foto de produto pode vir de URL externa (fora da allowlist do next/image): <img> nativo, como no ProductCard.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={category.imageUrl} alt={category.imageAlt ?? ''} loading={priority ? 'eager' : 'lazy'} decoding="async" className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.04]" />
       )}
 
       {category.imageUrl && <div className="absolute inset-0 bg-gradient-to-t from-black/65 via-black/10 to-transparent" />}
@@ -44,7 +38,7 @@ function CategoryCard({ category, basePath, priority }: { category: WholesaleCat
   )
 }
 
-export function CategoryGrid({ categories, basePath, title = 'Nossas categorias' }: { categories: WholesaleCategory[]; basePath: string; title?: string }) {
+export function CategoryGrid({ categories, basePath, title = 'Nossas categorias', eagerCount = 2 }: { categories: WholesaleCategory[]; basePath: string; title?: string; /** Quantos cards carregam já (só quando não há banner acima — senão o LCP é o banner). */ eagerCount?: number }) {
   if (categories.length === 0) return null
 
   return (
@@ -57,7 +51,7 @@ export function CategoryGrid({ categories, basePath, title = 'Nossas categorias'
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4">
         {categories.map((category, index) => (
-          <CategoryCard key={category.id} category={category} basePath={basePath} priority={index < 2} />
+          <CategoryCard key={category.id} category={category} basePath={basePath} priority={index < eagerCount} />
         ))}
       </div>
     </section>

@@ -4,6 +4,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { QuickAddButton } from './QuickAddButton'
+import { CatalogImage } from './CatalogImage'
 
 export function ProductCard({ product, basePath }: { product: WholesaleCatalogProduct; basePath: string }) {
   const cover = product.images[0]
@@ -11,10 +12,14 @@ export function ProductCard({ product, basePath }: { product: WholesaleCatalogPr
   return (
     <div className="flex flex-col">
       <Link href={wholesaleHref(basePath, `/produto/${product.productId}`)} className="group flex flex-col">
-        <div className="aspect-square bg-gray-50 rounded-lg flex items-center justify-center overflow-hidden">
+        <div className="relative aspect-square bg-gray-50 rounded-lg flex items-center justify-center overflow-hidden">
           {cover ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={cover.url} alt={cover.alt ?? product.name} loading="lazy" decoding="async" className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300" />
+            <CatalogImage
+              src={cover.url}
+              alt={cover.alt ?? product.name}
+              sizes="(min-width: 1152px) 270px, (min-width: 768px) 30vw, 46vw"
+              className="object-cover group-hover:scale-[1.03] transition-transform duration-300"
+            />
           ) : (
             <ImageOff className="w-8 h-8 text-gray-300" />
           )}

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CategoryGrid, categoryCardHref } from './CategoryGrid'
 import type { WholesaleCategory } from '@/services/wholesale/catalog'
@@ -7,16 +7,20 @@ const cat = (over: Partial<WholesaleCategory>): WholesaleCategory => ({
   id: 1, slug: 'calcinhas', name: 'Calcinhas', key: 'calcinhas', imageUrl: null, imageAlt: null, imageSource: null, productCount: 3, ...over,
 })
 
+beforeEach(() => { process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://supabase.test' })
+
+const STORAGE = 'https://supabase.test/storage/v1/object/public/media-public/1/capa.jpg'
+
 describe('CategoryGrid', () => {
   it('não renderiza nada sem categorias', () => {
     expect(renderToStaticMarkup(<CategoryGrid categories={[]} basePath="" />)).toBe('')
   })
 
   it('card com capa: foto otimizada, nome e link para a categoria + âncora da lista', () => {
-    const out = renderToStaticMarkup(<CategoryGrid basePath="" categories={[cat({ imageUrl: 'https://cdn.test/capa.jpg', imageSource: 'cover', imageAlt: 'Capa' })]} />)
+    const out = renderToStaticMarkup(<CategoryGrid basePath="" categories={[cat({ imageUrl: STORAGE, imageSource: 'cover', imageAlt: 'Capa' })]} />)
     expect(out).toContain('Calcinhas')
     expect(out).toContain('href="/?categoria=calcinhas#produtos"')
-    expect(out).toContain(encodeURIComponent('https://cdn.test/capa.jpg'))
+    expect(out).toContain(encodeURIComponent(STORAGE)) // passa pelo otimizador /_next/image
     expect(out).toContain('alt="Capa"')
   })
 

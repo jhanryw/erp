@@ -7,6 +7,7 @@ import { ImageOff, Minus, Plus, ShoppingCart } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../../_lib/CartContext'
 import { buildCartItem, variationLabel } from '../../_lib/cartItem'
+import { CatalogImage } from '../../_components/CatalogImage'
 import { useWholesaleBasePath } from '../../_lib/WholesaleBasePathContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { trackViewContent, trackAddToCart } from '@/lib/wholesale/metaPixel'
@@ -64,10 +65,9 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
 
   return (
     <div className="grid md:grid-cols-2 gap-8 md:gap-12">
-      <div className="aspect-square rounded-xl bg-gray-50 flex items-center justify-center overflow-hidden">
+      <div className="relative aspect-square rounded-xl bg-gray-50 flex items-center justify-center overflow-hidden">
         {product.images[0] ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={product.images[0].url} alt={product.images[0].alt ?? product.name} className="w-full h-full object-cover" />
+          <CatalogImage src={product.images[0].url} alt={product.images[0].alt ?? product.name} sizes="(min-width: 768px) 50vw, 100vw" priority className="object-cover" />
         ) : (
           <ImageOff className="w-12 h-12 text-gray-300" />
         )}

@@ -63,7 +63,7 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
 
       {!isFiltered && banners.length > 0 && <BannerCarousel banners={banners} />}
 
-      {!isFiltered && settings.showCategories && <CategoryGrid categories={categories} basePath={basePath} title={texts.categoriesTitle} />}
+      {!isFiltered && settings.showCategories && <CategoryGrid categories={categories} basePath={basePath} title={texts.categoriesTitle} eagerCount={banners.length > 0 ? 0 : 2} />}
 
       <section id="produtos" className="scroll-mt-24 space-y-5">
         {!isFiltered && texts.productsTitle && (

@@ -7,6 +7,7 @@ import { formatCurrency } from '@/lib/utils/currency'
 import { trackAddToCart } from '@/lib/wholesale/metaPixel'
 import { useCart } from '../_lib/CartContext'
 import { availableVariations, buildCartItem, cartProductIds, filterRecommendations, variationLabel } from '../_lib/cartItem'
+import { CatalogImage } from '../_components/CatalogImage'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
 
 const SEED_KEY = 'santtorini_wholesale_reco_seed_v1'
@@ -46,10 +47,9 @@ function RecommendationCard({ product }: { product: WholesaleCatalogProduct }) {
 
   return (
     <li className="flex flex-col rounded-xl border border-gray-100 bg-white p-2.5">
-      <div className="aspect-square overflow-hidden rounded-lg bg-gray-50 flex items-center justify-center">
+      <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-50 flex items-center justify-center">
         {cover ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={cover.url} alt={cover.alt ?? product.name} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+          <CatalogImage src={cover.url} alt={cover.alt ?? product.name} sizes="(min-width: 640px) 200px, 46vw" className="object-cover" />
         ) : (
           <ImageOff className="h-6 w-6 text-gray-300" />
         )}
