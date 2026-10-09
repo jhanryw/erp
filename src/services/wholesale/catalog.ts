@@ -24,6 +24,8 @@ import { listMediaByEntities } from '@/services/media.service'
 import { getWholesaleSiteSettings, type WholesaleSiteSettings } from './settings'
 import { selectAllInChunks, selectAllPages } from './queryBatching'
 import { loadAttributesByVariation } from './attributes'
+import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
+import { loadCategoryCovers } from './categoryCovers'
 import { evaluateWholesaleSellability, loadWholesaleStockByVariation, type WholesaleSellability } from './sellability'
 
 const LOW_STOCK_THRESHOLD = 3
@@ -86,8 +88,17 @@ export interface CatalogPage {
 }
 
 export interface WholesaleCategory {
+  id: number
   slug: string
   name: string
+  /** Valor de `?categoria=` — o slug, ou `slug~id` quando o slug se repete na empresa (ver categoryKeys.ts). */
+  key: string
+  /** Foto da home: capa configurada no ERP ou, na falta dela, a foto de um produto da categoria. `null` → card tipográfico. */
+  imageUrl: string | null
+  imageAlt: string | null
+  /** Origem da foto: `cover` (upload do ERP, sempre no Storage → otimizável pelo next/image) ou `product` (pode vir de URL externa). */
+  imageSource: 'cover' | 'product' | null
+  productCount: number
 }
 
 // ─── Tipos de linha ─────────────────────────────────────────────────────────
@@ -98,6 +109,7 @@ interface ProductRow {
   active: boolean
   wholesale_enabled: boolean
   wholesale_price: number | null
+  category_id: number | null
   brands: { name: string } | { name: string }[] | null
   categories: { name: string; slug: string } | { name: string; slug: string }[] | null
 }
@@ -119,21 +131,18 @@ type Admin = ReturnType<typeof createAdminClient>
 // ─── Carga de dados ─────────────────────────────────────────────────────────
 
 /** Produtos candidatos: da empresa, ativos E habilitados no atacado (+ busca/categoria). Colunas leves; paginado por `.range()`. */
-async function loadCandidateProducts(admin: Admin, companyId: number, filters: { search?: string; categorySlug?: string }): Promise<ProductRow[]> {
-  // `!inner` só quando há filtro de categoria: sem ele o PostgREST filtra
-  // apenas o objeto embutido (category vira null) e mantém TODOS os produtos.
-  const categoryEmbed = filters.categorySlug ? 'categories:category_id!inner(name, slug)' : 'categories:category_id(name, slug)'
-
+async function loadCandidateProducts(admin: Admin, companyId: number, filters: { search?: string; categoryId?: number }): Promise<ProductRow[]> {
   return selectAllPages<ProductRow>((from, to) => {
     let query = (admin as any)
       .from('products')
-      .select(`id, name, active, wholesale_enabled, wholesale_price, brands:brand_id(name), ${categoryEmbed}`)
+      .select('id, name, active, wholesale_enabled, wholesale_price, category_id, brands:brand_id(name), categories:category_id(name, slug)')
       .eq('company_id', companyId)
       .eq('active', true)
       .eq('wholesale_enabled', true)
 
     if (filters.search) query = query.ilike('name', `%${filters.search}%`)
-    if (filters.categorySlug) query = query.eq('categories.slug', filters.categorySlug)
+    // Filtro pela COLUNA category_id (identidade real) — nunca pelo slug, que pode se repetir na empresa.
+    if (filters.categoryId != null) query = query.eq('category_id', filters.categoryId)
 
     return query.order('name', { ascending: true }).order('id', { ascending: true }).range(from, to)
   })
@@ -246,7 +255,15 @@ async function resolveVisibleProducts(
   settings: WholesaleSiteSettings,
   filters: { search?: string; categorySlug?: string },
 ): Promise<VisibleProduct[]> {
-  const candidates = await loadCandidateProducts(admin, companyId, filters)
+  let categoryId: number | undefined
+  if (filters.categorySlug) {
+    // `categorySlug` é a chave pública (slug, ou slug~id quando repetido). Chave desconhecida/inativa → vitrine vazia.
+    const universe = await loadCategoryUniverse(admin, companyId)
+    const category = resolveCategoryKey(universe.filter((c) => c.active), filters.categorySlug)
+    if (!category) return []
+    categoryId = category.id
+  }
+  const candidates = await loadCandidateProducts(admin, companyId, { search: filters.search, categoryId })
   if (candidates.length === 0) return []
 
   const variations = await loadVariations(admin, candidates.map((p) => p.id))
@@ -300,26 +317,58 @@ export async function getWholesaleCatalogPage(companyId: number, filters: Catalo
 }
 
 /**
- * Categorias com pelo menos 1 produto VISÍVEL no catálogo (mesma regra da
- * vitrine — nunca mostra categoria vazia nem categoria só com produto fora do atacado).
+ * Categorias com pelo menos 1 produto VISÍVEL no catálogo (mesma regra da vitrine — nunca mostra
+ * categoria vazia, inativa nem categoria só com produto fora do atacado). Cada categoria sai com a
+ * chave pública única e, com `withImages`, a foto do card: capa do ERP → foto de um produto → nenhuma.
  */
-export async function listWholesaleCategories(companyId: number): Promise<WholesaleCategory[]> {
+export async function listWholesaleCategories(companyId: number, options: { withImages?: boolean } = {}): Promise<WholesaleCategory[]> {
   const admin = createAdminClient()
   const settings = await getWholesaleSiteSettings(companyId)
-  const visible = await resolveVisibleProducts(admin, companyId, settings, {})
+  const [visible, universe] = await Promise.all([
+    resolveVisibleProducts(admin, companyId, settings, {}),
+    loadCategoryUniverse(admin, companyId),
+  ])
 
-  const categories = new Map<string, WholesaleCategory>()
+  const byId = new Map(universe.filter((c) => c.active).map((c) => [c.id, c]))
+  const productsByCategory = new Map<number, number[]>()
   for (const { product } of visible) {
-    const category = one(product.categories)
-    if (category?.slug && !categories.has(category.slug)) categories.set(category.slug, { slug: category.slug, name: category.name })
+    if (product.category_id == null || !byId.has(product.category_id)) continue
+    const list = productsByCategory.get(product.category_id) ?? []
+    list.push(product.id)
+    productsByCategory.set(product.category_id, list)
   }
 
-  return Array.from(categories.values()).sort((a, b) => {
+  const categories: WholesaleCategory[] = Array.from(productsByCategory.entries()).map(([id, productIds]) => {
+    const c = byId.get(id)!
+    return { id, slug: c.slug, name: c.name, key: c.key, imageUrl: null, imageAlt: null, imageSource: null, productCount: productIds.length }
+  })
+
+  categories.sort((a, b) => {
     const aPriority = a.slug === WHOLESALE_PRIORITY_CATEGORY_SLUG ? 0 : 1
     const bPriority = b.slug === WHOLESALE_PRIORITY_CATEGORY_SLUG ? 0 : 1
     if (aPriority !== bPriority) return aPriority - bPriority
     return a.name.localeCompare(b.name, 'pt-BR')
   })
+
+  if (options.withImages && categories.length > 0) {
+    const covers = await loadCategoryCovers(admin, companyId, categories.map((c) => c.id))
+    const missing = categories.filter((c) => !covers.has(c.id))
+
+    // Sem capa configurada: foto de um produto da categoria (até 3 candidatos, em lote) — nunca um placeholder.
+    const candidateIds = missing.flatMap((c) => (productsByCategory.get(c.id) ?? []).slice(0, 3))
+    const imagesByProduct = candidateIds.length > 0 ? await loadImagesByProduct(companyId, candidateIds) : {}
+
+    for (const c of categories) {
+      const cover = covers.get(c.id)
+      if (cover) { c.imageUrl = cover.url; c.imageAlt = cover.alt; c.imageSource = 'cover'; continue }
+      for (const productId of (productsByCategory.get(c.id) ?? []).slice(0, 3)) {
+        const image = imagesByProduct[productId]?.[0]
+        if (image) { c.imageUrl = image.url; c.imageAlt = image.alt; c.imageSource = 'product'; break }
+      }
+    }
+  }
+
+  return categories
 }
 
 /** `null` (→ 404) quando o produto não existe, é de outra empresa, está inativo OU não está habilitado no atacado. */

@@ -1,6 +1,5 @@
 import type { Metadata } from 'next'
 import Link from 'next/link'
-import { Search } from 'lucide-react'
 import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
 import { getWholesaleCatalogPage, listWholesaleCategories } from '@/services/wholesale/catalog'
 import { getActiveWholesaleBanners } from '@/services/wholesale/banners'
@@ -8,6 +7,7 @@ import { getWholesaleSiteSettings } from '@/services/wholesale/settings'
 import { ProductCard } from './_components/ProductCard'
 import { CategoryMobileButton, CategorySidebar } from './_components/CategoryNav'
 import { BannerCarousel } from './_components/BannerCarousel'
+import { CategoryGrid } from './_components/CategoryGrid'
 import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 
@@ -40,38 +40,32 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
   if (!settings.catalogActive) return null
 
   const pageNumber = Math.max(1, Number(page ?? '1') || 1)
+  // Vitrine de entrada (banner + cards) só na home "limpa"; ao buscar, filtrar ou paginar o cliente vai direto aos produtos.
+  const isFiltered = !!q || !!categoria || pageNumber > 1
   const [result, categories, banners] = await Promise.all([
     getWholesaleCatalogPage(tenant.companyId, { search: q, categorySlug: categoria, page: pageNumber }),
-    listWholesaleCategories(tenant.companyId),
+    listWholesaleCategories(tenant.companyId, { withImages: !isFiltered && settings.showCategories }),
     getActiveWholesaleBanners(tenant.companyId),
   ])
+  const activeCategory = categoria ? categories.find((c) => c.key === categoria) ?? null : null
   const totalPages = Math.max(1, Math.ceil(result.total / result.pageSize))
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-3">
-        {settings.showSearch && (
-          <form method="GET" className="flex gap-2 max-w-md">
-            {categoria && <input type="hidden" name="categoria" value={categoria} />}
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                type="text"
-                name="q"
-                defaultValue={q ?? ''}
-                placeholder="Buscar produtos..."
-                className="w-full pl-9 pr-3 py-2.5 rounded-full border border-gray-200 bg-white text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
-              />
-            </div>
-          </form>
+    <div className="space-y-8 sm:space-y-10">
+      {!isFiltered && banners.length > 0 && <BannerCarousel banners={banners} />}
+
+      {!isFiltered && settings.showCategories && <CategoryGrid categories={categories} basePath={basePath} />}
+
+      <section id="produtos" className="scroll-mt-24 space-y-5">
+        {(activeCategory || q) && (
+          <h1 className="font-serif text-2xl text-gray-900">
+            {activeCategory ? activeCategory.name : `Resultados para "${q}"`}
+          </h1>
         )}
 
         {settings.showCategories && (
           <CategoryMobileButton categories={categories} activeSlug={categoria ?? null} search={q} />
         )}
-      </div>
-
-      {banners.length > 0 && <BannerCarousel banners={banners} />}
 
       <div className="flex gap-8">
         {settings.showCategories && (
@@ -99,7 +93,7 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
                     return (
                       <Link
                         key={p}
-                        href={`${wholesaleHref(basePath, '/')}?${params.toString()}`}
+                        href={`${wholesaleHref(basePath, '/')}?${params.toString()}#produtos`}
                         className={`w-8 h-8 flex items-center justify-center rounded-full text-sm font-medium transition-colors ${
                           p === pageNumber ? 'bg-gray-900 text-white' : 'text-gray-500 hover:bg-gray-100'
                         }`}
@@ -114,6 +108,7 @@ export default async function AtacadoHomePage({ searchParams }: { searchParams: 
           )}
         </div>
       </div>
+      </section>
     </div>
   )
 }

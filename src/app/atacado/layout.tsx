@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { CartProvider } from './_lib/CartContext'
 import { WholesaleBasePathProvider } from './_lib/WholesaleBasePathContext'
 import { HeaderCartLink } from './_components/HeaderCartLink'
+import { HeaderSearch } from './_components/HeaderSearch'
 import { CatalogInactiveNotice } from './_components/CatalogInactiveNotice'
 import { MetaPixelLoader } from './_lib/MetaPixelLoader'
 import { resolveWholesaleSiteTenant } from '@/lib/wholesale/tenant'
@@ -45,11 +46,11 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
         )}
         <div className="min-h-screen flex flex-col bg-white">
           <header className="border-b border-gray-100 bg-white sticky top-0 z-40">
-            <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-              <Link href={wholesaleHref(basePath, '/')} className="flex items-center gap-2 min-w-0">
+            <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2.5">
+              <Link href={wholesaleHref(basePath, '/')} className="order-1 flex items-center gap-2 min-w-0">
                 {logoUrl ? (
-                  <span className="relative h-9 w-32 shrink-0">
-                    <Image src={logoUrl} alt={settings?.displayName ?? 'Catálogo'} fill className="object-contain object-left" />
+                  <span className="relative h-10 w-36 shrink-0 sm:h-11 sm:w-40">
+                    <Image src={logoUrl} alt={settings?.displayName ?? 'Catálogo'} fill sizes="160px" priority className="object-contain object-left" />
                   </span>
                 ) : (
                   <span className="text-lg font-semibold tracking-tight text-gray-900 truncate">
@@ -57,7 +58,17 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
                   </span>
                 )}
               </Link>
-              {!inactive && <HeaderCartLink />}
+              {/* Mobile: busca na 2ª linha, largura total. Desktop: entre logo e carrinho. */}
+              {!inactive && settings?.showSearch && (
+                <div className="order-3 w-full sm:order-2 sm:w-auto sm:flex-1 sm:max-w-md sm:mx-auto">
+                  <HeaderSearch />
+                </div>
+              )}
+              {!inactive && (
+                <div className="order-2 ml-auto sm:order-3 sm:ml-0">
+                  <HeaderCartLink />
+                </div>
+              )}
             </div>
           </header>
 

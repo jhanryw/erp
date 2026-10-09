@@ -19,8 +19,8 @@ const SETTINGS = {
 }
 
 const CATEGORIES = [
-  { id: 1, name: 'Calcinhas', slug: WHOLESALE_PRIORITY_CATEGORY_SLUG },
-  { id: 2, name: 'Blusas', slug: 'blusas' },
+  { id: 1, company_id: COMPANY, name: 'Calcinhas', slug: WHOLESALE_PRIORITY_CATEGORY_SLUG, active: true },
+  { id: 2, company_id: COMPANY, name: 'Blusas', slug: 'blusas', active: true },
 ]
 
 interface ProductSpec {

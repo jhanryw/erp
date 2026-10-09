@@ -9,7 +9,7 @@ import type { WholesaleBanner, BannerLinkType } from '@/services/wholesale/banne
 
 const ACCEPTED_MIME = 'image/jpeg,image/png,image/webp'
 
-interface CategoryOption { id: number; name: string; slug: string }
+interface CategoryOption { id: number; name: string; key: string }
 
 function LinkEditor({
   link,
@@ -40,7 +40,7 @@ function LinkEditor({
           className="text-xs rounded-lg border border-border bg-bg-input text-text-primary px-2 py-1.5 flex-1"
         >
           <option value="">Selecione uma categoria</option>
-          {categories.map((c) => <option key={c.id} value={c.slug}>{c.name}</option>)}
+          {categories.map((c) => <option key={c.id} value={c.key}>{c.name}</option>)}
         </select>
       )}
 
@@ -203,7 +203,7 @@ export function BannerManager({ initialBanners }: { initialBanners: WholesaleBan
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
-    fetch('/api/categorias')
+    fetch('/api/configuracoes/atacado/categorias')
       .then((r) => r.json())
       .then((json) => setCategories(json.categories ?? []))
       .catch(() => setCategories([]))

@@ -17,6 +17,7 @@
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveMediaUrl } from '@/services/media.service'
+import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
 
 export type BannerLinkType = 'none' | 'category' | 'product' | 'url'
 
@@ -89,7 +90,7 @@ interface BannerRow {
   show_text: boolean
   mobile_media: MediaEmbed | MediaEmbed[] | null
   media: { public_id: string; alt_text: string | null; visibility: 'public' | 'private'; storage_key: string | null; external_url: string | null } | { public_id: string; alt_text: string | null; visibility: 'public' | 'private'; storage_key: string | null; external_url: string | null }[] | null
-  categories: { slug: string } | { slug: string }[] | null
+  categories: { id: number } | { id: number }[] | null
   products: { id: number } | { id: number }[] | null
 }
 
@@ -103,17 +104,18 @@ const BANNER_SELECT = `
   id, is_active, sort_order, link_type, link_url, title, subtitle, cta_label, show_text,
   media:media_id(public_id, alt_text, visibility, storage_key, external_url),
   mobile_media:mobile_media_id(public_id, alt_text, visibility, storage_key, external_url),
-  categories:link_category_id(slug),
+  categories:link_category_id(id),
   products:link_product_id(id)
 `
 
-async function fromRow(row: BannerRow): Promise<WholesaleBanner> {
+async function fromRow(row: BannerRow, categoryKeyById: Map<number, string> = new Map()): Promise<WholesaleBanner> {
   const media = one(row.media)
   const category = one(row.categories)
   const product = one(row.products)
 
   const link: WholesaleBannerLink = { type: row.link_type }
-  if (row.link_type === 'category' && category) link.categorySlug = category.slug
+  // `categorySlug` carrega a CHAVE PÚBLICA da categoria (slug, ou slug~id quando o slug se repete).
+  if (row.link_type === 'category' && category) link.categorySlug = categoryKeyById.get(category.id)
   if (row.link_type === 'product' && product) link.productId = product.id
   if (row.link_type === 'url' && row.link_url) link.url = row.link_url
 
@@ -139,6 +141,13 @@ async function fromRow(row: BannerRow): Promise<WholesaleBanner> {
   }
 }
 
+/** Chave pública por id — carregada só quando algum banner aponta para categoria. */
+async function categoryKeysFor(companyId: number, rows: BannerRow[]): Promise<Map<number, string>> {
+  if (!rows.some((r) => r.link_type === 'category')) return new Map()
+  const universe = await loadCategoryUniverse(createAdminClient(), companyId)
+  return new Map(universe.map((c) => [c.id, c.key]))
+}
+
 /** Listagem completa (ativos e inativos, ordenados) — tela de administração. */
 export async function listWholesaleBanners(companyId: number): Promise<WholesaleBanner[]> {
   const admin = createAdminClient()
@@ -148,7 +157,8 @@ export async function listWholesaleBanners(companyId: number): Promise<Wholesale
     .eq('company_id', companyId)
     .order('sort_order', { ascending: true }) as { data: any[] | null }
 
-  return Promise.all((data ?? []).map(fromRow))
+  const keys = await categoryKeysFor(companyId, data ?? [])
+  return Promise.all((data ?? []).map((row) => fromRow(row, keys)))
 }
 
 /** Só banners ativos, ordenados — usado pelo catálogo público (carrossel/estático). */
@@ -162,7 +172,8 @@ export async function getActiveWholesaleBanners(companyId: number): Promise<Whol
     .order('sort_order', { ascending: true }) as { data: any[] | null }
 
   // Banner cuja imagem desktop não resolve nunca vai para a vitrine (src vazio quebraria o next/image).
-  const banners = await Promise.all((data ?? []).map(fromRow))
+  const keys = await categoryKeysFor(companyId, data ?? [])
+  const banners = await Promise.all((data ?? []).map((row) => fromRow(row, keys)))
   return banners.filter((b) => b.imageUrl !== '')
 }
 
@@ -244,13 +255,12 @@ export async function createWholesaleBanner(companyId: number, input: CreateWhol
     .single() as { data: any | null; error: { message: string } | null }
 
   if (error || !data) return { ok: false, error: error?.message ?? 'Falha ao criar banner.', status: 500 }
-  return { ok: true, data: await fromRow(data) }
+  return { ok: true, data: await fromRow(data, await categoryKeysFor(companyId, [data])) }
 }
 
-async function categoryBelongsToCompany(admin: ReturnType<typeof createAdminClient>, companyId: number, slug: string | undefined): Promise<boolean> {
-  if (!slug) return false
-  const { data } = await (admin as any).from('categories').select('id').eq('company_id', companyId).eq('slug', slug).maybeSingle()
-  return !!data
+async function categoryBelongsToCompany(admin: ReturnType<typeof createAdminClient>, companyId: number, key: string | undefined): Promise<boolean> {
+  if (!key) return false
+  return !!resolveCategoryKey(await loadCategoryUniverse(admin, companyId), key)
 }
 
 async function productBelongsToCompany(admin: ReturnType<typeof createAdminClient>, companyId: number, productId: number | undefined): Promise<boolean> {
@@ -261,8 +271,8 @@ async function productBelongsToCompany(admin: ReturnType<typeof createAdminClien
 
 async function resolvedLinkColumns(admin: ReturnType<typeof createAdminClient>, companyId: number, link: WholesaleBannerLink) {
   if (link.type === 'category') {
-    const { data } = await (admin as any).from('categories').select('id').eq('company_id', companyId).eq('slug', link.categorySlug).maybeSingle() as { data: { id: number } | null }
-    return { link_type: 'category', link_category_id: data?.id ?? null, link_product_id: null, link_url: null }
+    const category = resolveCategoryKey(await loadCategoryUniverse(admin, companyId), link.categorySlug ?? '')
+    return { link_type: 'category', link_category_id: category?.id ?? null, link_product_id: null, link_url: null }
   }
   if (link.type === 'product') {
     return { link_type: 'product', link_category_id: null, link_product_id: link.productId ?? null, link_url: null }
@@ -333,7 +343,7 @@ export async function updateWholesaleBanner(companyId: number, bannerId: number,
     .single() as { data: any | null; error: { message: string } | null }
 
   if (error || !data) return { ok: false, error: error?.message ?? 'Falha ao atualizar banner.', status: 500 }
-  return { ok: true, data: await fromRow(data) }
+  return { ok: true, data: await fromRow(data, await categoryKeysFor(companyId, [data])) }
 }
 
 export async function deleteWholesaleBanner(companyId: number, bannerId: number): Promise<{ ok: true } | { ok: false; error: string; status: number }> {

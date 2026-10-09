@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { CompanyLogoManager } from './CompanyLogoManager'
 import { BannerManager } from './BannerManager'
+import { CategoryCoverManager } from './CategoryCoverManager'
 import type { WholesaleSiteSettings } from '@/services/wholesale/settings'
 import type { WholesaleBanner } from '@/services/wholesale/banners'
 
@@ -146,9 +147,17 @@ export function AtacadoConfigClient({ companyId, initialSettings, initialBanners
       <Card className="p-5 space-y-4">
         <div>
           <h3 className="text-sm font-semibold text-text-primary">Banners da vitrine</h3>
-          <p className="text-xs text-text-muted">Aparecem entre a busca/categorias e a lista de produtos. WEBP, JPG ou PNG.</p>
+          <p className="text-xs text-text-muted">Aparecem no topo da página inicial. Cada banner aceita imagem desktop e mobile, textos opcionais e botão. WEBP, JPG ou PNG.</p>
         </div>
         <BannerManager initialBanners={initialBanners} />
+      </Card>
+
+      <Card className="p-5 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-text-primary">Fotos das categorias</h3>
+          <p className="text-xs text-text-muted">Aparecem nos cards logo abaixo do banner. Só categorias com produtos visíveis no atacado são exibidas.</p>
+        </div>
+        <CategoryCoverManager />
       </Card>
     </div>
   )

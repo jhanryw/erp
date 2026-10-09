@@ -56,7 +56,7 @@ export function CategoryMobileButton({ categories, activeSlug, search }: Props) 
         className="flex items-center gap-2 px-3.5 py-2 rounded-full border border-gray-200 text-sm text-gray-700 w-fit"
       >
         <LayoutGrid className="w-4 h-4" />
-        {categories.find((c) => c.slug === activeSlug)?.name ?? 'Categorias'}
+        {categories.find((c) => c.key === activeSlug)?.name ?? 'Categorias'}
       </button>
 
       {drawerOpen && (
@@ -71,7 +71,7 @@ export function CategoryMobileButton({ categories, activeSlug, search }: Props) 
             </div>
             <CategoryLink href={categoryHref(basePath, search, null)} label="Todas" active={!activeSlug} onClick={() => setDrawerOpen(false)} />
             {categories.map((c) => (
-              <CategoryLink key={c.slug} href={categoryHref(basePath, search, c.slug)} label={c.name} active={c.slug === activeSlug} onClick={() => setDrawerOpen(false)} />
+              <CategoryLink key={c.id} href={categoryHref(basePath, search, c.key)} label={c.name} active={c.key === activeSlug} onClick={() => setDrawerOpen(false)} />
             ))}
           </div>
         </div>
@@ -92,7 +92,7 @@ export function CategorySidebar({ categories, activeSlug, search }: Props) {
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide px-3 pb-2">Categorias</p>
         <CategoryLink href={categoryHref(basePath, search, null)} label="Todas" active={!activeSlug} />
         {categories.map((c) => (
-          <CategoryLink key={c.slug} href={categoryHref(basePath, search, c.slug)} label={c.name} active={c.slug === activeSlug} />
+          <CategoryLink key={c.id} href={categoryHref(basePath, search, c.key)} label={c.name} active={c.key === activeSlug} />
         ))}
       </div>
     </aside>
