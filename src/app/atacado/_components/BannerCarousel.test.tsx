@@ -42,12 +42,12 @@ describe('BannerCarousel', () => {
     expect(out).not.toContain('Clique')
   })
 
-  it('desktop + mobile: <picture> com source por breakpoint e proporção 4:5 no celular', () => {
+  it('desktop + mobile: <picture> com source por breakpoint e proporção quadrada no celular', () => {
     const out = html([{ ...base, mobileImageUrl: 'https://cdn.test/m.jpg' }])
     expect(out).toContain('<picture>')
     expect(out).toContain('max-width: 639px')
     expect(out).toContain('min-width: 640px')
-    expect(out).toContain('aspect-[4/5]')
+    expect(out).toContain('aspect-square')
     expect(out).toContain(encodeURIComponent('https://cdn.test/m.jpg'))
     expect(out).toContain(encodeURIComponent('https://cdn.test/d.jpg'))
   })

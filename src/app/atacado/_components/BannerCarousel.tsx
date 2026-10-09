@@ -41,7 +41,7 @@ function BannerImage({ banner, basePath, priority }: { banner: WholesaleBanner; 
 
   const slide = (
     <div
-      className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${hasMobile ? 'aspect-[4/5]' : 'aspect-[16/9]'}`}
+      className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${hasMobile ? 'aspect-square' : 'aspect-[16/9]'}`}
     >
       <picture>
         {mobile && <source media="(max-width: 639px)" srcSet={mobile.srcSet} sizes="100vw" />}

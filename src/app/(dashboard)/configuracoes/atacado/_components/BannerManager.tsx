@@ -175,7 +175,7 @@ function BannerEditor({
           </Button>
         )}
       </div>
-      <p className="text-[11px] text-text-muted">Tamanhos ideais: desktop 1920×640 px (proporção 3:1) · mobile 1080×1350 px (4:5). Sem imagem mobile, a desktop é recortada ao centro.</p>
+      <p className="text-[11px] text-text-muted">Tamanhos ideais: desktop 1920×640 px (proporção 3:1) · mobile 1080×1080 px (quadrada). Sem imagem mobile, a desktop é recortada ao centro.</p>
 
       <div className="flex justify-end">
         <Button
