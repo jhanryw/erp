@@ -24,6 +24,7 @@ import { listMediaByEntities } from '@/services/media.service'
 import { getWholesaleSiteSettings, type WholesaleSiteSettings } from './settings'
 import { selectAllInChunks, selectAllPages } from './queryBatching'
 import { loadAttributesByVariation } from './attributes'
+import { rankBySeed, RECOMMENDATION_MAX } from './recommendations'
 import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
 import { loadCategoryCovers } from './categoryCovers'
 import { evaluateWholesaleSellability, loadWholesaleStockByVariation, type WholesaleSellability } from './sellability'
@@ -369,6 +370,44 @@ export async function listWholesaleCategories(companyId: number, options: { with
   }
 
   return categories
+}
+
+export interface RecommendationOptions {
+  /** Produtos a excluir — todos os que já estão no carrinho (qualquer variação). */
+  excludeProductIds: number[]
+  /** Semente da sessão: define a "aleatoriedade" estável. */
+  seed: string
+  limit?: number
+}
+
+/**
+ * Recomendações do carrinho — "Adicione também". Reaproveita `resolveVisibleProducts` (a MESMA regra
+ * da vitrine: empresa, ativo, habilitado no atacado, preço e estoque) e ainda exige variação vendável,
+ * mesmo quando a empresa exibe produtos esgotados na vitrine. Entre os elegíveis, a ordem vem da seed.
+ */
+export async function getWholesaleRecommendations(companyId: number, options: RecommendationOptions): Promise<WholesaleCatalogProduct[]> {
+  const admin = createAdminClient()
+  const settings = await getWholesaleSiteSettings(companyId)
+  const limit = Math.min(RECOMMENDATION_MAX, Math.max(1, options.limit ?? RECOMMENDATION_MAX))
+  const excluded = new Set(options.excludeProductIds)
+
+  const visible = await resolveVisibleProducts(admin, companyId, settings, {})
+  const eligible = visible.filter((v) => !excluded.has(v.product.id) && v.evaluated.some((e) => e.result.sellable))
+  if (eligible.length === 0) return []
+
+  const byId = new Map(eligible.map((v) => [v.product.id, v]))
+  const picked = rankBySeed([...byId.keys()], options.seed).slice(0, limit).map((id) => byId.get(id)!)
+
+  // Atributos e imagens só dos escolhidos (no máximo 6) — a lista inteira nunca é hidratada.
+  const variationIds = picked.flatMap((p) => p.evaluated.map((e) => e.row.id))
+  const [attrsByVariation, imagesByProduct] = await Promise.all([
+    loadAttributesByVariation(admin as any, variationIds),
+    loadImagesByProduct(companyId, picked.map((p) => p.product.id)),
+  ])
+
+  return picked.map(({ product, evaluated }) =>
+    toCatalogProduct(product, evaluated, attrsByVariation, imagesByProduct[product.id] ?? [], settings.showStockQuantity),
+  )
 }
 
 /** `null` (→ 404) quando o produto não existe, é de outra empresa, está inativo OU não está habilitado no atacado. */

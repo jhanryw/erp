@@ -10,6 +10,7 @@ import { useWholesaleBasePath } from '../_lib/WholesaleBasePathContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { trackInitiateCheckout } from '@/lib/wholesale/metaPixel'
 import { applyValidationToCart, type ValidationResponse } from '../_lib/cartSync'
+import { AddAlsoSection } from './AddAlsoSection'
 
 interface Props {
   minimumOrderAmount: number
@@ -239,6 +240,8 @@ export function CarrinhoClient({ minimumOrderAmount }: Props) {
           </div>
         ))}
       </div>
+
+      <AddAlsoSection />
 
       <div className="space-y-3">
         <div className="flex justify-between text-sm">

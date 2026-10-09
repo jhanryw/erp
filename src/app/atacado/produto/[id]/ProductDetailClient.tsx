@@ -6,15 +6,11 @@ import { toast } from 'sonner'
 import { ImageOff, Minus, Plus, ShoppingCart } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils/currency'
 import { useCart } from '../../_lib/CartContext'
+import { buildCartItem, variationLabel } from '../../_lib/cartItem'
 import { useWholesaleBasePath } from '../../_lib/WholesaleBasePathContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { trackViewContent, trackAddToCart } from '@/lib/wholesale/metaPixel'
 import type { WholesaleCatalogProduct } from '@/services/wholesale/catalog'
-
-/** Rótulo de uma variação — atributos (ex.: "Cor: Preto / Tamanho: M") ou o SKU quando o produto não tem variante de fato. */
-function variationLabel(attributes: { type: string; value: string }[], sku: string): string {
-  return attributes.map((a) => a.value).join(' / ') || sku
-}
 
 export function ProductDetailClient({ product }: { product: WholesaleCatalogProduct }) {
   const { addItem } = useCart()
@@ -58,16 +54,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
 
     for (const v of toAdd) {
       const qty = quantities[v.variationId]
-      addItem({
-        variationId: v.variationId,
-        productId: product.productId,
-        productName: product.name,
-        sku: v.sku,
-        attributes: v.attributes.map((a) => a.value).join(' · '),
-        displayPrice: v.price,
-        imageUrl: product.images[0]?.url ?? null,
-        maxQuantity: v.maxQuantity,
-      }, qty)
+      addItem(buildCartItem(product, v), qty)
       trackAddToCart({ contentId: String(v.variationId), contentName: product.name, value: v.price, quantity: qty })
     }
 
