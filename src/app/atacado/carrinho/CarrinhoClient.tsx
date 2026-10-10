@@ -210,29 +210,30 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
 
       <div className="space-y-3">
         {items.map((item) => (
-          <div key={item.variationId} className="flex gap-3 py-3 border-b border-gray-100">
+          <div key={item.variationId} className="flex gap-3 py-3 border-b border-gray-200">
             <div className="relative w-16 h-16 rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
               {item.imageUrl ? (
                 <CatalogImage src={item.imageUrl} alt={item.productName} sizes="64px" className="object-cover" />
               ) : (
-                <ImageOff className="w-5 h-5 text-gray-300" />
+                <ImageOff aria-hidden className="w-5 h-5 text-gray-500" />
               )}
             </div>
+            {/* Nome em largura total (até 2 linhas); quantidade e remover ficam numa linha própria abaixo. */}
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-800 truncate">{item.productName}</p>
-              {item.attributes && <p className="text-xs text-gray-500">{item.attributes}</p>}
-              <p className="text-sm font-semibold text-gray-900 mt-1">{formatCurrency(item.displayPrice)}</p>
-            </div>
-            <div className="flex flex-col items-end justify-between">
-              <button onClick={() => removeItem(item.variationId)} aria-label="Remover item" className="p-1.5 text-gray-500 hover:text-red-600">
-                <Trash2 className="w-4 h-4" />
-              </button>
-              <QuantityStepper
-                value={item.quantity}
-                max={item.maxQuantity ?? 9999}
-                label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
-                onChange={(next) => updateQuantity(item.variationId, next)}
-              />
+              <p className="text-sm font-medium text-gray-900 line-clamp-2">{item.productName}</p>
+              {item.attributes && <p className="text-xs text-gray-600">{item.attributes}</p>}
+              <p className="text-sm font-semibold text-gray-900 mt-0.5">{formatCurrency(item.displayPrice)}</p>
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <QuantityStepper
+                  value={item.quantity}
+                  max={item.maxQuantity ?? 9999}
+                  label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
+                  onChange={(next) => updateQuantity(item.variationId, next)}
+                />
+                <button onClick={() => removeItem(item.variationId)} aria-label={`Remover ${item.productName}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-red-600">
+                  <Trash2 aria-hidden className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </div>
         ))}

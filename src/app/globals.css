@@ -138,3 +138,11 @@
   outline-offset: 2px;
   border-radius: 6px;
 }
+
+/* Toasts (sonner, montados no layout do ERP) sobre o site público: legíveis em qualquer tema do sistema. */
+body:has(.atacado-root) [data-sonner-toast] {
+  background: #ffffff !important;
+  color: #111827 !important;
+  border: 1px solid #6b7280 !important;
+}
+body:has(.atacado-root) [data-sonner-toast] [data-description] { color: #374151 !important; }
