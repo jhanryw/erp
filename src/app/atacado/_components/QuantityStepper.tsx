@@ -3,9 +3,14 @@
 import { Minus, Plus } from 'lucide-react'
 
 interface Props {
+  /** Quantidade atual — só para exibição e para desabilitar os botões. */
   value: number
   max: number
-  onChange: (next: number) => void
+  /**
+   * Passo (+1/-1). O pai aplica o passo sobre o estado MAIS RECENTE (atualização funcional): cliques rápidos,
+   * que chegam antes de um novo render, nunca perdem incrementos.
+   */
+  onStep: (delta: 1 | -1) => void
   /** Nome acessível do item (ex.: "Calcinha Rosa P/M"). */
   label: string
   disabled?: boolean
@@ -16,8 +21,7 @@ interface Props {
  * Contraste WCAG AA: número em cinza-900 (17:1) sobre branco, borda cinza-500 (4,8:1), botões de 40 px (alvo de toque).
  * Desabilitado = fundo cinza e ícone apagado (nunca confundível com ativo). Nunca ultrapassa `max`.
  */
-export function QuantityStepper({ value, max, onChange, label, disabled = false }: Props) {
-  const clamp = (n: number) => Math.max(0, Math.min(n, max))
+export function QuantityStepper({ value, max, onStep, label, disabled = false }: Props) {
   const btn =
     'flex h-10 w-10 items-center justify-center text-gray-800 transition-colors hover:bg-gray-100 active:bg-gray-200 ' +
     'disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-gray-400 disabled:hover:bg-gray-50'
@@ -28,7 +32,7 @@ export function QuantityStepper({ value, max, onChange, label, disabled = false 
       aria-label={`Quantidade de ${label}`}
       className={`inline-flex shrink-0 items-center overflow-hidden rounded-lg border bg-white ${disabled ? 'border-gray-300' : 'border-gray-500'}`}
     >
-      <button type="button" aria-label={`Diminuir ${label}`} disabled={disabled || value <= 0} onClick={() => onChange(clamp(value - 1))} className={btn}>
+      <button type="button" aria-label={`Diminuir ${label}`} disabled={disabled || value <= 0} onClick={() => onStep(-1)} className={btn}>
         <Minus className="h-4 w-4" aria-hidden />
       </button>
       <span
@@ -37,7 +41,7 @@ export function QuantityStepper({ value, max, onChange, label, disabled = false 
       >
         {value}
       </span>
-      <button type="button" aria-label={`Aumentar ${label}`} disabled={disabled || value >= max} onClick={() => onChange(clamp(value + 1))} className={btn}>
+      <button type="button" aria-label={`Aumentar ${label}`} disabled={disabled || value >= max} onClick={() => onStep(1)} className={btn}>
         <Plus className="h-4 w-4" aria-hidden />
       </button>
     </div>

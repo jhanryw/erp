@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, within, act } from '@testing-library/react'
 import { CartProvider, useCart } from '../../_lib/CartContext'
 import { WholesaleBasePathProvider } from '../../_lib/WholesaleBasePathContext'
 import { ProductDetailClient } from './ProductDetailClient'
@@ -97,6 +97,20 @@ describe('página do produto — várias cores na mesma compra', () => {
       [21, 2, 'Calcinha Invisible Preto', 2, 'https://img/Preto.jpg'],
     ])
     expect(screen.getByText('Nenhuma peça selecionada')).toBeTruthy()
+  })
+
+  it('cliques rápidos (vários antes de um novo render) não perdem incrementos e respeitam o estoque', () => {
+    mount()
+    const plus = screen.getByRole('button', { name: 'Aumentar Rosa P/M' }) as HTMLButtonElement
+    act(() => { for (let i = 0; i < 4; i++) plus.click() }) // estoque 5: 4 cliques no MESMO lote
+    expect(within(screen.getByRole('group', { name: 'Quantidade de Rosa P/M' })).getByText('4')).toBeTruthy()
+
+    act(() => { for (let i = 0; i < 4; i++) plus.click() }) // tenta passar de 5
+    expect(within(screen.getByRole('group', { name: 'Quantidade de Rosa P/M' })).getByText('5')).toBeTruthy()
+
+    const minus = screen.getByRole('button', { name: 'Diminuir Rosa P/M' }) as HTMLButtonElement
+    act(() => { for (let i = 0; i < 3; i++) minus.click() })
+    expect(within(screen.getByRole('group', { name: 'Quantidade de Rosa P/M' })).getByText('2')).toBeTruthy()
   })
 
   it('sem seleção o botão não promete adicionar nada e não altera o carrinho', () => {

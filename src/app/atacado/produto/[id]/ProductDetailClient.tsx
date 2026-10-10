@@ -41,10 +41,12 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
     try { window.history.replaceState(null, '', wholesaleHref(basePath, `/produto/${next.productId}`)) } catch { /* ignora */ }
   }
 
-  function setQty(variationId: number, value: number) {
+  // Atualização FUNCIONAL: o passo é aplicado ao estado mais recente, então cliques rápidos (vários antes de
+  // um novo render) nunca perdem incrementos; o limite do estoque é reaplicado a cada passo.
+  function stepQty(variationId: number, delta: number) {
     const variation = products.flatMap((p) => p.variations).find((v) => v.variationId === variationId)
     if (!variation) return
-    setQuantities((prev) => ({ ...prev, [variationId]: clampQuantity(variation, value) }))
+    setQuantities((prev) => ({ ...prev, [variationId]: clampQuantity(variation, (prev[variationId] ?? 0) + delta) }))
   }
 
   function handleAddToCart() {
@@ -151,7 +153,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
                     max={v.maxQuantity}
                     disabled={!v.available}
                     label={`${active.colorLabel ?? active.name} ${label}`}
-                    onChange={(next) => setQty(v.variationId, next)}
+                    onStep={(delta) => stepQty(v.variationId, delta)}
                   />
                 </div>
               )

@@ -37,7 +37,7 @@ function newIdempotencyKey(): string {
 const signatureOf = (items: CartItem[]) => items.map((i) => `${i.variationId}:${i.quantity}`).join('|')
 
 export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, addAlsoTitle }: Props) {
-  const { items, updateQuantity, removeItem, syncItems, clear, ready, totalDisplayValue } = useCart()
+  const { items, adjustQuantity, removeItem, syncItems, clear, ready, totalDisplayValue } = useCart()
   const basePath = useWholesaleBasePath()
   const [sending, setSending] = useState(false)
   const [checking, setChecking] = useState(false)
@@ -228,7 +228,7 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
                   value={item.quantity}
                   max={item.maxQuantity ?? 9999}
                   label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
-                  onChange={(next) => updateQuantity(item.variationId, next)}
+                  onStep={(delta) => adjustQuantity(item.variationId, delta)}
                 />
                 <button onClick={() => removeItem(item.variationId)} aria-label={`Remover ${item.productName}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-red-600">
                   <Trash2 aria-hidden className="w-4 h-4" />

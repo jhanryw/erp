@@ -70,7 +70,12 @@ export async function revalidateWholesaleCart(
   companyId: number,
   items: CartValidationItemInput[],
 ): Promise<CartValidationResult> {
-  return (await resolveWholesaleCart(companyId, items, { snapshot: false })).validation
+  // Mesma variação repetida na requisição soma as quantidades ANTES de comparar com o estoque
+  // (senão duas linhas de 5 passariam individualmente por um saldo de 5).
+  const merged = new Map<number, number>()
+  for (const item of items) merged.set(item.variationId, (merged.get(item.variationId) ?? 0) + item.quantity)
+  const cart = Array.from(merged, ([variationId, quantity]) => ({ variationId, quantity }))
+  return (await resolveWholesaleCart(companyId, cart, { snapshot: false })).validation
 }
 
 /**

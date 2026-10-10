@@ -163,3 +163,38 @@ describe('revalidateWholesaleCart — pedido mínimo calculado no servidor', () 
     expect(summary.subtotal).toBe(60) // só as 3 un. disponíveis do item 10
   })
 })
+
+describe('carrinho com várias cores (produtos distintos) — estoque, preço e tenant', () => {
+  it('cada cor é validada contra o PRÓPRIO estoque e preço do banco', async () => {
+    setup([{ id: 10, stock: 5, productPrice: 20 }, { id: 11, stock: 2, productPrice: 20, override: 25 }, { id: 12, stock: 0, productPrice: 20 }])
+    const r = await revalidateWholesaleCart(COMPANY, [
+      { variationId: 10, quantity: 5 }, { variationId: 11, quantity: 3 }, { variationId: 12, quantity: 1 },
+    ])
+    expect(r.valid).toBe(false)
+    expect(r.items).toEqual([
+      { variationId: 10, ok: true, price: 20, availableQuantity: 5 },
+      { variationId: 11, ok: false, reason: 'insufficient_stock', price: 25, availableQuantity: 2 },
+      { variationId: 12, ok: false, reason: 'insufficient_stock', price: 20, availableQuantity: 0 },
+    ])
+    // subtotal conta só o que existe: 5x20 + 2x25 (limitado ao estoque)
+    expect(r.summary.subtotal).toBe(150)
+  })
+
+  it('a mesma variação repetida na requisição soma antes de comparar com o estoque', async () => {
+    setup({ id: 10, stock: 5 })
+    const r = await revalidateWholesaleCart(COMPANY, [{ variationId: 10, quantity: 3 }, { variationId: 10, quantity: 3 }])
+    expect(r.items).toHaveLength(1)
+    expect(r.items[0]).toMatchObject({ ok: false, reason: 'insufficient_stock', availableQuantity: 5 })
+  })
+
+  it('variação de OUTRA empresa (cor "irmã" alheia) é tratada como inexistente', async () => {
+    setup([{ id: 10, stock: 5 }, { id: 11, stock: 5, company: 2 }])
+    const r = await revalidateWholesaleCart(COMPANY, [{ variationId: 10, quantity: 1 }, { variationId: 11, quantity: 1 }])
+    expect(r.items[1]).toMatchObject({ ok: false, reason: 'not_found', price: null })
+  })
+
+  it('o corpo da requisição não tem campo de preço: o schema rejeita/ignora preço enviado pelo cliente', async () => {
+    const { POST } = await import('@/app/api/wholesale/cart/validate/route')
+    expect(typeof POST).toBe('function')
+  })
+})

@@ -36,6 +36,8 @@ interface CartContextValue {
   items: CartItem[]
   addItem: (item: Omit<CartItem, 'quantity'>, quantity: number) => void
   updateQuantity: (variationId: number, quantity: number) => void
+  /** Soma `delta` sobre a quantidade MAIS RECENTE (sem perder cliques rápidos); chegar a 0 remove o item. */
+  adjustQuantity: (variationId: number, delta: number) => void
   removeItem: (variationId: number) => void
   clear: () => void
   /** Substitui os itens por uma versão sincronizada com o servidor (ver cartSync.ts). */
@@ -88,6 +90,14 @@ export function CartProvider({ children }: { children: ReactNode }) {
       : prev.map((i) => i.variationId === variationId ? { ...i, quantity: clampQuantity(quantity, i.maxQuantity) } : i))
   }, [])
 
+  const adjustQuantity = useCallback((variationId: number, delta: number) => {
+    setItems((prev) => prev.flatMap((i) => {
+      if (i.variationId !== variationId) return [i]
+      const next = clampQuantity(i.quantity + delta, i.maxQuantity)
+      return next <= 0 ? [] : [{ ...i, quantity: next }]
+    }))
+  }, [])
+
   const removeItem = useCallback((variationId: number) => {
     setItems((prev) => prev.filter((i) => i.variationId !== variationId))
   }, [])
@@ -99,7 +109,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
   const totalDisplayValue = items.reduce((s, i) => s + i.quantity * i.displayPrice, 0)
 
   return (
-    <CartContext.Provider value={{ items, addItem, updateQuantity, removeItem, clear, syncItems, ready: loaded, totalItems, totalDisplayValue }}>
+    <CartContext.Provider value={{ items, addItem, updateQuantity, adjustQuantity, removeItem, clear, syncItems, ready: loaded, totalItems, totalDisplayValue }}>
       {children}
     </CartContext.Provider>
   )

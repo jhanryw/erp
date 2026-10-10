@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import { CartProvider } from '../_lib/CartContext'
 import { WholesaleBasePathProvider } from '../_lib/WholesaleBasePathContext'
 import { CarrinhoClient } from './CarrinhoClient'
@@ -17,7 +17,7 @@ beforeEach(() => {
     ok: true, status: 200,
     json: async () => (url.startsWith('/api/wholesale/recomendacoes')
       ? { products: [reco] }
-      : { valid: true, items: [{ variationId: 101, ok: true, price: 100, availableQuantity: 10 }], summary: { subtotal: 100, minimumOrderAmount: 300, meetsMinimum: false, missingForMinimum: 200 } }),
+      : { valid: true, items: [{ variationId: 101, ok: true, price: 100, availableQuantity: 5 }], summary: { subtotal: 100, minimumOrderAmount: 300, meetsMinimum: false, missingForMinimum: 200 } }),
   })))
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -52,5 +52,26 @@ describe('textos configuráveis no carrinho', () => {
     await screen.findByText(/negrito/)
     expect(container.querySelector('img[src="x"]')).toBeNull()
     expect(container.querySelector('b')).toBeNull()
+  })
+})
+
+describe('quantidades no carrinho — cliques rápidos', () => {
+  it('vários cliques no mesmo lote somam todos, respeitando o estoque; chegar a 0 remove a linha', async () => {
+    localStorage.setItem('santtorini_wholesale_cart_v1', JSON.stringify([{ ...item, quantity: 1, maxQuantity: 5 }]))
+    render(
+      <WholesaleBasePathProvider basePath="">
+        <CartProvider><CarrinhoClient minimumOrderAmount={0} /></CartProvider>
+      </WholesaleBasePathProvider>,
+    )
+    const plus = (await screen.findByRole('button', { name: /Aumentar Calcinha/ })) as HTMLButtonElement
+    act(() => { for (let i = 0; i < 3; i++) plus.click() })
+    expect(screen.getByText('4')).toBeTruthy()
+
+    act(() => { for (let i = 0; i < 5; i++) plus.click() })
+    expect(screen.getByText('5')).toBeTruthy() // teto = estoque
+
+    const minus = screen.getByRole('button', { name: /Diminuir Calcinha/ }) as HTMLButtonElement
+    act(() => { for (let i = 0; i < 5; i++) minus.click() })
+    await waitFor(() => expect(screen.getByText('Seu carrinho está vazio.')).toBeTruthy())
   })
 })
