@@ -12,6 +12,13 @@ import { invalidateWholesaleCompany } from '@/lib/wholesale/ttlCache'
 type Admin = ReturnType<typeof createAdminClient>
 
 export interface ColorGroupMember { productId: number; name: string; active: boolean; wholesaleEnabled: boolean }
+
+/** Erro de schema (tabela/coluna inexistente): a migration 202610091300 ainda não foi aplicada. */
+function isMissingSchema(error: { code?: string; message: string } | null): boolean {
+  if (!error) return false
+  return error.code === '42P01' || error.code === '42703' || error.code === 'PGRST204' || error.code === 'PGRST205' ||
+    /does not exist|could not find|schema cache/i.test(error.message)
+}
 export interface ColorGroup { id: number; name: string; members: ColorGroupMember[] }
 export interface UngroupedProduct { id: number; name: string }
 export interface ColorGroupSuggestion { baseName: string; products: UngroupedProduct[] }
@@ -49,17 +56,27 @@ export function buildSuggestions(products: Array<{ id: number; name: string; col
     .sort((a, b) => a.baseName.localeCompare(b.baseName, 'pt-BR'))
 }
 
-export async function listColorGroups(companyId: number): Promise<{ groups: ColorGroup[]; ungrouped: UngroupedProduct[]; suggestions: ColorGroupSuggestion[] }> {
+export interface ColorGroupsOverview {
+  groups: ColorGroup[]
+  ungrouped: UngroupedProduct[]
+  suggestions: ColorGroupSuggestion[]
+  /** true quando a migration ainda não existe no banco — a tela avisa em vez de falhar. */
+  migrationPending: boolean
+}
+
+export async function listColorGroups(companyId: number): Promise<ColorGroupsOverview> {
   const admin = createAdminClient()
 
   const { data: groupRows, error: groupError } = await (admin as any)
     .from('product_color_groups').select('id, name').eq('company_id', companyId).order('name', { ascending: true }) as
-    { data: { id: number; name: string }[] | null; error: { message: string } | null }
+    { data: { id: number; name: string }[] | null; error: { code?: string; message: string } | null }
+  if (isMissingSchema(groupError)) return { groups: [], ungrouped: [], suggestions: [], migrationPending: true }
   if (groupError) throw new Error(`Falha ao listar grupos de cores: ${groupError.message}`)
 
   const { data: products, error: productError } = await (admin as any)
-    .from('products').select('id, name, active, wholesale_enabled, color_group_id').eq('company_id', companyId).eq('active', true).order('name', { ascending: true }) as
-    { data: { id: number; name: string; active: boolean; wholesale_enabled: boolean; color_group_id: number | null }[] | null; error: { message: string } | null }
+    .from('products').select('id, name, active, wholesale_enabled, color_group_id').eq('company_id', companyId).order('name', { ascending: true }) as
+    { data: { id: number; name: string; active: boolean; wholesale_enabled: boolean; color_group_id: number | null }[] | null; error: { code?: string; message: string } | null }
+  if (isMissingSchema(productError)) return { groups: [], ungrouped: [], suggestions: [], migrationPending: true }
   if (productError) throw new Error(`Falha ao listar produtos: ${productError.message}`)
 
   const all = products ?? []
@@ -69,14 +86,15 @@ export async function listColorGroups(companyId: number): Promise<{ groups: Colo
     members: all.filter((p) => p.color_group_id === g.id).map((p) => ({ productId: p.id, name: p.name, active: p.active, wholesaleEnabled: p.wholesale_enabled })),
   }))
 
-  const ungroupedRows = all.filter((p) => p.color_group_id == null && p.wholesale_enabled)
+  // Membros inativos continuam listados no grupo (para poder removê-los); só candidatos ativos entram no seletor.
+  const ungroupedRows = all.filter((p) => p.color_group_id == null && p.wholesale_enabled && p.active)
   const ungrouped = ungroupedRows.map((p) => ({ id: p.id, name: p.name }))
 
   // Cor de cada produto sem grupo (um único valor de "Cor" entre as variações).
   const colors = await loadSingleColorByProduct(admin, ungroupedRows.map((p) => p.id))
   const suggestions = buildSuggestions(ungroupedRows.map((p) => ({ id: p.id, name: p.name, color: colors.get(p.id) ?? null })))
 
-  return { groups, ungrouped, suggestions }
+  return { groups, ungrouped, suggestions, migrationPending: false }
 }
 
 async function loadSingleColorByProduct(admin: Admin, productIds: number[]): Promise<Map<number, string>> {
@@ -155,7 +173,8 @@ export async function updateColorGroup(companyId: number, groupId: number, patch
 
   if (patch.productIds !== undefined) {
     const ids = Array.from(new Set(patch.productIds))
-    if (ids.length < 2) return { ok: false, error: 'Um grupo precisa de pelo menos 2 produtos. Para desfazer, exclua o grupo.', status: 422 }
+    // Pode ficar com 1 produto (sem efeito no site até outro ser adicionado); para desfazer, exclua o grupo.
+    if (ids.length < 1) return { ok: false, error: 'Informe ao menos 1 produto. Para desfazer, exclua o grupo.', status: 422 }
     const eligible = await productsAreEligible(admin, companyId, ids, groupId)
     if (!eligible.ok) return eligible
     // Libera quem saiu e vincula quem entrou.

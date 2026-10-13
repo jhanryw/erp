@@ -145,6 +145,7 @@ export function ProductDetailClient({ product }: { product: WholesaleCatalogProd
                   <div className="min-w-0">
                     <p className={`text-sm font-medium ${v.available ? 'text-gray-900' : 'text-gray-500'}`}>{label}</p>
                     <p className={`text-sm font-semibold ${v.available ? 'text-gray-900' : 'text-gray-500'}`}>{formatCurrency(v.price)}</p>
+                    {v.available && v.stockQuantity != null && <p className="text-xs text-gray-600">{v.stockQuantity} em estoque</p>}
                     {v.available && v.lowStock && <p className="text-xs text-amber-700">Poucas unidades</p>}
                     {!v.available && <p className="text-xs text-gray-600">Indisponível</p>}
                   </div>

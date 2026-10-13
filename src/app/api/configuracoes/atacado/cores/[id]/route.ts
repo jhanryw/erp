@@ -7,7 +7,7 @@ import { deleteColorGroup, updateColorGroup } from '@/services/wholesale/colorGr
 
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
-  productIds: z.array(z.number().int().positive()).min(2).max(60).optional(),
+  productIds: z.array(z.number().int().positive()).min(1).max(60).optional(),
 })
 
 function parseId(raw: string): number | null {

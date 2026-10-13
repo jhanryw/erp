@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { listMediaByEntities } from '@/services/media.service'
 import { getWholesaleSiteSettings } from './settings'
 import { createFakeAdmin, type FakeTables } from './fakeSupabase.testutil'
-import { getWholesaleProductDetail } from './catalog'
+import { getWholesaleProductDetail, getWholesaleCatalogPage, listWholesaleCategories, getWholesaleRecommendations } from './catalog'
 import { baseNameWithoutColor, buildSuggestions, createColorGroup, deleteColorGroup, listColorGroups, updateColorGroup } from './colorGroups'
 
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }))
@@ -160,5 +160,121 @@ describe('gestão dos grupos (ERP) — isolamento e validação', () => {
     expect((await deleteColorGroup(A, id)).ok).toBe(true)
     expect(tables.products).toHaveLength(3)
     expect(tables.products.every((p) => p.color_group_id == null)).toBe(true)
+  })
+})
+
+describe('produtos continuam individuais na vitrine; o grupo só interliga o detalhe', () => {
+  function fourColors() {
+    addProduct(1, 'Calcinha Invisible Low Rosé', 'Rosé', { group: 7 })
+    addProduct(2, 'Calcinha Invisible Low Beige', 'Beige', { group: 7 })
+    addProduct(3, 'Calcinha Invisible Low Preta', 'Preta', { group: 7 })
+    addProduct(4, 'Calcinha Invisible Low Branca', 'Branca', { group: 7 })
+  }
+
+  it('home, categoria e busca listam os 4 produtos, cada um com o próprio id (sem card único)', async () => {
+    fourColors()
+    const home = await getWholesaleCatalogPage(A)
+    expect(home.products.map((p) => p.productId).sort()).toEqual([1, 2, 3, 4])
+    expect(home.total).toBe(4)
+    expect((await getWholesaleCatalogPage(A, { categorySlug: 'cat' })).products).toHaveLength(4)
+    expect((await getWholesaleCatalogPage(A, { search: 'beige' })).products.map((p) => p.productId)).toEqual([2])
+    expect((await listWholesaleCategories(A))[0].productCount).toBe(4)
+    // os cards da listagem não carregam as outras cores (isso é só do detalhe)
+    expect(home.products.every((p) => (p.family ?? []).length === 0)).toBe(true)
+  })
+
+  it('recomendações podem sugerir qualquer um dos produtos do grupo (não ocultam irmãos)', async () => {
+    fourColors()
+    const recs = await getWholesaleRecommendations(A, { excludeProductIds: [], seed: 's', limit: 6 })
+    expect(recs.map((p) => p.productId).sort()).toEqual([1, 2, 3, 4])
+  })
+
+  it('abrir QUALQUER cor mostra as outras três; a aberta fica fora da lista de irmãos', async () => {
+    fourColors()
+    for (const id of [1, 2, 3, 4]) {
+      const detail = await getWholesaleProductDetail(A, id)
+      expect(detail?.productId).toBe(id)
+      const others = (detail?.family ?? []).map((p) => p.productId).sort()
+      expect(others).toEqual([1, 2, 3, 4].filter((x) => x !== id))
+    }
+  })
+
+  it('cada cor traz dados reais próprios: nome, variação, preço e estoque', async () => {
+    addProduct(1, 'Calcinha Invisible Low Rosé', 'Rosé', { group: 7, stock: 3 })
+    addProduct(2, 'Calcinha Invisible Low Beige', 'Beige', { group: 7, stock: 9 })
+    tables.products.find((p) => p.id === 2)!.wholesale_price = 31.5
+    const detail = await getWholesaleProductDetail(A, 1)
+    const beige = detail!.family![0]
+    expect(beige).toMatchObject({ productId: 2, name: 'Calcinha Invisible Low Beige', colorLabel: 'Beige', priceFrom: 31.5 })
+    expect(beige.variations[0]).toMatchObject({ variationId: 20, sku: 'S2', price: 31.5, maxQuantity: 9 })
+    expect(detail!.variations[0]).toMatchObject({ variationId: 10, price: 20, maxQuantity: 3 })
+  })
+
+  it('remover um produto do grupo tira a cor da página dos demais (e ele fica sem irmãos)', async () => {
+    addProduct(1, 'Calcinha Invisible Low Rosé', 'Rosé'); addProduct(2, 'Calcinha Invisible Low Beige', 'Beige')
+    addProduct(3, 'Calcinha Invisible Low Preta', 'Preta'); addProduct(4, 'Calcinha Invisible Low Branca', 'Branca')
+    const created = await createColorGroup(A, 'Invisible Low', [1, 2, 3, 4])
+    const id = created.ok ? (created as any).data.id : -1
+    expect((await updateColorGroup(A, id, { productIds: [1, 2, 3] })).ok).toBe(true)
+
+    const rose = await getWholesaleProductDetail(A, 1)
+    expect(rose?.family?.map((p) => p.productId).sort()).toEqual([2, 3])
+    const white = await getWholesaleProductDetail(A, 4)
+    expect(white?.family).toEqual([])
+    expect(tables.products.find((p) => p.id === 4)).toBeTruthy() // produto segue existindo, intacto
+  })
+
+  it('produtos de cadastro/SKU/preço/estoque não são tocados ao criar, editar ou desfazer grupo', async () => {
+    addProduct(1, 'A Rosé', 'Rosé'); addProduct(2, 'A Beige', 'Beige')
+    const snapshot = JSON.stringify({ products: tables.products.map(({ color_group_id, ...rest }) => rest), v: tables.product_variations, s: tables.stock_balances })
+    const created = await createColorGroup(A, 'Modelo', [1, 2])
+    const id = created.ok ? (created as any).data.id : -1
+    await updateColorGroup(A, id, { name: 'Outro nome', productIds: [1] })
+    await deleteColorGroup(A, id)
+    expect(JSON.stringify({ products: tables.products.map(({ color_group_id, ...rest }) => rest), v: tables.product_variations, s: tables.stock_balances })).toBe(snapshot)
+  })
+})
+
+describe('gestão — membros inativos e fallback sem migration', () => {
+  it('produto inativo continua listado no grupo (para poder ser removido) mas não é candidato', async () => {
+    addProduct(1, 'A Rosé', 'Rosé'); addProduct(2, 'A Beige', 'Beige', { active: false }); addProduct(3, 'A Preta', 'Preta', { active: false })
+    const created = await createColorGroup(A, 'Modelo', [1, 2])
+    expect(created.ok).toBe(true)
+    const overview = await listColorGroups(A)
+    expect(overview.groups[0].members.map((m) => [m.productId, m.active]).sort()).toEqual([[1, true], [2, false]])
+    expect(overview.ungrouped.map((p) => p.id)).toEqual([]) // 3 é inativo
+  })
+
+  it('grupo pode ficar com 1 produto ao remover (sem efeito no site); 0 é recusado', async () => {
+    addProduct(1, 'A Rosé', 'Rosé'); addProduct(2, 'A Beige', 'Beige')
+    const created = await createColorGroup(A, 'Modelo', [1, 2])
+    const id = created.ok ? (created as any).data.id : -1
+    expect((await updateColorGroup(A, id, { productIds: [1] })).ok).toBe(true)
+    expect(await updateColorGroup(A, id, { productIds: [] })).toMatchObject({ ok: false, status: 422 })
+  })
+
+  it('produto de outra empresa nunca entra, e um produto já agrupado não vai para um segundo grupo', async () => {
+    addProduct(1, 'A Rosé', 'Rosé'); addProduct(2, 'A Beige', 'Beige'); addProduct(3, 'A Preta', 'Preta'); addProduct(9, 'B Preta', 'Preta', { company: B })
+    const g1 = await createColorGroup(A, 'G1', [1, 2])
+    expect(await createColorGroup(A, 'G2', [2, 3])).toMatchObject({ ok: false, status: 409 })
+    const id = g1.ok ? (g1 as any).data.id : -1
+    expect(await updateColorGroup(A, id, { productIds: [1, 2, 9] })).toMatchObject({ ok: false, status: 422 })
+  })
+
+  it('sem a migration: o ERP recebe migrationPending (não 500) e o detalhe segue sem cores', async () => {
+    addProduct(1, 'A Rosé', 'Rosé', { group: 7 })
+    const real = createFakeAdmin(tables)
+    ;(createAdminClient as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+      ...real,
+      from: (t: string) => {
+        if (t === 'product_color_groups') {
+          const q: any = { select: () => q, eq: () => q, order: () => q, then: (r: any) => r({ data: null, error: { code: '42P01', message: 'relation "product_color_groups" does not exist' } }) }
+          return q
+        }
+        return real.from(t)
+      },
+    }))
+    const overview = await listColorGroups(A)
+    expect(overview).toMatchObject({ migrationPending: true, groups: [], ungrouped: [], suggestions: [] })
   })
 })

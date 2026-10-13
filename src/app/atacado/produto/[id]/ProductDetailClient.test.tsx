@@ -54,6 +54,20 @@ describe('página do produto — várias cores na mesma compra', () => {
     expect(within(colors).getByRole('button', { name: 'Rosa' }).getAttribute('aria-pressed')).toBe('true')
   })
 
+  it('abre já na cor do produto aberto (qualquer irmão do grupo) e mostra as demais', () => {
+    const all = [rosa, preto, branco, color(4, 'Nude', [v(41, 'P/M', 21, 6)])]
+    for (const current of all) {
+      cleanup()
+      mount({ ...current, family: all.filter((p) => p.productId !== current.productId) })
+      const colors = screen.getByRole('region', { name: 'Cores' })
+      expect(within(colors).getAllByRole('button')).toHaveLength(4)
+      const selected = within(colors).getAllByRole('button').filter((b) => b.getAttribute('aria-pressed') === 'true')
+      expect(selected).toHaveLength(1)
+      expect(selected[0].getAttribute('aria-label')).toContain(current.colorLabel as string)
+      expect(screen.getByRole('heading', { name: current.name })).toBeTruthy()
+    }
+  })
+
   it('alternar de cor mantém as quantidades das outras e soma peças e subtotal', () => {
     mount()
     inc('Rosa P/M'); inc('Rosa P/M') // 2 x 20
