@@ -10,7 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { buildWhatsAppContactUrl, formatPhoneBR } from '@/lib/wholesale/whatsapp'
-import { isAnonymousPhone } from '@/lib/wholesale/anonymousCustomer'
+import { isAnonymousContact } from '@/lib/wholesale/anonymousCustomer'
 import { getWholesaleOrder } from '@/services/wholesale/ordersAdmin'
 import { ORDER_STATUS_LABEL } from '@/services/wholesale/orderStatus'
 import { ORDER_STATUS_VARIANT } from '../status'
@@ -30,7 +30,7 @@ export default async function PedidoAtacadoPage({ params }: { params: { id: stri
 
   // "Abrir WhatsApp" = conversa da EQUIPE com o comprador, sobre este pedido registrado.
   // Pedido sem contato digitado: não há número do cliente — a equipe responde na conversa que ele abriu.
-  const anonymous = isAnonymousPhone(order.customerPhone)
+  const anonymous = isAnonymousContact(order.customerPhone)
   const whatsappUrl = anonymous ? null : buildWhatsAppContactUrl(
     order.customerPhone,
     `Olá, ${order.customerName}! Sobre o seu pedido de atacado ${order.code} (${order.totalItems} peça${order.totalItems !== 1 ? 's' : ''}, ${formatCurrency(order.subtotal).replace(/ /g, ' ')}).`,

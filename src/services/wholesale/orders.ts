@@ -42,8 +42,9 @@ export interface PersistedOrder {
   id: string
   code: string
   status: 'pending' | 'finalized' | 'cancelled'
-  customerName: string
-  customerPhone: string
+  /** `null` = pedido sem contato digitado (identificado pela conversa no WhatsApp). */
+  customerName: string | null
+  customerPhone: string | null
   totalItems: number
   subtotal: number
   minimumOrderAmount: number
@@ -92,7 +93,7 @@ export function normalizeCustomerName(raw: string): string | null {
 // ─── Leitura do pedido persistido ───────────────────────────────────────────
 
 interface OrderRow {
-  id: string; code: string; status: PersistedOrder['status']; customer_name: string; customer_phone: string
+  id: string; code: string; status: PersistedOrder['status']; customer_name: string | null; customer_phone: string | null
   total_items: number; subtotal: number | string; minimum_order_amount: number | string; sale_id: number | null
   created_at: string; updated_at: string
 }
@@ -148,10 +149,10 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
   const fail = (status: number, error: Extract<CreateOrderOutcome, { ok: false }>['error'], message: string, extra: object = {}): CreateOrderOutcome =>
     ({ ok: false, status, error, message, ...extra })
 
-  // Contato informado (API/futuro): validado como sempre. Sem contato: identidade anônima — o comprador é
-  // identificado pelo próprio WhatsApp ao abrir a conversa.
-  let name: string
-  let customerPhoneE164: string
+  // Contato informado (API/futuro): validado como sempre. Sem contato: NULL/NULL — o comprador é identificado
+  // pelo próprio WhatsApp ao abrir a conversa (ver anonymousCustomer.ts para a transição).
+  let name: string | null = null
+  let customerPhoneE164: string | null = null
   if (input.customer) {
     const validName = normalizeCustomerName(input.customer.name)
     if (!validName) return fail(422, 'invalid_customer', 'Informe seu nome.')
@@ -159,9 +160,6 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
     if (!phone.ok) return fail(422, 'invalid_customer', 'Informe um WhatsApp válido com DDD.')
     name = validName
     customerPhoneE164 = phone.e164
-  } else {
-    name = ANONYMOUS_CUSTOMER_NAME
-    customerPhoneE164 = anonymousPhoneFor(input.idempotencyKey)
   }
 
   // Sem WhatsApp da empresa configurado não faz sentido registrar o pedido.
@@ -198,11 +196,12 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
     })
   }
 
-  const { data, error } = await (admin as any).rpc('rpc_create_wholesale_order', {
+  type RpcResult = { data: { ok: boolean; error?: string; order_id?: string; replay?: boolean } | null; error: { message: string; code?: string } | null }
+  const callRpc = (contactName: string | null, contactPhone: string | null) => (admin as any).rpc('rpc_create_wholesale_order', {
     p_company_id: input.companyId,
     p_idempotency_key: input.idempotencyKey,
-    p_customer_name: name,
-    p_customer_phone: customerPhoneE164,
+    p_customer_name: contactName,
+    p_customer_phone: contactPhone,
     p_minimum_order_amount: validation.summary.minimumOrderAmount,
     p_request_ip_hash: hashRequestIp(input.clientIp),
     p_items: lines.map((l) => ({
@@ -212,7 +211,16 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
     p_max_per_ip_hour: ORDER_MAX_PER_IP_HOUR,
     p_max_per_phone_hour: ORDER_MAX_PER_PHONE_HOUR,
     p_max_per_company_hour: ORDER_MAX_PER_COMPANY_HOUR,
-  }) as { data: { ok: boolean; error?: string; order_id?: string; replay?: boolean } | null; error: { message: string } | null }
+  }) as Promise<RpcResult>
+
+  let { data, error } = await callRpc(name, customerPhoneE164)
+
+  // Ponte de implantação: banco ainda SEM a migration de contato opcional (NOT NULL violation, 23502).
+  // A RPC é atômica (nada ficou gravado, contador intacto), então repete UMA vez com a identidade anônima de
+  // reserva. Depois da migration este ramo nunca executa.
+  if (!data && error?.code === '23502' && name === null) {
+    ;({ data, error } = await callRpc(ANONYMOUS_CUSTOMER_NAME, anonymousPhoneFor(input.idempotencyKey)))
+  }
 
   // Logs sem PII: só empresa, chave de idempotência e nº de linhas (nunca nome/telefone/payload).
   const logContext = { company_id: input.companyId, idempotency_key: input.idempotencyKey, lines: lines.length }
@@ -225,6 +233,7 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
       console.warn(JSON.stringify({ _type: 'warn', event: 'wholesale_order_rate_limited', ts: new Date().toISOString(), ...logContext }))
       return fail(429, 'rate_limited', 'Muitos pedidos em pouco tempo. Tente novamente mais tarde.')
     }
+    if (data.error === 'invalid_contact') return fail(422, 'invalid_customer', 'Contato inválido.')
     if (data.error === 'below_minimum') {
       return fail(422, 'below_minimum', 'Pedido abaixo do valor mínimo.', {
         minimumOrder: validation.summary.minimumOrderAmount, currentTotal: validation.summary.subtotal, missingAmount: validation.summary.missingForMinimum,

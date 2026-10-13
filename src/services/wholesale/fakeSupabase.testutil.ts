@@ -195,12 +195,18 @@ export function createFakeAdmin(tables: FakeTables, options: FakeAdminOptions = 
  * (supabase/tests/wholesale_orders.test.sql) — aqui só se exercita a
  * orquestração do TypeScript. `failOnItemIndex` simula falha ao gravar um item.
  */
-export function createOrdersRpc(opts: { failOnItemIndex?: number } = {}) {
+export function createOrdersRpc(opts: { failOnItemIndex?: number; /** Emula o banco ANTES da migration de contato opcional (NOT NULL em nome/telefone). */ requireContact?: boolean } = {}) {
   return (name: string, a: any, tables: FakeTables) => {
     if (name !== 'rpc_create_wholesale_order') return { data: null, error: { message: `rpc desconhecida: ${name}` } }
     tables.wholesale_orders ??= []
     tables.wholesale_order_items ??= []
     tables.wholesale_order_counters ??= []
+
+    if ((a.p_customer_name == null) !== (a.p_customer_phone == null)) return { data: { ok: false, error: 'invalid_contact' }, error: null }
+    // Antes da migration: NOT NULL violation (23502) — a RPC é atômica, nada é gravado.
+    if (opts.requireContact && (a.p_customer_name == null || a.p_customer_phone == null)) {
+      return { data: null, error: { code: '23502', message: 'null value in column "customer_name" violates not-null constraint' } }
+    }
 
     const existing = tables.wholesale_orders.find((o) => o.company_id === a.p_company_id && o.idempotency_key === a.p_idempotency_key)
     if (existing) return { data: { ok: true, order_id: existing.id, code: existing.code, replay: true }, error: null }
@@ -212,7 +218,7 @@ export function createOrdersRpc(opts: { failOnItemIndex?: number } = {}) {
 
     const recent = tables.wholesale_orders.filter((o) => o.company_id === a.p_company_id)
     if (a.p_request_ip_hash && recent.filter((o) => o.request_ip_hash === a.p_request_ip_hash).length >= a.p_max_per_ip_hour) return { data: { ok: false, error: 'rate_limited' }, error: null }
-    if (recent.filter((o) => o.customer_phone === a.p_customer_phone).length >= a.p_max_per_phone_hour) return { data: { ok: false, error: 'rate_limited' }, error: null }
+    if (a.p_customer_phone != null && recent.filter((o) => o.customer_phone === a.p_customer_phone).length >= a.p_max_per_phone_hour) return { data: { ok: false, error: 'rate_limited' }, error: null }
     if (recent.length >= (a.p_max_per_company_hour ?? Infinity)) return { data: { ok: false, error: 'rate_limited' }, error: null }
 
     // Tudo-ou-nada: monta em memória e só grava se nenhum item falhar.
@@ -230,7 +236,7 @@ export function createOrdersRpc(opts: { failOnItemIndex?: number } = {}) {
     if (!tables.wholesale_order_counters.includes(counter)) tables.wholesale_order_counters.push(counter)
     counter.last_number = number
     tables.wholesale_orders.push({
-      id, company_id: a.p_company_id, order_number: number, code, status: 'pending', customer_name: a.p_customer_name, customer_phone: a.p_customer_phone,
+      id, company_id: a.p_company_id, order_number: number, code, status: 'pending', customer_name: a.p_customer_name == null ? null : String(a.p_customer_name).trim(), customer_phone: a.p_customer_phone,
       total_items: totalItems, subtotal, minimum_order_amount: a.p_minimum_order_amount, idempotency_key: a.p_idempotency_key,
       request_ip_hash: a.p_request_ip_hash, sale_id: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     })

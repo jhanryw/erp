@@ -8,6 +8,10 @@
  *   - telefone reservado `+5500…` (DDD "00" não existe) derivado da chave de idempotência — único por pedido,
  *     logo o limite POR TELEFONE não agrupa visitantes diferentes. Os tetos por IP e por empresa continuam valendo.
  * O ERP e a mensagem de WhatsApp reconhecem o marcador e mostram "não informado", nunca o número fictício.
+ *
+ * ESTRATÉGIA DE TRANSIÇÃO: com a migration 202610131000 (contato opcional) aplicada, o pedido sem contato é gravado com
+ * NULL/NULL e este marcador deixa de ser escrito. Ele continua aqui para (a) funcionar ANTES da migration (o app tenta
+ * NULL e, ao receber NOT NULL violation, regrava com o marcador) e (b) reconhecer pedidos antigos que ainda o tenham.
  */
 
 import { createHash } from 'node:crypto'
@@ -25,4 +29,9 @@ export function anonymousPhoneFor(idempotencyKey: string): string {
 
 export function isAnonymousPhone(e164: string | null | undefined): boolean {
   return !!e164 && e164.startsWith(RESERVED_PREFIX) && /^\+55[0-9]{10,11}$/.test(e164)
+}
+
+/** Pedido sem contato real: telefone NULL (migration aplicada) ou marcador fictício (legado/antes da migration). */
+export function isAnonymousContact(phone: string | null | undefined): boolean {
+  return phone == null || isAnonymousPhone(phone)
 }

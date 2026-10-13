@@ -10,7 +10,7 @@
 
 import { normalizePhoneBR } from '@/lib/utils/phone'
 import { formatCurrency } from '@/lib/utils/currency'
-import { isAnonymousPhone } from './anonymousCustomer'
+import { isAnonymousContact, isAnonymousPhone } from './anonymousCustomer'
 
 export interface WhatsAppOrderItem {
   productName: string
@@ -23,9 +23,10 @@ export interface WhatsAppOrderItem {
 
 export interface WhatsAppOrder {
   code: string
-  customerName: string
-  /** E.164 (ex.: +5584999999999). */
-  customerPhone: string
+  /** `null` = pedido sem contato digitado. */
+  customerName: string | null
+  /** E.164 (ex.: +5584999999999) ou `null`. */
+  customerPhone: string | null
   totalItems: number
   subtotal: number
   items: WhatsAppOrderItem[]
@@ -38,8 +39,8 @@ export interface WhatsAppOrderMessage {
 }
 
 /** `+5584999999999` → `(84) 99999-9999`; formato desconhecido volta como veio. */
-export function formatPhoneBR(e164: string): string {
-  if (isAnonymousPhone(e164)) return 'Não informado'
+export function formatPhoneBR(e164: string | null): string {
+  if (e164 == null || isAnonymousPhone(e164)) return 'Não informado'
   const digits = e164.replace(/\D/g, '').replace(/^55/, '')
   if (digits.length === 11) return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`
   if (digits.length === 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`
@@ -57,7 +58,7 @@ export function buildOrderWhatsAppMessage(order: WhatsAppOrder, companyWhatsappR
   const lines: string[] = [
     `PEDIDO ATACADO — ${order.code}`,
     // Pedido sem contato digitado: não exibe número fictício; a conversa já identifica o cliente.
-    ...(isAnonymousPhone(order.customerPhone)
+    ...(isAnonymousContact(order.customerPhone) || !order.customerName
       ? []
       : [`Cliente: ${order.customerName}`, `WhatsApp: ${formatPhoneBR(order.customerPhone)}`]),
     '',

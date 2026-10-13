@@ -14,8 +14,8 @@ export interface OrderListRow {
   id: string
   code: string
   status: WholesaleOrderStatus
-  customerName: string
-  customerPhone: string
+  customerName: string | null
+  customerPhone: string | null
   totalItems: number
   subtotal: number
   createdAt: string
