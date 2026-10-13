@@ -63,7 +63,7 @@ function renderCart(items: unknown[]) {
 }
 
 const money = (n: number) => new RegExp(n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\s/g, '\\s').replace('$', '\\$'))
-const checkoutButton = () => screen.getByRole('button', { name: /enviar pedido|atualizando|enviando/i }) as HTMLButtonElement
+const checkoutButton = () => screen.getByRole('button', { name: /finalizar pedido|atualizando|enviando/i }) as HTMLButtonElement
 
 beforeEach(() => {
   localStorage.clear()
@@ -119,7 +119,7 @@ describe('"Adicione também" no carrinho', () => {
     await waitFor(() => expect(screen.queryByRole('heading', { name: 'Sutiã Bojo' })).toBeNull())
     expect(screen.getByText('Sutiã Bojo')).toBeTruthy()
     // subtotal estimado = 100 + 120
-    expect(screen.getByText(money(220), { selector: 'span.font-semibold' })).toBeTruthy()
+    expect(screen.getByText(money(220), { selector: 'dd' })).toBeTruthy()
     const saved = JSON.parse(localStorage.getItem(CART_KEY)!)
     expect(saved.map((i: any) => i.variationId)).toEqual([101, 201])
     expect(saved[1]).toMatchObject({ productId: 2, quantity: 1, displayPrice: 120 })
@@ -164,32 +164,37 @@ describe('pedido mínimo e finalização pelo WhatsApp', () => {
     expect(checkoutButton().disabled).toBe(false)
   })
 
-  it('envia o pedido ao servidor (só id+quantidade e contato), registra e abre o WhatsApp', async () => {
+  it('finaliza SEM pedir nome/WhatsApp: envia só id+quantidade, registra e abre o WhatsApp da loja', async () => {
     const location = { href: '' }
     Object.defineProperty(window, 'location', { configurable: true, value: location })
 
     renderCart([cartItem({ quantity: 3 })]) // 300 = mínimo
     await waitFor(() => expect(checkoutButton().disabled).toBe(false))
 
-    fireEvent.change(screen.getByPlaceholderText('Seu nome'), { target: { value: 'Maria Souza' } })
-    fireEvent.change(screen.getByPlaceholderText(/Seu WhatsApp/), { target: { value: '(11) 99999-9999' } })
-    fireEvent.click(checkoutButton())
+    // Nenhum campo de contato no carrinho
+    expect(screen.queryByPlaceholderText('Seu nome')).toBeNull()
+    expect(screen.queryByPlaceholderText(/Seu WhatsApp/)).toBeNull()
 
+    fireEvent.click(checkoutButton())
     await waitFor(() => expect(location.href).toBe('https://wa.me/5511999999999?text=pedido'))
 
     const order = fetchCalls.find((c) => c.url === '/api/wholesale/orders')!
     const body = JSON.parse(String(order.init?.body))
     expect(body.idempotency_key).toMatch(/^[0-9a-f-]{36}$/i)
-    expect(body.customer).toEqual({ name: 'Maria Souza', phone: '(11) 99999-9999' })
+    expect(body.customer).toBeUndefined()
     expect(body.items).toEqual([{ variation_id: 101, quantity: 3 }]) // nunca preço vindo do navegador
     expect(JSON.parse(localStorage.getItem(CART_KEY) ?? '[]')).toEqual([]) // carrinho limpo após registrar
   })
 
-  it('valida nome e telefone antes de chamar o servidor', async () => {
+  it('duplo clique no botão não cria dois pedidos (mesma chave de idempotência, uma chamada em voo)', async () => {
+    const location = { href: '' }
+    Object.defineProperty(window, 'location', { configurable: true, value: location })
     renderCart([cartItem({ quantity: 3 })])
     await waitFor(() => expect(checkoutButton().disabled).toBe(false))
-    fireEvent.click(checkoutButton())
-    expect(fetchCalls.some((c) => c.url === '/api/wholesale/orders')).toBe(false)
+    const button = checkoutButton()
+    fireEvent.click(button); fireEvent.click(button)
+    await waitFor(() => expect(location.href).not.toBe(''))
+    expect(fetchCalls.filter((c) => c.url === '/api/wholesale/orders')).toHaveLength(1)
   })
 
   it('se o servidor recusa por mínimo (422), não abre o WhatsApp', async () => {
@@ -199,8 +204,6 @@ describe('pedido mínimo e finalização pelo WhatsApp', () => {
 
     renderCart([cartItem({ quantity: 3 })])
     await waitFor(() => expect(checkoutButton().disabled).toBe(false))
-    fireEvent.change(screen.getByPlaceholderText('Seu nome'), { target: { value: 'Maria Souza' } })
-    fireEvent.change(screen.getByPlaceholderText(/Seu WhatsApp/), { target: { value: '11999999999' } })
     fireEvent.click(checkoutButton())
 
     await waitFor(() => expect(screen.getByText(/Faltam/)).toBeTruthy())

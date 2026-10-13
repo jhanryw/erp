@@ -20,10 +20,11 @@ import { createWholesaleOrder, ORDER_MAX_LINES, ORDER_MAX_QUANTITY_PER_LINE } fr
 
 const schema = z.object({
   idempotency_key: z.string().uuid(),
+  // Opcional: o carrinho não pede mais nome/WhatsApp — o cliente é identificado pela conversa no WhatsApp.
   customer: z.object({
     name: z.string().min(1).max(120),
     phone: z.string().min(8).max(30),
-  }).strict(),
+  }).strict().optional(),
   items: z.array(z.object({
     variation_id: z.number().int().positive(),
     quantity: z.number().int().positive().max(ORDER_MAX_QUANTITY_PER_LINE),
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
       companyId: ctx.companyId,
       settings: ctx.settings,
       idempotencyKey: parsed.data.idempotency_key,
-      customer: parsed.data.customer,
+      customer: parsed.data.customer ?? null,
       items: parsed.data.items.map((i) => ({ variationId: i.variation_id, quantity: i.quantity })),
       clientIp: clientIp(request),
     })

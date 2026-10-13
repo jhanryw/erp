@@ -21,8 +21,6 @@ interface Props {
   addAlsoTitle?: string
 }
 
-const CUSTOMER_KEY = 'santtorini_wholesale_customer_v1'
-
 interface ConfirmedOrder { code: string; totalItems: number; subtotal: number; whatsappUrl: string }
 
 function newIdempotencyKey(): string {
@@ -47,23 +45,9 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
   const [serverSummary, setServerSummary] = useState<{ signature: string; summary: ValidationResponse['summary'] } | null>(null)
   const openedRef = useRef(false)
 
-  // Dados do comprador (só nome e WhatsApp — sem login/cadastro). Lembrados no aparelho por conveniência.
-  const [customerName, setCustomerName] = useState('')
-  const [customerPhone, setCustomerPhone] = useState('')
   const [confirmed, setConfirmed] = useState<ConfirmedOrder | null>(null)
-  // A MESMA chave é reutilizada em retry/duplo clique da mesma tentativa; muda se itens ou dados mudarem.
+  // A MESMA chave é reutilizada em retry/duplo clique da mesma tentativa; muda se os itens mudarem.
   const attemptRef = useRef<{ signature: string; key: string } | null>(null)
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(CUSTOMER_KEY)
-      if (raw) {
-        const saved = JSON.parse(raw)
-        if (typeof saved?.name === 'string') setCustomerName(saved.name)
-        if (typeof saved?.phone === 'string') setCustomerPhone(saved.phone)
-      }
-    } catch { /* sem localStorage: campos começam vazios */ }
-  }, [])
 
   const useServer = serverSummary != null && serverSummary.signature === signatureOf(items)
   const minimum = useServer ? serverSummary.summary.minimumOrderAmount : minimumOrderAmount
@@ -113,23 +97,19 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
   async function handleCheckout() {
     if (items.length === 0 || belowMinimum || sending) return
 
-    const name = customerName.trim()
-    if (name.length < 2) { toast.error('Informe seu nome.'); return }
-    if (customerPhone.replace(/\D/g, '').length < 10) { toast.error('Informe seu WhatsApp com DDD.'); return }
-
-    const signature = `${signatureOf(items)}#${name}#${customerPhone.replace(/\D/g, '')}`
+    // Sem nome/telefone no carrinho: o cliente é identificado pela própria conversa no WhatsApp.
+    const signature = signatureOf(items)
     if (attemptRef.current?.signature !== signature) attemptRef.current = { signature, key: newIdempotencyKey() }
 
     setSending(true)
     try {
       // O servidor revalida TUDO (preço, estoque, atacado, mínimo) e cria o pedido; o
-      // navegador só manda id + quantidade e os dados de contato.
+      // navegador só manda id + quantidade.
       const res = await fetch('/api/wholesale/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           idempotency_key: attemptRef.current.key,
-          customer: { name, phone: customerPhone },
           items: items.map((i) => ({ variation_id: i.variationId, quantity: i.quantity })),
         }),
       })
@@ -155,7 +135,6 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
       }
 
       // Sucesso: pedido registrado. Só agora o evento de conversão dispara.
-      try { localStorage.setItem(CUSTOMER_KEY, JSON.stringify({ name, phone: customerPhone })) } catch { /* ignora */ }
       trackInitiateCheckout({
         contentIds: items.map((i) => String(i.variationId)),
         value: json.order.subtotal,
@@ -204,89 +183,121 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
     )
   }
 
+  const units = items.reduce((sum, i) => sum + i.quantity, 0)
+  const progress = minimum > 0 ? Math.min(100, Math.round((cartTotal / minimum) * 100)) : 100
+  const priceLine = (i: CartItem) => Math.round(i.displayPrice * i.quantity * 100) / 100
+
   return (
-    <div className="space-y-6 max-w-2xl">
-      <h1 className="text-xl font-semibold text-gray-900">Carrinho</h1>
+    <div className="space-y-10">
+      <div className="space-y-6">
+        <header className="flex items-baseline justify-between gap-3">
+          <h1 className="font-serif text-2xl text-gray-900 sm:text-3xl">Meu carrinho</h1>
+          <p className="text-sm text-gray-600">{units} {units === 1 ? 'peça' : 'peças'}</p>
+        </header>
 
-      <div className="space-y-3">
-        {items.map((item) => (
-          <div key={item.variationId} className="flex gap-3 py-3 border-b border-gray-200">
-            <div className="relative w-16 h-16 rounded-lg bg-gray-50 flex items-center justify-center overflow-hidden shrink-0">
-              {item.imageUrl ? (
-                <CatalogImage src={item.imageUrl} alt={item.productName} sizes="64px" className="object-cover" />
-              ) : (
-                <ImageOff aria-hidden className="w-5 h-5 text-gray-500" />
+        {/* Desktop: lista (~65%) + resumo fixo (~35%). Mobile: lista → resumo → recomendações. */}
+        <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,13fr)_minmax(0,7fr)] lg:gap-8">
+          <section aria-label="Itens do carrinho" className="min-w-0">
+            <ul className="divide-y divide-gray-200 overflow-hidden rounded-2xl border border-gray-200 bg-white">
+              {items.map((item) => (
+                <li key={item.variationId} className="grid grid-cols-[72px_minmax(0,1fr)] gap-x-3 gap-y-2 p-3 sm:grid-cols-[88px_minmax(0,1fr)_auto] sm:items-center sm:gap-x-4 sm:p-4">
+                  <div className="relative row-span-2 h-[72px] w-[72px] shrink-0 overflow-hidden rounded-lg bg-gray-50 sm:row-span-1 sm:h-[88px] sm:w-[88px]">
+                    {item.imageUrl ? (
+                      <CatalogImage src={item.imageUrl} alt={item.productName} sizes="88px" className="object-cover" />
+                    ) : (
+                      <span className="flex h-full w-full items-center justify-center"><ImageOff aria-hidden className="h-5 w-5 text-gray-500" /></span>
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <p className="line-clamp-2 text-sm font-medium leading-snug text-gray-900">{item.productName}</p>
+                    {item.attributes && <p className="mt-0.5 text-xs text-gray-600">{item.attributes}</p>}
+                    <p className="mt-1 text-sm text-gray-700">{formatCurrency(item.displayPrice)} <span className="text-gray-500">cada</span></p>
+                  </div>
+
+                  <div className="col-span-2 flex items-center justify-between gap-3 sm:col-span-1 sm:justify-end sm:gap-5">
+                    <QuantityStepper
+                      value={item.quantity}
+                      max={item.maxQuantity ?? 9999}
+                      label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
+                      onStep={(delta) => adjustQuantity(item.variationId, delta)}
+                    />
+                    <p className="min-w-[5.5rem] text-right text-base font-semibold tabular-nums text-gray-900">{formatCurrency(priceLine(item))}</p>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(item.variationId)}
+                      aria-label={`Remover ${item.productName}`}
+                      className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 transition-colors hover:bg-gray-100 hover:text-red-600"
+                    >
+                      <Trash2 aria-hidden className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-sm">
+              <Link href={wholesaleHref(basePath, '/')} className="text-gray-700 underline underline-offset-2 hover:text-gray-900">Continuar comprando</Link>
+            </p>
+          </section>
+
+          <aside aria-label="Resumo do pedido" className="lg:sticky lg:top-24">
+            <div className="space-y-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+              <h2 className="font-serif text-xl text-gray-900">Resumo do pedido</h2>
+
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between"><dt className="text-gray-600">Peças</dt><dd className="font-medium text-gray-900">{units}</dd></div>
+                <div className="flex justify-between"><dt className="text-gray-600">{useServer ? 'Subtotal' : 'Subtotal estimado'}</dt><dd className="text-lg font-semibold tabular-nums text-gray-900">{formatCurrency(cartTotal)}</dd></div>
+                {minimum > 0 && (
+                  <div className="flex justify-between"><dt className="text-gray-600">Pedido mínimo</dt><dd className="font-medium tabular-nums text-gray-900">{formatCurrency(minimum)}</dd></div>
+                )}
+              </dl>
+
+              {minimum > 0 && (
+                <div className="space-y-2">
+                  <div
+                    role="progressbar"
+                    aria-label="Progresso até o pedido mínimo"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={progress}
+                    className="h-2.5 w-full overflow-hidden rounded-full bg-gray-200"
+                  >
+                    <div className={`h-full rounded-full transition-all duration-300 ${belowMinimum ? 'bg-brand' : 'bg-[#0F7A3F]'}`} style={{ width: `${progress}%` }} />
+                  </div>
+                  {belowMinimum ? (
+                    <p className="text-sm font-medium text-amber-800">
+                      Faltam {formatCurrency(missingForMinimum)} para atingir o pedido mínimo de {formatCurrency(minimum)}.
+                    </p>
+                  ) : (
+                    <p className="text-sm font-medium text-[#0F7A3F]">Pedido mínimo atingido.</p>
+                  )}
+                </div>
               )}
+
+              {minimum > 0 && minimumOrderNote && <p className="whitespace-pre-line text-xs text-gray-600">{minimumOrderNote}</p>}
+
+              <button
+                type="button"
+                onClick={handleCheckout}
+                disabled={sending || checking || belowMinimum}
+                className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0F7A3F] py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#0c6634] active:bg-[#0a5a2d] disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-600"
+              >
+                <MessageCircle aria-hidden className="h-4 w-4" />
+                {sending ? 'Enviando pedido...' : checking ? 'Atualizando...' : 'Finalizar pedido pelo WhatsApp'}
+              </button>
+
+              <p className="text-xs leading-relaxed text-gray-600">
+                {checking
+                  ? 'Atualizando preços e disponibilidade…'
+                  : 'Ao finalizar, abrimos o WhatsApp da loja com o seu pedido completo. Preço e disponibilidade são conferidos no envio.'}
+              </p>
             </div>
-            {/* Nome em largura total (até 2 linhas); quantidade e remover ficam numa linha própria abaixo. */}
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-900 line-clamp-2">{item.productName}</p>
-              {item.attributes && <p className="text-xs text-gray-600">{item.attributes}</p>}
-              <p className="text-sm font-semibold text-gray-900 mt-0.5">{formatCurrency(item.displayPrice)}</p>
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <QuantityStepper
-                  value={item.quantity}
-                  max={item.maxQuantity ?? 9999}
-                  label={`${item.productName}${item.attributes ? ` ${item.attributes}` : ''}`}
-                  onStep={(delta) => adjustQuantity(item.variationId, delta)}
-                />
-                <button onClick={() => removeItem(item.variationId)} aria-label={`Remover ${item.productName}`} className="flex h-10 w-10 items-center justify-center rounded-lg text-gray-600 hover:bg-gray-100 hover:text-red-600">
-                  <Trash2 aria-hidden className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        ))}
+          </aside>
+        </div>
       </div>
 
+      {/* Recomendações depois do carrinho e do resumo — nunca competem com a finalização. */}
       <AddAlsoSection title={addAlsoTitle} />
-
-      <div className="space-y-3">
-        <div className="flex justify-between text-sm">
-          <span className="text-gray-500">{useServer ? 'Seu carrinho' : 'Subtotal estimado'}</span>
-          <span className="font-semibold text-gray-900">{formatCurrency(cartTotal)}</span>
-        </div>
-        {minimum > 0 && (
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-500">Pedido mínimo</span>
-            <span className="text-gray-700">{formatCurrency(minimum)}</span>
-          </div>
-        )}
-
-        {minimum > 0 && minimumOrderNote && <p className="whitespace-pre-line text-xs text-gray-500">{minimumOrderNote}</p>}
-
-        {belowMinimum ? (
-          <p className="text-sm text-amber-700 font-medium">
-            Faltam {formatCurrency(missingForMinimum)} para atingir o pedido mínimo de {formatCurrency(minimum)}.
-          </p>
-        ) : (
-          <p className="text-xs text-gray-500">
-            {checking ? 'Atualizando preços e disponibilidade…' : 'O valor final é sempre conferido no envio do pedido, com preço e disponibilidade atuais.'}
-          </p>
-        )}
-
-        <div className="grid gap-2 sm:grid-cols-2 pt-1">
-          <input
-            type="text" autoComplete="name" placeholder="Seu nome" value={customerName} maxLength={80}
-            onChange={(e) => setCustomerName(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-500 text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
-          />
-          <input
-            type="tel" inputMode="tel" autoComplete="tel" placeholder="Seu WhatsApp (com DDD)" value={customerPhone} maxLength={20}
-            onChange={(e) => setCustomerPhone(e.target.value)}
-            className="w-full px-3 py-2.5 rounded-lg border border-gray-500 text-sm text-gray-900 placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-gray-900/10"
-          />
-        </div>
-
-        <button
-          onClick={handleCheckout}
-          disabled={sending || checking || belowMinimum}
-          className="w-full flex items-center justify-center gap-2 py-3 rounded-full bg-[#0F7A3F] text-white text-sm font-medium hover:brightness-95 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          <MessageCircle className="w-4 h-4" />
-          {sending ? 'Enviando pedido...' : checking ? 'Atualizando...' : 'Enviar pedido pelo WhatsApp'}
-        </button>
-      </div>
     </div>
   )
 }

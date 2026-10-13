@@ -14,6 +14,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { formatPhoneBR } from '@/lib/wholesale/whatsapp'
+import { isAnonymousPhone } from '@/lib/wholesale/anonymousCustomer'
 import { listWholesaleOrders } from '@/services/wholesale/ordersAdmin'
 import { ORDER_STATUSES, ORDER_STATUS_LABEL, type WholesaleOrderStatus } from '@/services/wholesale/orderStatus'
 import { ORDER_STATUS_VARIANT } from './status'
@@ -94,7 +95,7 @@ export default async function PedidosAtacadoPage({
                     <TableRow key={o.id}>
                       <TableCell><Link href={`/pedidos-atacado/${o.id}`} className="font-mono font-medium hover:underline">{o.code}</Link></TableCell>
                       <TableCell>{formatDateTime(o.createdAt)}</TableCell>
-                      <TableCell>{o.customerName}</TableCell>
+                      <TableCell>{isAnonymousPhone(o.customerPhone) ? 'Não informado' : o.customerName}</TableCell>
                       <TableCell>{formatPhoneBR(o.customerPhone)}</TableCell>
                       <TableCell className="text-right tabular-nums">{o.totalItems}</TableCell>
                       <TableCell className="text-right tabular-nums">{formatCurrency(o.subtotal)}</TableCell>

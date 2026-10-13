@@ -10,6 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDateTime } from '@/lib/utils/date'
 import { buildWhatsAppContactUrl, formatPhoneBR } from '@/lib/wholesale/whatsapp'
+import { isAnonymousPhone } from '@/lib/wholesale/anonymousCustomer'
 import { getWholesaleOrder } from '@/services/wholesale/ordersAdmin'
 import { ORDER_STATUS_LABEL } from '@/services/wholesale/orderStatus'
 import { ORDER_STATUS_VARIANT } from '../status'
@@ -28,7 +29,9 @@ export default async function PedidoAtacadoPage({ params }: { params: { id: stri
   if (!order) notFound()
 
   // "Abrir WhatsApp" = conversa da EQUIPE com o comprador, sobre este pedido registrado.
-  const whatsappUrl = buildWhatsAppContactUrl(
+  // Pedido sem contato digitado: não há número do cliente — a equipe responde na conversa que ele abriu.
+  const anonymous = isAnonymousPhone(order.customerPhone)
+  const whatsappUrl = anonymous ? null : buildWhatsAppContactUrl(
     order.customerPhone,
     `Olá, ${order.customerName}! Sobre o seu pedido de atacado ${order.code} (${order.totalItems} peça${order.totalItems !== 1 ? 's' : ''}, ${formatCurrency(order.subtotal).replace(/ /g, ' ')}).`,
   )
@@ -52,8 +55,8 @@ export default async function PedidoAtacadoPage({ params }: { params: { id: stri
       <Card>
         <CardHeader className="text-sm font-semibold">Cliente</CardHeader>
         <CardContent className="grid gap-2 text-sm sm:grid-cols-2">
-          <div><span className="text-text-muted">Nome: </span>{order.customerName}</div>
-          <div><span className="text-text-muted">Telefone: </span>{formatPhoneBR(order.customerPhone)}</div>
+          <div><span className="text-text-muted">Nome: </span>{anonymous ? 'Não informado' : order.customerName}</div>
+          <div><span className="text-text-muted">Telefone: </span>{anonymous ? 'Não informado — o cliente chegou pelo WhatsApp da loja' : formatPhoneBR(order.customerPhone)}</div>
         </CardContent>
       </Card>
 

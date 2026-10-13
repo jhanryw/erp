@@ -11,6 +11,7 @@
 
 import { createHmac } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ANONYMOUS_CUSTOMER_NAME, anonymousPhoneFor } from '@/lib/wholesale/anonymousCustomer'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logError } from '@/lib/errors/log'
 import { normalizePhoneBR } from '@/lib/utils/phone'
@@ -69,7 +70,8 @@ export interface CreateOrderInput {
   companyId: number
   settings: Pick<WholesaleSiteSettings, 'whatsappPhone'>
   idempotencyKey: string
-  customer: { name: string; phone: string }
+  /** Opcional: sem contato, o pedido é gravado com identidade anônima (ver anonymousCustomer.ts). */
+  customer?: { name: string; phone: string } | null
   items: { variationId: number; quantity: number }[]
   /** IP de origem — só é gravado o HMAC. */
   clientIp: string | null
@@ -146,10 +148,21 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
   const fail = (status: number, error: Extract<CreateOrderOutcome, { ok: false }>['error'], message: string, extra: object = {}): CreateOrderOutcome =>
     ({ ok: false, status, error, message, ...extra })
 
-  const name = normalizeCustomerName(input.customer.name)
-  if (!name) return fail(422, 'invalid_customer', 'Informe seu nome.')
-  const phone = normalizePhoneBR(input.customer.phone)
-  if (!phone.ok) return fail(422, 'invalid_customer', 'Informe um WhatsApp válido com DDD.')
+  // Contato informado (API/futuro): validado como sempre. Sem contato: identidade anônima — o comprador é
+  // identificado pelo próprio WhatsApp ao abrir a conversa.
+  let name: string
+  let customerPhoneE164: string
+  if (input.customer) {
+    const validName = normalizeCustomerName(input.customer.name)
+    if (!validName) return fail(422, 'invalid_customer', 'Informe seu nome.')
+    const phone = normalizePhoneBR(input.customer.phone)
+    if (!phone.ok) return fail(422, 'invalid_customer', 'Informe um WhatsApp válido com DDD.')
+    name = validName
+    customerPhoneE164 = phone.e164
+  } else {
+    name = ANONYMOUS_CUSTOMER_NAME
+    customerPhoneE164 = anonymousPhoneFor(input.idempotencyKey)
+  }
 
   // Sem WhatsApp da empresa configurado não faz sentido registrar o pedido.
   if (!normalizePhoneBR(input.settings.whatsappPhone).ok) {
@@ -189,7 +202,7 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
     p_company_id: input.companyId,
     p_idempotency_key: input.idempotencyKey,
     p_customer_name: name,
-    p_customer_phone: phone.e164,
+    p_customer_phone: customerPhoneE164,
     p_minimum_order_amount: validation.summary.minimumOrderAmount,
     p_request_ip_hash: hashRequestIp(input.clientIp),
     p_items: lines.map((l) => ({

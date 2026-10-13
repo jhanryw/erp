@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import { CartProvider } from '../_lib/CartContext'
 import { WholesaleBasePathProvider } from '../_lib/WholesaleBasePathContext'
 import { CarrinhoClient } from './CarrinhoClient'
@@ -44,7 +44,7 @@ describe('textos configuráveis no carrinho', () => {
     expect(screen.getByText('Mínimo de R$ 1,00 (texto livre)')).toBeTruthy()
     // regra comercial intacta: falta R$ 200 para os R$ 300 configurados, e o envio segue bloqueado
     await waitFor(() => expect(screen.getByText(/Faltam/).textContent).toMatch(/200,00/))
-    expect((screen.getByRole('button', { name: /enviar pedido|atualizando/i }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: /finalizar pedido|atualizando/i }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('texto com HTML é exibido como texto, nunca interpretado', async () => {
@@ -65,10 +65,11 @@ describe('quantidades no carrinho — cliques rápidos', () => {
     )
     const plus = (await screen.findByRole('button', { name: /Aumentar Calcinha/ })) as HTMLButtonElement
     act(() => { for (let i = 0; i < 3; i++) plus.click() })
-    expect(screen.getByText('4')).toBeTruthy()
+    const group = () => screen.getByRole('group', { name: /Quantidade de Calcinha/ })
+    expect(within(group()).getByText('4')).toBeTruthy()
 
     act(() => { for (let i = 0; i < 5; i++) plus.click() })
-    expect(screen.getByText('5')).toBeTruthy() // teto = estoque
+    expect(within(group()).getByText('5')).toBeTruthy() // teto = estoque
 
     const minus = screen.getByRole('button', { name: /Diminuir Calcinha/ }) as HTMLButtonElement
     act(() => { for (let i = 0; i < 5; i++) minus.click() })

@@ -49,7 +49,7 @@ function RecommendationCard({ product }: { product: WholesaleCatalogProduct }) {
     <li className="flex flex-col rounded-xl border border-gray-100 bg-white p-2.5">
       <div className="relative aspect-square overflow-hidden rounded-lg bg-gray-50 flex items-center justify-center">
         {cover ? (
-          <CatalogImage src={cover.url} alt={cover.alt ?? product.name} sizes="(min-width: 640px) 200px, 46vw" className="object-cover" />
+          <CatalogImage src={cover.url} alt={cover.alt ?? product.name} sizes="(min-width: 1024px) 180px, (min-width: 640px) 30vw, 46vw" className="object-cover" />
         ) : (
           <ImageOff className="h-6 w-6 text-gray-300" />
         )}
@@ -115,9 +115,9 @@ export function AddAlsoSection({ title = 'Adicione também' }: { title?: string 
   if (!ready || items.length === 0 || visible.length === 0) return null
 
   return (
-    <section aria-labelledby="adicione-tambem" className="space-y-3 pt-2">
-      <h2 id="adicione-tambem" className="font-serif text-xl text-gray-900">{title}</h2>
-      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+    <section aria-labelledby="adicione-tambem" className="space-y-4 border-t border-gray-200 pt-8">
+      <h2 id="adicione-tambem" className="font-serif text-2xl text-gray-900">{title}</h2>
+      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-6">
         {visible.map((product) => <RecommendationCard key={product.productId} product={product} />)}
       </ul>
     </section>
