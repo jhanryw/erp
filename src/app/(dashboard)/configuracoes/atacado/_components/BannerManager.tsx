@@ -175,7 +175,7 @@ function BannerEditor({
           </Button>
         )}
       </div>
-      <p className="text-[11px] text-text-muted">Tamanhos ideais: desktop 1920×640 px (proporção 3:1) · mobile 1080×1080 px (quadrada). Sem imagem mobile, a desktop é recortada ao centro.</p>
+      <p className="text-[11px] text-text-muted">O site acompanha a proporção de cada arte — nada é recortado nem esticado. Desktop: qualquer formato horizontal (ex.: 1920×640). Mobile: quadrada ou vertical (ex.: 1080×1080 ou 1080×1350) ocupa a largura toda do celular. Sem imagem mobile, a arte desktop aparece inteira, com menos altura. Use a mesma proporção em todos os banners do carrossel para a altura não variar entre eles.</p>
 
       <div className="flex justify-end">
         <Button

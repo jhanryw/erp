@@ -17,6 +17,7 @@
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { resolveMediaUrl } from '@/services/media.service'
+import { getImageSize } from '@/lib/media/imageDimensions'
 import { cachedForCompany, invalidateWholesaleCompany } from '@/lib/wholesale/ttlCache'
 import { loadCategoryUniverse, resolveCategoryKey } from './categoryKeys'
 
@@ -68,6 +69,14 @@ export interface WholesaleBanner {
   imageUrl: string
   /** Imagem específica para celular; `null` → usa a desktop. */
   mobileImageUrl: string | null
+  /**
+   * Dimensões reais (px) — só preenchidas na vitrine pública. O componente usa a proporção real da arte
+   * para o contêiner acompanhar a imagem (sem barras e sem recorte); `null` → proporção de reserva.
+   */
+  imageWidth: number | null
+  imageHeight: number | null
+  mobileImageWidth: number | null
+  mobileImageHeight: number | null
   altText: string | null
   title: string | null
   subtitle: string | null
@@ -131,6 +140,10 @@ async function fromRow(row: BannerRow, categoryKeyById: Map<number, string> = ne
     mediaPublicId: media?.public_id ?? '',
     imageUrl: resolved?.ok ? resolved.data.url : '',
     mobileImageUrl: mobileResolved?.ok ? mobileResolved.data.url : null,
+    imageWidth: null,
+    imageHeight: null,
+    mobileImageWidth: null,
+    mobileImageHeight: null,
     altText: media?.alt_text ?? null,
     title: row.title ?? null,
     subtitle: row.subtitle ?? null,
@@ -180,7 +193,17 @@ async function loadActiveWholesaleBanners(companyId: number): Promise<WholesaleB
   // Banner cuja imagem desktop não resolve nunca vai para a vitrine (src vazio quebraria o next/image).
   const keys = await categoryKeysFor(companyId, data ?? [])
   const banners = await Promise.all((data ?? []).map((row) => fromRow(row, keys)))
-  return banners.filter((b) => b.imageUrl !== '')
+  const usable = banners.filter((b) => b.imageUrl !== '')
+
+  // Proporção real de cada arte (memoizada por URL; falha → null e o componente usa proporção de reserva).
+  await Promise.all(usable.map(async (b) => {
+    const [desktop, mobile] = await Promise.all([getImageSize(b.imageUrl), getImageSize(b.mobileImageUrl)])
+    b.imageWidth = desktop?.width ?? null
+    b.imageHeight = desktop?.height ?? null
+    b.mobileImageWidth = mobile?.width ?? null
+    b.mobileImageHeight = mobile?.height ?? null
+  }))
+  return usable
 }
 
 export interface WholesaleBannerContentInput {

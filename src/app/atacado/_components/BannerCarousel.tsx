@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { getImageProps } from 'next/image'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
@@ -24,7 +24,24 @@ export function bannerHasText(banner: WholesaleBanner): boolean {
   return banner.showText && !!(banner.title || banner.subtitle || banner.ctaLabel)
 }
 
-function BannerImage({ banner, basePath, priority }: { banner: WholesaleBanner; basePath: string; priority: boolean }) {
+const FALLBACK_DESKTOP = '3 / 1'
+
+/**
+ * Proporções (CSS `aspect-ratio`) do contêiner, por breakpoint.
+ *  - desktop: proporção real da imagem desktop (reserva 3:1 se as dimensões não puderam ser lidas);
+ *  - celular: proporção real da imagem mobile, se existir; senão a MESMA arte desktop, inteira, na sua proporção
+ *    original. Exceção: foto de fundo com texto do site por cima fica em 16:9 (o texto precisa de altura).
+ */
+export function bannerRatios(banner: WholesaleBanner): { desktop: string; mobile: string } {
+  const ratio = (w: number | null, h: number | null) => (w && h ? `${w} / ${h}` : null)
+  const desktop = ratio(banner.imageWidth, banner.imageHeight) ?? FALLBACK_DESKTOP
+  const mobileOwn = banner.mobileImageUrl ? ratio(banner.mobileImageWidth, banner.mobileImageHeight) : null
+  if (mobileOwn) return { desktop, mobile: mobileOwn }
+  if (banner.mobileImageUrl) return { desktop, mobile: '1 / 1' } // mobile cadastrada, dimensão ilegível
+  return { desktop, mobile: bannerHasText(banner) ? '16 / 9' : desktop }
+}
+
+function BannerImage({ banner, basePath, priority, measureRef }: { banner: WholesaleBanner; basePath: string; priority: boolean; measureRef?: React.Ref<HTMLDivElement> }) {
   const href = bannerHref(basePath, banner)
   const isExternal = banner.link.type === 'url'
   const hasMobile = !!banner.mobileImageUrl
@@ -33,29 +50,31 @@ function BannerImage({ banner, basePath, priority }: { banner: WholesaleBanner; 
   // Direção de arte com <picture>: o navegador baixa SÓ a imagem do seu breakpoint (nunca as duas),
   // ambas otimizadas pelo next/image (via /_next/image, com sharp em produção).
   //
-  // Recorte: banner SEM textos sobrepostos é arte pronta (o texto faz parte da imagem) — nunca é recortado:
-  // `object-contain` mostra a arte inteira em qualquer largura. `object-cover` só quando há texto sobreposto
-  // pelo site, ou seja, a imagem é uma foto de fundo e o recorte nas bordas não remove informação.
-  const common = { alt, fill: true, sizes: '100vw', quality: 80 } as const
+  // PROPORÇÃO: o contêiner acompanha a proporção REAL da arte (largura 100%, altura automática). A imagem
+  // preenche exatamente o contêiner: sem barras laterais, sem recorte e sem distorção — e, como a proporção é
+  // conhecida antes do carregamento, sem salto de layout (CLS). Nada de proporção fixa diferente da imagem.
+  const common = { alt, fill: true, sizes: '(min-width: 1184px) 1152px, 100vw', quality: 80 } as const
   const { props: desktop } = getImageProps({ ...common, src: banner.imageUrl })
   const mobile = hasMobile ? getImageProps({ ...common, src: banner.mobileImageUrl as string }).props : null
 
   const showText = bannerHasText(banner)
-  const artHasText = !showText
-  const fit = artHasText ? 'object-contain' : 'object-cover'
-  // Celular: imagem mobile dedicada → quadrada. Sem ela: arte com texto aparece inteira na proporção 3:1 da
-  // versão desktop; foto de fundo (com texto do site por cima) usa 16:9 recortado.
-  const mobileAspect = hasMobile ? 'aspect-square' : artHasText ? 'aspect-[3/1]' : 'aspect-[16/9]'
+  const ratios = bannerRatios(banner)
+  // Arte pronta (texto na imagem): `contain` por segurança — com a proporção exata equivale a preencher.
+  // Foto de fundo com texto do site por cima: `cover` (recorte nas bordas não remove informação).
+  const fit = showText ? 'object-cover' : 'object-contain'
 
   const slide = (
-    <div className={`relative w-full overflow-hidden rounded-2xl bg-stone-100 sm:aspect-[3/1] ${mobileAspect}`}>
+    <div
+      ref={measureRef}
+      className="relative w-full overflow-hidden rounded-2xl aspect-[var(--banner-ar-m)] sm:aspect-[var(--banner-ar-d)]"
+      style={{ '--banner-ar-m': ratios.mobile, '--banner-ar-d': ratios.desktop } as React.CSSProperties}
+    >
       {/*
-        A <img> carrega o srcSet COMPLETO da desktop com sizes="100vw": sem imagem mobile (ou em telas ≥640 px) o
-        navegador escolhe a largura certa para a tela em vez de baixar a maior. Com imagem mobile, o <source>
-        de ≤639 px a substitui — e só uma das duas é baixada.
+        A <img> carrega o srcSet COMPLETO da desktop: sem imagem mobile (ou em telas ≥640 px) o navegador escolhe
+        a largura certa para a tela. Com imagem mobile, o <source> de ≤639 px a substitui — só uma é baixada.
       */}
       <picture>
-        {mobile && <source media="(max-width: 639px)" srcSet={mobile.srcSet} sizes="100vw" />}
+        {mobile && <source media="(max-width: 639px)" srcSet={mobile.srcSet} sizes={common.sizes} />}
         {/* eslint-disable-next-line jsx-a11y/alt-text */}
         <img {...desktop} alt={alt} className={fit} fetchPriority={priority ? 'high' : undefined} loading={priority ? 'eager' : 'lazy'} />
       </picture>
@@ -92,6 +111,19 @@ export function BannerCarousel({ banners }: { banners: WholesaleBanner[] }) {
 
   const multiple = banners.length > 1
 
+  // Altura do slide atual: como cada arte tem a sua proporção, o contêiner anima de uma altura para outra
+  // (sem salto brusco) e nunca deixa espaço vazio. Sem JS/antes da medição a altura é automática (sem CLS).
+  const slideRef = useRef<HTMLDivElement>(null)
+  const [height, setHeight] = useState<number | null>(null)
+  useLayoutEffect(() => {
+    const el = slideRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    setHeight(el.getBoundingClientRect().height)
+    const observer = new ResizeObserver(() => setHeight(el.getBoundingClientRect().height))
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [index, multiple])
+
   useEffect(() => {
     if (!multiple) return
     if (typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
@@ -121,7 +153,12 @@ export function BannerCarousel({ banners }: { banners: WholesaleBanner[] }) {
         touchStartX.current = null
       }}
     >
-      <BannerImage key={banners[index].id} banner={banners[index]} basePath={basePath} priority={index === 0} />
+      <div
+        className="overflow-hidden rounded-2xl transition-[height] duration-300 ease-out motion-reduce:transition-none"
+        style={height != null ? { height } : undefined}
+      >
+        <BannerImage key={banners[index].id} banner={banners[index]} basePath={basePath} priority={index === 0} measureRef={slideRef} />
+      </div>
 
       <button
         onClick={() => go(-1)}
