@@ -15,7 +15,8 @@ export const fetchCache = 'force-no-store'
 import { z } from 'zod'
 import { NextResponse } from 'next/server'
 import { publicRouteError, resolveWholesalePublicContext } from '@/lib/wholesale/publicContext'
-import { buildOrderWhatsAppMessage } from '@/lib/wholesale/whatsapp'
+import { buildOrderWhatsAppMessage, buildPendingOrderWhatsAppMessage } from '@/lib/wholesale/whatsapp'
+import { resolveClientIp } from '@/lib/wholesale/clientIp'
 import { createWholesaleOrder, ORDER_MAX_LINES, ORDER_MAX_QUANTITY_PER_LINE } from '@/services/wholesale/orders'
 
 const schema = z.object({
@@ -30,20 +31,6 @@ const schema = z.object({
     quantity: z.number().int().positive().max(ORDER_MAX_QUANTITY_PER_LINE),
   }).strict()).min(1).max(ORDER_MAX_LINES),
 }).strict()
-
-/**
- * IP de origem (só para anti-spam; nunca gravado cru). ATENÇÃO: `X-Forwarded-For` só é
- * confiável se o proxy de borda (Traefik/EasyPanel) SOBRESCREVE o valor enviado pelo cliente.
- * Por isso dá pra apontar um header que a borda controla via `WHOLESALE_CLIENT_IP_HEADER`
- * (ex.: `cf-connecting-ip`, `x-real-ip`). Sem a env, usa o 1º valor do X-Forwarded-For.
- * O teto global por empresa (na RPC) protege mesmo se este IP for falsificável.
- */
-function clientIp(request: Request): string | null {
-  const custom = process.env.WHOLESALE_CLIENT_IP_HEADER?.trim().toLowerCase()
-  if (custom) return request.headers.get(custom)?.split(',')[0]?.trim() || null
-  const forwarded = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
-  return forwarded || request.headers.get('x-real-ip') || null
-}
 
 export async function POST(request: Request) {
   const ctx = await resolveWholesalePublicContext()
@@ -73,15 +60,35 @@ export async function POST(request: Request) {
       idempotencyKey: parsed.data.idempotency_key,
       customer: parsed.data.customer ?? null,
       items: parsed.data.items.map((i) => ({ variationId: i.variation_id, quantity: i.quantity })),
-      clientIp: clientIp(request),
+      // Só IP de proxy declarado como confiável (ver clientIp.ts); senão null → balde de IP desconhecido.
+      clientIp: resolveClientIp(request.headers).ip,
     })
   } catch (err) {
     return publicRouteError('POST /api/wholesale/orders', err, { company_id: ctx.companyId, idempotency_key: parsed.data.idempotency_key, lines: parsed.data.items.length })
   }
 
   if (!result.ok) {
-    const { status, ...payload } = result
-    return NextResponse.json(payload, { status })
+    const { status, error, message, minimumOrder, currentTotal, missingAmount, validation, fallbackLines } = result
+
+    // Fallback SOMENTE para rate limiting: o carrinho já passou pela validação do servidor (estoque, preço e
+    // mínimo), e a mensagem é montada AQUI com as linhas do banco — nada do que o cliente enviou entra nela.
+    // Não é um pedido registrado: não há código nem confirmação de registro.
+    if (error === 'rate_limited' && fallbackLines) {
+      const pending = buildPendingOrderWhatsAppMessage(fallbackLines, ctx.settings.whatsappPhone)
+      if (pending) {
+        return NextResponse.json({
+          error, message,
+          fallback: { whatsappUrl: pending.url, message: pending.message, totalItems: pending.totalItems, subtotal: pending.subtotal },
+        }, { status })
+      }
+    }
+
+    // Resposta pública enxuta e explícita: só campos conhecidos (nunca o objeto interno inteiro).
+    return NextResponse.json({
+      error, message,
+      ...(minimumOrder != null ? { minimumOrder, currentTotal, missingAmount } : {}),
+      ...(status === 409 && validation ? { validation } : {}),
+    }, { status })
   }
 
   const { order } = result

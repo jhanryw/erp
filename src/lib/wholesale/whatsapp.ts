@@ -81,6 +81,49 @@ export function buildOrderWhatsAppMessage(order: WhatsAppOrder, companyWhatsappR
   return { message, url: buildWhatsAppUrl(company.e164, message) }
 }
 
+export interface PendingOrderLine {
+  productName: string
+  sku: string
+  attributes: { type: string; value: string }[]
+  quantity: number
+  unitPrice: number
+}
+
+export interface PendingOrderMessage extends WhatsAppOrderMessage {
+  totalItems: number
+  subtotal: number
+}
+
+/**
+ * Mensagem de pedido NÃO registrado (fallback quando o registro está temporariamente limitado).
+ * Sem código de pedido e sem nome/telefone; avisa explicitamente que a loja ainda precisa confirmar.
+ * As linhas vêm do servidor (validadas contra o banco), nunca do navegador.
+ */
+export function buildPendingOrderWhatsAppMessage(lines: PendingOrderLine[], companyWhatsappRaw: string | null | undefined): PendingOrderMessage | null {
+  const company = normalizePhoneBR(companyWhatsappRaw)
+  if (!company.ok || lines.length === 0) return null
+
+  const cents = (value: number) => Math.round(value * 100)
+  const totalItems = lines.reduce((sum, l) => sum + l.quantity, 0)
+  const subtotal = lines.reduce((sum, l) => sum + cents(l.unitPrice) * l.quantity, 0) / 100
+
+  const out: string[] = ['PEDIDO ATACADO — AGUARDANDO CONFIRMAÇÃO DA LOJA', 'Este pedido ainda não foi registrado no sistema; a loja irá confirmar por aqui.', '']
+  lines.forEach((line, index) => {
+    out.push(`${index + 1}. ${line.productName}`)
+    if (line.sku) out.push(`SKU: ${line.sku}`)
+    for (const attr of line.attributes) {
+      if (!attr.value) continue
+      out.push(attr.type ? `${attr.type}: ${attr.value}` : attr.value)
+    }
+    out.push(`${line.quantity} un. × ${money(line.unitPrice)}`)
+    out.push(`Subtotal: ${money(cents(line.unitPrice) * line.quantity / 100)}`)
+  })
+  out.push('', `Total de peças: ${totalItems}`, `Total do pedido: ${money(subtotal)}`)
+
+  const message = out.join('\n')
+  return { message, url: buildWhatsAppUrl(company.e164, message), totalItems, subtotal }
+}
+
 /**
  * Link wa.me genérico (fora do fluxo de pedido) — catálogo desativado
  * (botão "Falar pelo WhatsApp") e contato da equipe com o cliente.

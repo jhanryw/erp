@@ -103,6 +103,55 @@ describe('anti-spam sem telefone: IP e teto por empresa (equivalentes ao limite 
   })
 })
 
+describe('IP desconhecido: balde próprio (não desliga a proteção por IP)', () => {
+  const place = (n: number, over: Partial<CreateOrderInput> = {}) => createWholesaleOrder(input({ idempotencyKey: uuid(n), ...over }))
+  const withEnv = async (env: Record<string, string>, fn: () => Promise<void>) => {
+    Object.assign(process.env, env)
+    try { await fn() } finally { for (const k of Object.keys(env)) delete process.env[k] }
+  }
+
+  it('sem IP confiável todos compartilham o limite do balde desconhecido (60/h) — e depois são limitados', async () => {
+    for (let i = 1; i <= 60; i++) expect((await place(i, { clientIp: null })).ok).toBe(true)
+    const blocked = await place(61, { clientIp: null })
+    expect(blocked).toMatchObject({ ok: false, status: 429, error: 'rate_limited' })
+    // quem tem IP confiável não é afetado pelo balde desconhecido
+    expect((await place(62, { clientIp: '198.51.100.7' })).ok).toBe(true)
+  })
+
+  it('limite do balde é configurável por WHOLESALE_ORDERS_UNKNOWN_IP_PER_HOUR', async () => {
+    await withEnv({ WHOLESALE_ORDERS_UNKNOWN_IP_PER_HOUR: '3' }, async () => {
+      for (let i = 1; i <= 3; i++) expect((await place(i, { clientIp: null })).ok).toBe(true)
+      expect(await place(4, { clientIp: null })).toMatchObject({ ok: false, error: 'rate_limited' })
+    })
+  })
+
+  it('o balde desconhecido não usa o limite por-IP de 30 (clientes legítimos atrás de proxy sem config não são cortados cedo)', async () => {
+    for (let i = 1; i <= 31; i++) expect((await place(i, { clientIp: null })).ok).toBe(true)
+  })
+
+  it('o teto por empresa e a idempotência continuam valendo sem IP', async () => {
+    const first = await place(1, { clientIp: null })
+    const replay = await place(1, { clientIp: null })
+    expect(first.ok && replay.ok && replay.replay).toBe(true)
+    expect(tables.wholesale_orders).toHaveLength(1)
+  })
+
+  it('rate_limited carrega as linhas VALIDADAS do servidor para o fallback; outros erros nunca', async () => {
+    await withEnv({ WHOLESALE_ORDERS_UNKNOWN_IP_PER_HOUR: '1' }, async () => {
+      await place(1, { clientIp: null })
+      const limited = await place(2, { clientIp: null })
+      expect(limited).toMatchObject({ ok: false, status: 429 })
+      if (limited.ok) return
+      expect(limited.fallbackLines).toEqual([expect.objectContaining({ variationId: 10, quantity: 3, unitPrice: 39.9, productName: 'Produto 1' })])
+    })
+    const below = await place(3, { clientIp: '198.51.100.1', items: [{ variationId: 10, quantity: 1 }] })
+    expect(below).toMatchObject({ ok: false, error: 'below_minimum' })
+    expect(below.ok ? null : below.fallbackLines).toBeUndefined()
+    const stock = await place(4, { clientIp: '198.51.100.1', items: [{ variationId: 10, quantity: 99999 }] })
+    expect(stock.ok ? null : stock.fallbackLines).toBeUndefined()
+  })
+})
+
 describe('transição: banco AINDA sem a migration (NOT NULL)', () => {
   beforeEach(() => setup({ requireContact: true }))
 

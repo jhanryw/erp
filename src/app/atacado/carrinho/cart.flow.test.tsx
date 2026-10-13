@@ -211,3 +211,94 @@ describe('pedido mínimo e finalização pelo WhatsApp', () => {
     expect(JSON.parse(localStorage.getItem(CART_KEY)!)).toHaveLength(1) // carrinho preservado
   })
 })
+
+describe('fallback quando o registro está limitado (429 rate_limited)', () => {
+  const FALLBACK = {
+    whatsappUrl: 'https://wa.me/5511999999999?text=PEDIDO%20ATACADO%20%E2%80%94%20AGUARDANDO',
+    message: 'PEDIDO ATACADO — AGUARDANDO CONFIRMAÇÃO DA LOJA\nEste pedido ainda não foi registrado no sistema.',
+    totalItems: 3, subtotal: 300,
+  }
+  const location = { href: '' }
+
+  async function checkout() {
+    Object.defineProperty(window, 'location', { configurable: true, value: location })
+    location.href = ''
+    renderCart([cartItem({ quantity: 3 })])
+    await waitFor(() => expect(checkoutButton().disabled).toBe(false))
+    fireEvent.click(checkoutButton())
+  }
+
+  it('mostra aviso de pedido NÃO registrado, link do WhatsApp e preserva o carrinho — sem código nem sucesso', async () => {
+    orderResponse = { status: 429, body: { error: 'rate_limited', message: 'Muitos pedidos', fallback: FALLBACK } }
+    const fbq = vi.fn(); (window as any).fbq = fbq
+    await checkout()
+
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('Seu pedido ainda não foi registrado')).toBeTruthy()
+    const link = within(alert).getByRole('link', { name: /Continuar pelo WhatsApp/ }) as HTMLAnchorElement
+    expect(link.href).toBe(FALLBACK.whatsappUrl)
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toContain('noopener')
+
+    expect(screen.queryByText(/Pedido AT-/)).toBeNull()                 // nenhum código exibido
+    expect(screen.queryByRole('heading', { name: /Pedido .* registrado/ })).toBeNull() // sem tela de sucesso
+    expect(location.href).toBe('')                                      // não navega sozinho
+    expect(JSON.parse(localStorage.getItem(CART_KEY)!)).toHaveLength(1) // carrinho preservado
+    expect(fbq).not.toHaveBeenCalled()                                  // sem evento de conversão
+    delete (window as any).fbq
+  })
+
+  it('"Tentar registrar de novo" fecha o aviso e permite nova tentativa', async () => {
+    orderResponse = { status: 429, body: { error: 'rate_limited', message: 'Muitos pedidos', fallback: FALLBACK } }
+    await checkout()
+    fireEvent.click(await screen.findByRole('button', { name: 'Tentar registrar de novo' }))
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    orderResponse = { status: 200, body: { order: { code: 'AT-0002', totalItems: 3, subtotal: 300 }, whatsappUrl: 'https://wa.me/5511999999999?text=ok' } }
+    fireEvent.click(checkoutButton())
+    await waitFor(() => expect(location.href).toBe('https://wa.me/5511999999999?text=ok'))
+  })
+
+  it('URL de fallback que não é wa.me é IGNORADA (resposta nunca leva o cliente a um destino arbitrário)', async () => {
+    orderResponse = { status: 429, body: { error: 'rate_limited', message: 'Muitos pedidos', fallback: { ...FALLBACK, whatsappUrl: 'https://evil.example/phish' } } }
+    await checkout()
+    await waitFor(() => expect(fetchCalls.some((c) => c.url === '/api/wholesale/orders')).toBe(true))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(document.querySelector('a[href*="evil.example"]')).toBeNull()
+  })
+
+  it.each([
+    ['estoque/preço (409)', 409, { error: 'items_unavailable', message: 'x', validation: { valid: false, items: [{ variationId: 101, ok: false, reason: 'insufficient_stock', price: 100, availableQuantity: 1 }], summary: { subtotal: 100, minimumOrderAmount: 300, meetsMinimum: false, missingForMinimum: 200 } }, fallback: FALLBACK }],
+    ['abaixo do mínimo (422)', 422, { error: 'below_minimum', message: 'x', minimumOrder: 300, currentTotal: 250, missingAmount: 50, fallback: FALLBACK }],
+    ['erro interno (500)', 500, { error: 'internal_error', message: 'x', fallback: FALLBACK }],
+  ])('%s nunca mostra o fallback, mesmo que a resposta traga um', async (_name, status, body) => {
+    orderResponse = { status, body }
+    await checkout()
+    await waitFor(() => expect(fetchCalls.some((c) => c.url === '/api/wholesale/orders')).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(screen.queryByRole('link', { name: /Continuar pelo WhatsApp/ })).toBeNull()
+  })
+
+  it('copiar mensagem: sucesso e falha do clipboard não quebram a tela', async () => {
+    orderResponse = { status: 429, body: { error: 'rate_limited', message: 'Muitos pedidos', fallback: FALLBACK } }
+    await checkout()
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    fireEvent.click(await screen.findByRole('button', { name: 'Copiar mensagem' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(FALLBACK.message))
+
+    writeText.mockRejectedValueOnce(new Error('negado'))
+    fireEvent.click(screen.getByRole('button', { name: 'Copiar mensagem' }))
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(2))
+    expect(screen.getByRole('alert')).toBeTruthy() // painel segue de pé; o link continua disponível
+  })
+
+  it('falha ao abrir o WhatsApp no fluxo normal: a tela de confirmação mantém o link "Abrir WhatsApp"', async () => {
+    orderResponse = { status: 200, body: { order: { code: 'AT-0003', totalItems: 3, subtotal: 300 }, whatsappUrl: 'https://wa.me/5511999999999?text=ok' } }
+    await checkout()
+    const open = (await screen.findByRole('link', { name: /Abrir WhatsApp/ })) as HTMLAnchorElement
+    expect(open.href).toBe('https://wa.me/5511999999999?text=ok')
+    expect(screen.getByText(/Pedido AT-0003 registrado/)).toBeTruthy()
+  })
+})

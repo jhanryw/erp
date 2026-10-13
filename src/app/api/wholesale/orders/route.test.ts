@@ -40,10 +40,11 @@ describe('POST /api/wholesale/orders', () => {
   })
 
   it('cria (201) usando a empresa do TENANT e só id+quantidade dos itens', async () => {
+    // Sem proxy confiável declarado, o X-Forwarded-For (forjável) NÃO é usado: IP desconhecido.
     const res = await POST(req(valid(), { 'x-forwarded-for': '203.0.113.5, 10.0.0.1' }))
     expect(res.status).toBe(201)
     expect(createWholesaleOrder).toHaveBeenCalledWith(expect.objectContaining({
-      companyId: 7, idempotencyKey: KEY, items: [{ variationId: 10, quantity: 3 }], clientIp: '203.0.113.5',
+      companyId: 7, idempotencyKey: KEY, items: [{ variationId: 10, quantity: 3 }], clientIp: null,
       customer: { name: 'Maria Silva', phone: '84999999999' },
     }))
   })
@@ -135,11 +136,87 @@ describe('POST /api/wholesale/orders', () => {
     expect(logged).not.toMatch(/Maria|84999999999|5584999999999/)
   })
 
-  it('WHOLESALE_CLIENT_IP_HEADER: usa o header controlado pela borda em vez do X-Forwarded-For (que o cliente pode forjar)', async () => {
-    process.env.WHOLESALE_CLIENT_IP_HEADER = 'cf-connecting-ip'
-    try {
-      await POST(req(valid(), { 'x-forwarded-for': '6.6.6.6', 'cf-connecting-ip': '198.51.100.9' }))
-      expect(createWholesaleOrder).toHaveBeenCalledWith(expect.objectContaining({ clientIp: '198.51.100.9' }))
-    } finally { delete process.env.WHOLESALE_CLIENT_IP_HEADER }
+  describe('IP confiável para o rate limiting', () => {
+    const run = async (headers: Record<string, string>, env: Record<string, string>) => {
+      Object.assign(process.env, env)
+      try {
+        ;(createWholesaleOrder as any).mockClear()
+        await POST(req(valid(), headers))
+        return (createWholesaleOrder as any).mock.calls[0][0].clientIp
+      } finally { for (const k of Object.keys(env)) delete process.env[k] }
+    }
+
+    it('sem configuração: X-Forwarded-For e X-Real-IP forjados são IGNORADOS (IP desconhecido)', async () => {
+      expect(await run({ 'x-forwarded-for': '6.6.6.6', 'x-real-ip': '7.7.7.7' }, {})).toBeNull()
+    })
+
+    it('WHOLESALE_CLIENT_IP_HEADER: usa o cabeçalho da borda, não o X-Forwarded-For', async () => {
+      expect(await run({ 'x-forwarded-for': '6.6.6.6', 'cf-connecting-ip': '198.51.100.9' }, { WHOLESALE_CLIENT_IP_HEADER: 'cf-connecting-ip' })).toBe('198.51.100.9')
+    })
+
+    it('cabeçalho configurado ausente ou inválido → desconhecido (nunca cai para o X-Forwarded-For)', async () => {
+      expect(await run({ 'x-forwarded-for': '6.6.6.6' }, { WHOLESALE_CLIENT_IP_HEADER: 'x-real-ip' })).toBeNull()
+      expect(await run({ 'x-real-ip': 'não-é-ip' }, { WHOLESALE_CLIENT_IP_HEADER: 'x-real-ip' })).toBeNull()
+    })
+
+    it('WHOLESALE_TRUSTED_PROXY_HOPS=1: vale a entrada acrescentada pelo proxy (à direita); a forjada à esquerda é ignorada', async () => {
+      expect(await run({ 'x-forwarded-for': '6.6.6.6, 198.51.100.20' }, { WHOLESALE_TRUSTED_PROXY_HOPS: '1' })).toBe('198.51.100.20')
+    })
+
+    it('cadeia mais curta que o nº de proxies configurado → desconhecido', async () => {
+      expect(await run({ 'x-forwarded-for': '198.51.100.20' }, { WHOLESALE_TRUSTED_PROXY_HOPS: '2' })).toBeNull()
+    })
+  })
+
+  describe('fallback de WhatsApp só para rate limiting', () => {
+    const lines = [{ variationId: 10, productId: 1, productName: 'Calcinha Rosa', sku: 'S10', attributes: [{ type: 'Tamanho', value: 'P/M' }], quantity: 6, unitPrice: 29.9 }]
+
+    it('429 rate_limited → fallback com mensagem de pedido NÃO registrado (sem código) e sem dados internos', async () => {
+      ;(createWholesaleOrder as any).mockResolvedValue({ ok: false, status: 429, error: 'rate_limited', message: 'Muitos pedidos', fallbackLines: lines })
+      const res = await POST(req(valid()))
+      const json = await res.json()
+      expect(res.status).toBe(429)
+      expect(json.error).toBe('rate_limited')
+      expect(json.fallback.whatsappUrl.startsWith('https://wa.me/5584988887777?text=')).toBe(true)
+      expect(json.fallback).toMatchObject({ totalItems: 6, subtotal: 179.4 })
+      expect(json.fallback.message).toContain('AGUARDANDO CONFIRMAÇÃO DA LOJA')
+      expect(json.fallback.message).toContain('ainda não foi registrado')
+      expect(json.fallback.message).toContain('Calcinha Rosa')
+      expect(json.fallback.message).toContain('Tamanho: P/M')
+      expect(json.fallback.message).toContain('Total do pedido: R$ 179,40')
+      expect(json.fallback.message).not.toMatch(/AT-\d+/)       // nenhum código de pedido
+      expect(json.order).toBeUndefined()
+      expect(json.fallbackLines).toBeUndefined()                 // linhas internas nunca saem
+      expect(json.validation).toBeUndefined()
+    })
+
+    it.each([
+      ['estoque/preço (409)', { ok: false, status: 409, error: 'items_unavailable', message: 'm', validation: { valid: false, items: [], summary: {} } }],
+      ['abaixo do mínimo (422)', { ok: false, status: 422, error: 'below_minimum', message: 'm', minimumOrder: 300, currentTotal: 100, missingAmount: 200 }],
+      ['contato inválido (422)', { ok: false, status: 422, error: 'invalid_customer', message: 'm' }],
+      ['falha ao criar (500)', { ok: false, status: 500, error: 'create_failed', message: 'm' }],
+      ['WhatsApp da loja ausente (503)', { ok: false, status: 503, error: 'whatsapp_not_configured', message: 'm' }],
+    ])('%s NÃO oferece fallback', async (_name, result) => {
+      ;(createWholesaleOrder as any).mockResolvedValue({ ...result, fallbackLines: lines }) // mesmo que vazasse linhas
+      const res = await POST(req(valid()))
+      const json = await res.json()
+      expect(res.status).toBe((result as any).status)
+      expect(json.fallback).toBeUndefined()
+      expect(json.fallbackLines).toBeUndefined()
+    })
+
+    it('rate_limited sem WhatsApp válido da loja → sem fallback (nunca gera wa.me quebrado)', async () => {
+      ;(resolveWholesalePublicContext as any).mockResolvedValue({ ok: true, companyId: 7, settings: { whatsappPhone: null } })
+      ;(createWholesaleOrder as any).mockResolvedValue({ ok: false, status: 429, error: 'rate_limited', message: 'm', fallbackLines: lines })
+      const json = await (await POST(req(valid()))).json()
+      expect(json.fallback).toBeUndefined()
+    })
+
+    it('sucesso normal segue registrado, com código e sem fallback', async () => {
+      ;(createWholesaleOrder as any).mockResolvedValue({ ok: true, replay: false, order: persisted })
+      const json = await (await POST(req(valid()))).json()
+      expect(json.order.code).toBe('AT-000184')
+      expect(json.fallback).toBeUndefined()
+    })
   })
 })

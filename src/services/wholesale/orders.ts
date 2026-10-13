@@ -11,6 +11,7 @@
 
 import { createHmac } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ResolvedCartLine } from './cartValidation'
 import { ANONYMOUS_CUSTOMER_NAME, anonymousPhoneFor } from '@/lib/wholesale/anonymousCustomer'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { logError } from '@/lib/errors/log'
@@ -22,6 +23,12 @@ export const ORDER_MAX_LINES = 200
 export const ORDER_MAX_QUANTITY_PER_LINE = 10000
 /** Anti-spam (compartilhado entre instâncias — contado no banco, ver a RPC). */
 export const ORDER_MAX_PER_IP_HOUR = 30
+/**
+ * Balde de IP DESCONHECIDO (sem proxy confiável configurado ou cabeçalho ausente/inválido). Todos os pedidos sem IP
+ * confiável compartilham este limite — por isso é maior que o por-IP (30), mas bem abaixo do teto da empresa (200),
+ * que continua valendo. Configurável por `WHOLESALE_ORDERS_UNKNOWN_IP_PER_HOUR` (padrão 60).
+ */
+export const ORDER_MAX_UNKNOWN_IP_HOUR_DEFAULT = 60
 export const ORDER_MAX_PER_PHONE_HOUR = 10
 /** Teto global por empresa/hora — proteção que não depende de confiar em IP nem telefone. */
 export const ORDER_MAX_PER_COMPANY_HOUR = 200
@@ -65,6 +72,8 @@ export type CreateOrderOutcome =
       minimumOrder?: number
       currentTotal?: number
       missingAmount?: number
+      /** Só em `rate_limited`: linhas já validadas pelo servidor, para o fallback de WhatsApp (nunca vem do cliente). */
+      fallbackLines?: ResolvedCartLine[]
     }
 
 export interface CreateOrderInput {
@@ -83,6 +92,13 @@ export function hashRequestIp(ip: string | null): string | null {
   if (!ip) return null
   const secret = process.env.SUPABASE_SERVICE_ROLE_KEY ?? 'wholesale-orders'
   return createHmac('sha256', secret).update(ip).digest('hex')
+}
+
+const UNKNOWN_IP_BUCKET = 'wholesale:unknown-ip'
+
+function unknownIpLimit(): number {
+  const fromEnv = Number(process.env.WHOLESALE_ORDERS_UNKNOWN_IP_PER_HOUR)
+  return Number.isInteger(fromEnv) && fromEnv >= 1 ? fromEnv : ORDER_MAX_UNKNOWN_IP_HOUR_DEFAULT
 }
 
 export function normalizeCustomerName(raw: string): string | null {
@@ -203,12 +219,13 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
     p_customer_name: contactName,
     p_customer_phone: contactPhone,
     p_minimum_order_amount: validation.summary.minimumOrderAmount,
-    p_request_ip_hash: hashRequestIp(input.clientIp),
+    p_request_ip_hash: hashRequestIp(input.clientIp ?? UNKNOWN_IP_BUCKET),
     p_items: lines.map((l) => ({
       variation_id: l.variationId, product_id: l.productId, product_name: l.productName, sku: l.sku,
       attributes: l.attributes, quantity: l.quantity, unit_price: l.unitPrice,
     })),
-    p_max_per_ip_hour: ORDER_MAX_PER_IP_HOUR,
+    // IP desconhecido NÃO desliga a proteção por IP: usa o balde compartilhado, com limite próprio.
+    p_max_per_ip_hour: input.clientIp ? ORDER_MAX_PER_IP_HOUR : unknownIpLimit(),
     p_max_per_phone_hour: ORDER_MAX_PER_PHONE_HOUR,
     p_max_per_company_hour: ORDER_MAX_PER_COMPANY_HOUR,
   }) as Promise<RpcResult>
@@ -230,8 +247,8 @@ export async function createWholesaleOrder(input: CreateOrderInput): Promise<Cre
   }
   if (!data.ok) {
     if (data.error === 'rate_limited') {
-      console.warn(JSON.stringify({ _type: 'warn', event: 'wholesale_order_rate_limited', ts: new Date().toISOString(), ...logContext }))
-      return fail(429, 'rate_limited', 'Muitos pedidos em pouco tempo. Tente novamente mais tarde.')
+      console.warn(JSON.stringify({ _type: 'warn', event: 'wholesale_order_rate_limited', ts: new Date().toISOString(), ip_known: Boolean(input.clientIp), ...logContext }))
+      return fail(429, 'rate_limited', 'Muitos pedidos em pouco tempo. Tente novamente mais tarde.', { fallbackLines: lines })
     }
     if (data.error === 'invalid_contact') return fail(422, 'invalid_customer', 'Contato inválido.')
     if (data.error === 'below_minimum') {

@@ -23,6 +23,12 @@ interface Props {
 
 interface ConfirmedOrder { code: string; totalItems: number; subtotal: number; whatsappUrl: string }
 
+/** Pedido NÃO registrado (registro temporariamente limitado): o cliente segue pelo WhatsApp e a loja confirma. */
+interface PendingFallback { whatsappUrl: string; message: string; totalItems: number; subtotal: number }
+
+/** Só segue link wa.me do próprio servidor — nunca uma URL arbitrária vinda da resposta. */
+const isWhatsAppUrl = (value: unknown): value is string => typeof value === 'string' && value.startsWith('https://wa.me/')
+
 function newIdempotencyKey(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   // Fallback (contexto não-seguro): UUID v4 via Math.random — suficiente como chave de idempotência.
@@ -46,6 +52,7 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
   const openedRef = useRef(false)
 
   const [confirmed, setConfirmed] = useState<ConfirmedOrder | null>(null)
+  const [pending, setPending] = useState<PendingFallback | null>(null)
   // A MESMA chave é reutilizada em retry/duplo clique da mesma tentativa; muda se os itens mudarem.
   const attemptRef = useRef<{ signature: string; key: string } | null>(null)
 
@@ -96,6 +103,7 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
 
   async function handleCheckout() {
     if (items.length === 0 || belowMinimum || sending) return
+    setPending(null)
 
     // Sem nome/telefone no carrinho: o cliente é identificado pela própria conversa no WhatsApp.
     const signature = signatureOf(items)
@@ -128,6 +136,14 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
         })
         toast.error(`Pedido mínimo de ${formatCurrency(json.minimumOrder)} não atingido. Faltam ${formatCurrency(json.missingAmount)}.`)
         return
+      }
+      if (res.status === 429 && json.error === 'rate_limited') {
+        const fb = json.fallback
+        if (fb && isWhatsAppUrl(fb.whatsappUrl) && typeof fb.message === 'string') {
+          // Não é sucesso de registro: sem código, sem evento de conversão, carrinho preservado.
+          setPending({ whatsappUrl: fb.whatsappUrl, message: fb.message, totalItems: Number(fb.totalItems) || 0, subtotal: Number(fb.subtotal) || 0 })
+          return
+        }
       }
       if (!res.ok || !json.order || !json.whatsappUrl) {
         toast.error(typeof json.message === 'string' ? json.message : 'Não foi possível enviar o pedido. Tente novamente.')
@@ -285,6 +301,47 @@ export function CarrinhoClient({ minimumOrderAmount, minimumOrderNote = null, ad
                 <MessageCircle aria-hidden className="h-4 w-4" />
                 {sending ? 'Enviando pedido...' : checking ? 'Atualizando...' : 'Finalizar pedido pelo WhatsApp'}
               </button>
+
+              {pending && (
+                <div role="alert" className="space-y-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5">
+                  <p className="text-sm font-semibold text-amber-900">Seu pedido ainda não foi registrado</p>
+                  <p className="text-xs leading-relaxed text-amber-900">
+                    Recebemos muitos pedidos agora e não conseguimos registrá-lo no sistema. Continue pelo WhatsApp: a mensagem já
+                    leva seus produtos e a loja confirma o pedido com você.
+                  </p>
+                  <a
+                    href={pending.whatsappUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex w-full items-center justify-center gap-2 rounded-full bg-[#0F7A3F] py-3 text-sm font-semibold text-white hover:bg-[#0c6634]"
+                  >
+                    <MessageCircle aria-hidden className="h-4 w-4" /> Continuar pelo WhatsApp
+                  </a>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(pending.message)
+                          toast.success('Mensagem copiada. Cole no WhatsApp da loja.')
+                        } catch {
+                          toast.error('Não foi possível copiar. Use o botão Continuar pelo WhatsApp.')
+                        }
+                      }}
+                      className="flex-1 rounded-full border border-gray-500 py-2.5 text-xs font-medium text-gray-900 hover:bg-white"
+                    >
+                      Copiar mensagem
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPending(null)}
+                      className="flex-1 rounded-full border border-gray-500 py-2.5 text-xs font-medium text-gray-900 hover:bg-white"
+                    >
+                      Tentar registrar de novo
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <p className="text-xs leading-relaxed text-gray-600">
                 {checking
