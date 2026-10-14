@@ -42,7 +42,7 @@ export function CategoryGrid({ categories, basePath, title = 'Nossas categorias'
   if (categories.length === 0) return null
 
   return (
-    <section aria-labelledby="categorias-titulo" className="space-y-4">
+    <section id="categorias" aria-labelledby="categorias-titulo" className="space-y-4 scroll-mt-24">
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-brand">Compre por categoria</p>

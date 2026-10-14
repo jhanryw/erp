@@ -55,7 +55,9 @@ describe('exibição pública dos textos', () => {
 
     const empty = await home({}, { products: [], search: { q: 'renda' } })
     expect(empty).toContain('Nenhum produto encontrado para &quot;renda&quot;.')
-    expect(await layout({})).toContain('Santtorini — vendas por atacado')
+    const footer = await layout({})
+    expect(footer).toContain(`© ${new Date().getFullYear()} Santtorini`) // rodapé institucional padrão: copyright automático
+    expect(footer).toContain('Início') // navegação padrão
   })
 
   it('título/subtítulo da vitrine, título de categorias e de produtos personalizados', async () => {
@@ -78,12 +80,10 @@ describe('exibição pública dos textos', () => {
     expect(await home({ emptyMessage: 'Estamos reabastecendo!' }, { products: [] })).toContain('Estamos reabastecendo!')
   })
 
-  it('rodapé institucional substitui o padrão e mantém as quebras de linha', async () => {
+  it('descrição institucional do rodapé (texto do ERP) aparece na marca e mantém as quebras de linha', async () => {
     const html = await layout({ footerText: 'Santtorini Moda Íntima\nAtendimento: seg a sex' })
-    expect(html).toContain('Santtorini Moda Íntima')
-    expect(html).toContain('Atendimento: seg a sex')
-    expect(html).not.toContain('vendas por atacado')
-    expect(html.match(/<p class="min-h-\[1em\]">/g)).toHaveLength(2)
+    expect(html).toContain('Santtorini Moda Íntima\nAtendimento: seg a sex')
+    expect(html).toContain('whitespace-pre-line')
   })
 })
 

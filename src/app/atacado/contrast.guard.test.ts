@@ -29,8 +29,11 @@ describe('contraste do site de atacado', () => {
     expect(offenders).toEqual([])
   })
 
-  it('botão com texto branco nunca usa o verde #25D366 (1,98:1)', () => {
-    for (const f of files) expect(readFileSync(f, 'utf8')).not.toContain('#25D366')
+  it('texto branco nunca usa o verde #25D366 (1,98:1); só o botão do glifo oficial do WhatsApp (gráfico, sem texto) pode', () => {
+    for (const f of files) {
+      if (f.endsWith('FloatingWhatsApp.tsx')) continue
+      expect(readFileSync(f, 'utf8')).not.toContain('#25D366')
+    }
   })
 
   it('o layout força tema claro e cor de texto explícita', () => {

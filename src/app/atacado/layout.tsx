@@ -12,6 +12,14 @@ import { getWholesaleSiteSettings, getWholesaleCompanyLogoUrl } from '@/services
 import { getWholesaleBasePath } from '@/lib/wholesale/requestContext'
 import { wholesaleHref } from '@/lib/wholesale/site-host'
 import { resolveSiteTexts } from '@/services/wholesale/siteTexts'
+import { DEFAULT_SITE_CHROME } from '@/services/wholesale/siteChrome'
+import { getActiveAnnouncements } from '@/services/wholesale/announcements'
+import { getFiscalProfile } from '@/services/wholesale/fiscalProfile'
+import { resolveStoreInfo } from '@/services/wholesale/storeInfo'
+import { buildWhatsAppContactUrl } from '@/lib/wholesale/whatsapp'
+import { AnnouncementBar } from './_components/AnnouncementBar'
+import { SiteFooter } from './_components/SiteFooter'
+import { FloatingWhatsApp } from './_components/FloatingWhatsApp'
 
 // Configuração/catálogo nunca vêm do cache de dados do Next.
 export const dynamic = 'force-dynamic'
@@ -39,9 +47,14 @@ export const metadata: Metadata = {
 export default async function AtacadoLayout({ children }: { children: React.ReactNode }) {
   const basePath = getWholesaleBasePath()
   const tenant = await resolveWholesaleSiteTenant()
-  const [settings, logoUrl] = tenant
-    ? await Promise.all([getWholesaleSiteSettings(tenant.companyId), getWholesaleCompanyLogoUrl(tenant.companyId)])
-    : [null, null]
+  const [settings, logoUrl, announcements, fiscal] = tenant
+    ? await Promise.all([
+        getWholesaleSiteSettings(tenant.companyId),
+        getWholesaleCompanyLogoUrl(tenant.companyId),
+        getActiveAnnouncements(tenant.companyId),
+        getFiscalProfile(tenant.companyId),
+      ])
+    : [null, null, [], null]
 
   // Catálogo desativado (seção 26 do pedido): nunca produto/banner/login —
   // só logo, mensagem e WhatsApp. Ignora `children` de propósito — nenhuma
@@ -49,6 +62,14 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
   // desativado.
   const texts = resolveSiteTexts(settings?.texts, settings?.displayName ?? null)
   const inactive = !!tenant && !!settings && !settings.catalogActive
+
+  // Institucional: tudo vem de configuração do ERP (rodapé, loja, redes) e do MESMO número de WhatsApp do carrinho.
+  // Configurações antigas/sem migration → padrões seguros (rodapé padrão, botão flutuante com mensagem padrão).
+  const chrome = settings ? (settings.chrome ?? DEFAULT_SITE_CHROME) : undefined
+  const companyName = settings?.displayName ?? ''
+  const store = chrome ? resolveStoreInfo(chrome.store, fiscal, settings?.displayName ?? null) : null
+  const whatsappUrl = settings && chrome ? buildWhatsAppContactUrl(settings.whatsappPhone, chrome.whatsappFloat.message) : null
+  const description = settings?.texts.footerText ? settings.texts.footerText.split('\n') : []
 
   return (
     <WholesaleBasePathProvider basePath={basePath}>
@@ -59,6 +80,13 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
         {/* O site público é SEMPRE claro: sem isto, texto sem cor explícita herdava o tema do ERP (claro sobre
             branco no modo escuro do sistema) e os controles nativos (select/input) viravam escuros. */}
         <div className="atacado-root min-h-screen flex flex-col bg-white text-gray-900" style={{ colorScheme: 'light' }}>
+          {/* Sem mensagens ativas (ou sem migration) a barra simplesmente não existe. */}
+          {!inactive && announcements.length > 0 && (
+            <AnnouncementBar
+              announcements={announcements.map(({ id, message, linkUrl, backgroundColor, textColor }) => ({ id, message, linkUrl, backgroundColor, textColor }))}
+              intervalSeconds={settings?.announcementIntervalSeconds ?? 5}
+            />
+          )}
           <header className="border-b border-gray-100 bg-white sticky top-0 z-40">
             <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2.5">
               <Link href={wholesaleHref(basePath, '/')} className="order-1 flex items-center gap-2 min-w-0">
@@ -94,12 +122,25 @@ export default async function AtacadoLayout({ children }: { children: React.Reac
             )}
           </main>
 
-          <footer className="border-t border-gray-100 py-6 mt-10">
-            {/* Texto puro (React escapa); \n do campo multilinha vira quebra de linha. */}
-            <div className="max-w-6xl mx-auto px-4 text-xs text-gray-500 text-center space-y-1">
-              {texts.footerLines.map((line, i) => <p key={i} className="min-h-[1em]">{line}</p>)}
-            </div>
-          </footer>
+          {chrome && store && (
+            <SiteFooter
+              basePath={basePath}
+              companyName={companyName}
+              logoUrl={logoUrl}
+              description={description}
+              chrome={chrome}
+              store={store}
+              hasExplicitStoreName={!!(chrome.store.tradeName || chrome.store.legalName)}
+              whatsappUrl={whatsappUrl}
+              year={new Date().getFullYear()}
+              compact={inactive}
+            />
+          )}
+
+          {/* Só atendimento (não substitui a finalização). Só existe com o WhatsApp comercial configurado. */}
+          {!inactive && whatsappUrl && chrome && (
+            <FloatingWhatsApp url={whatsappUrl} enabledDesktop={chrome.whatsappFloat.enabledDesktop} enabledMobile={chrome.whatsappFloat.enabledMobile} />
+          )}
         </div>
       </CartProvider>
     </WholesaleBasePathProvider>
