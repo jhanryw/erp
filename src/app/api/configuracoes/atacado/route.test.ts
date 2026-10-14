@@ -49,4 +49,37 @@ describe('PUT /api/configuracoes/atacado — textos', () => {
     await put({ minimumOrderAmount: 400 })
     expect(updateWholesaleSiteSettings).toHaveBeenCalledWith(7, { minimumOrderAmount: 400 })
   })
+
+  describe('chrome (rodapé, loja, redes e botão flutuante)', () => {
+    it('grava na empresa da sessão e aceita configuração válida', async () => {
+      const chrome = { footer: { hours: 'Seg a sex' }, store: { cnpj: '11.222.333/0001-81', state: 'rn' }, social: { instagramUrl: 'https://instagram.com/x' }, whatsappFloat: { enabledMobile: false } }
+      const res = await put({ company_id: 99, chrome, announcementIntervalSeconds: 8 })
+      expect(res.status).toBe(200)
+      expect(updateWholesaleSiteSettings).toHaveBeenCalledWith(7, expect.objectContaining({
+        announcementIntervalSeconds: 8,
+        chrome: expect.objectContaining({ store: expect.objectContaining({ cnpj: '11.222.333/0001-81', state: 'RN' }) }),
+      }))
+    })
+
+    it.each([
+      ['link javascript: nos links legais', { footer: { legalLinks: [{ label: 'T', url: 'javascript:alert(1)' }] } }],
+      ['Instagram com data:', { social: { instagramUrl: 'data:text/html,x' } }],
+      ['CNPJ inválido', { store: { cnpj: '11.222.333/0001-80' } }],
+      ['número próprio do botão flutuante (não existe 2º número)', { whatsappFloat: { phone: '+5584999999999' } }],
+      ['mensagem do botão acima de 300', { whatsappFloat: { message: 'x'.repeat(301) } }],
+    ])('recusa: %s', async (_n, chrome) => {
+      expect((await put({ chrome })).status).toBe(422)
+      expect(updateWholesaleSiteSettings).not.toHaveBeenCalled()
+    })
+
+    it('intervalo da barra fora de 3–30 s é recusado', async () => {
+      expect((await put({ announcementIntervalSeconds: 1 })).status).toBe(422)
+      expect((await put({ announcementIntervalSeconds: 31 })).status).toBe(422)
+    })
+
+    it('o número do botão flutuante é o whatsappPhone (campo único), validado como sempre', async () => {
+      expect((await put({ whatsappPhone: '123' })).status).toBe(422)
+      expect((await put({ whatsappPhone: '84988887777' })).status).toBe(200)
+    })
+  })
 })

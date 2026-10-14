@@ -6,6 +6,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { getWholesaleSiteSettings, updateWholesaleSiteSettings } from '@/services/wholesale/settings'
 import { normalizePhoneBR } from '@/lib/utils/phone'
 import { wholesaleSiteTextsSchema } from '@/services/wholesale/siteTexts'
+import { siteChromeSchema } from '@/services/wholesale/siteChrome'
 
 // ─── GET /api/configuracoes/atacado — configuração do catálogo público ────────
 
@@ -33,6 +34,10 @@ const putSchema = z.object({
   pixelId: z.preprocess((v) => (v === '' || v == null ? null : v), z.string().max(60).nullable().optional()),
   // Personalização de textos (null/vazio = padrão). `.strict()` rejeita chave desconhecida — nada além dos 8 textos.
   texts: wholesaleSiteTextsSchema.strict().optional(),
+  // Rodapé, loja, redes e botão flutuante (validação de URL/CNPJ/tamanhos em siteChrome.ts). O número de WhatsApp
+  // NÃO está aqui: continua sendo `whatsappPhone`, o mesmo da finalização do carrinho.
+  chrome: siteChromeSchema.optional(),
+  announcementIntervalSeconds: z.coerce.number().int().min(3).max(30).optional(),
 }).partial()
 
 export async function PUT(request: Request) {

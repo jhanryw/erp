@@ -15,23 +15,13 @@
  */
 
 import { createHash } from 'node:crypto'
+import { ANONYMOUS_CUSTOMER_NAME, RESERVED_PREFIX, isAnonymousContact, isAnonymousPhone } from './anonymousMarker'
 
-export const ANONYMOUS_CUSTOMER_NAME = 'Cliente do site'
-
-const RESERVED_PREFIX = '+5500'
+export { ANONYMOUS_CUSTOMER_NAME, isAnonymousContact, isAnonymousPhone }
 
 /** `+5500` + 8 dígitos determinísticos da chave de idempotência (replay do mesmo pedido gera o mesmo valor). */
 export function anonymousPhoneFor(idempotencyKey: string): string {
   const digest = createHash('sha256').update(idempotencyKey).digest()
   const n = digest.readUInt32BE(0) % 100_000_000
   return `${RESERVED_PREFIX}${String(n).padStart(8, '0')}`
-}
-
-export function isAnonymousPhone(e164: string | null | undefined): boolean {
-  return !!e164 && e164.startsWith(RESERVED_PREFIX) && /^\+55[0-9]{10,11}$/.test(e164)
-}
-
-/** Pedido sem contato real: telefone NULL (migration aplicada) ou marcador fictício (legado/antes da migration). */
-export function isAnonymousContact(phone: string | null | undefined): boolean {
-  return phone == null || isAnonymousPhone(phone)
 }

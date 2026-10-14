@@ -10,7 +10,7 @@
 
 import { normalizePhoneBR } from '@/lib/utils/phone'
 import { formatCurrency } from '@/lib/utils/currency'
-import { isAnonymousContact, isAnonymousPhone } from './anonymousCustomer'
+import { isAnonymousContact, isAnonymousPhone } from './anonymousMarker'
 
 export interface WhatsAppOrderItem {
   productName: string

@@ -18,6 +18,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { listMediaByEntity } from '@/services/media.service'
 import { cachedForCompany, invalidateWholesaleCompany, timed } from '@/lib/wholesale/ttlCache'
 import { EMPTY_SITE_TEXTS, type WholesaleSiteTexts } from './siteTexts'
+import { DEFAULT_SITE_CHROME, mergeSiteChrome, resolveSiteChrome, type ResolvedSiteChrome, type SiteChromeInput } from './siteChrome'
 
 export interface WholesaleSiteSettings {
   catalogActive: boolean
@@ -32,6 +33,10 @@ export interface WholesaleSiteSettings {
   pixelId: string | null
   /** Textos personalizados (null = padrão do código). Nunca contém o valor do pedido mínimo. */
   texts: WholesaleSiteTexts
+  /** Rodapé, dados da loja, redes e botão flutuante (site_chrome). Padrões seguros se a migration não existir. */
+  chrome: ResolvedSiteChrome
+  /** Intervalo da barra de anúncios, em segundos (3–30). */
+  announcementIntervalSeconds: number
 }
 
 // Preserva o comportamento atual do catálogo (que não tinha nenhuma
@@ -50,6 +55,8 @@ const DEFAULT_SETTINGS: WholesaleSiteSettings = {
   pixelEnabled: false,
   pixelId: null,
   texts: EMPTY_SITE_TEXTS,
+  chrome: DEFAULT_SITE_CHROME,
+  announcementIntervalSeconds: 5,
 }
 
 interface SettingsRow {
@@ -71,11 +78,28 @@ interface SettingsRow {
   minimum_order_note?: string | null
   empty_message?: string | null
   footer_text?: string | null
+  site_chrome?: unknown
+  announcement_interval_seconds?: number | null
 }
 
-const SETTINGS_COLUMNS =
-  'catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id, ' +
-  'hero_title, hero_subtitle, categories_title, products_title, add_also_title, minimum_order_note, empty_message, footer_text'
+const BASE_COLUMNS =
+  'catalog_active, display_name, whatsapp_phone, minimum_order_amount, show_out_of_stock, show_stock_quantity, show_search, show_categories, pixel_enabled, pixel_id'
+const TEXT_COLUMNS = 'hero_title, hero_subtitle, categories_title, products_title, add_also_title, minimum_order_note, empty_message, footer_text'
+const CHROME_COLUMNS = 'site_chrome, announcement_interval_seconds'
+
+/**
+ * Do mais completo ao legado. Se uma migration ainda não foi aplicada (coluna inexistente), a leitura cai para o
+ * nível anterior em vez de derrubar o site — o catálogo continua funcionando com os padrões do que falta.
+ */
+const COLUMN_TIERS = [
+  `${BASE_COLUMNS}, ${TEXT_COLUMNS}, ${CHROME_COLUMNS}`,
+  `${BASE_COLUMNS}, ${TEXT_COLUMNS}`,
+  BASE_COLUMNS,
+]
+const SETTINGS_COLUMNS = COLUMN_TIERS[0]
+
+const isMissingColumn = (e: { code?: string; message: string } | null) =>
+  !!e && (e.code === '42703' || e.code === 'PGRST204' || /does not exist|could not find|schema cache/i.test(e.message))
 
 function fromRow(row: SettingsRow): WholesaleSiteSettings {
   return {
@@ -99,22 +123,31 @@ function fromRow(row: SettingsRow): WholesaleSiteSettings {
       emptyMessage: row.empty_message ?? null,
       footerText: row.footer_text ?? null,
     },
+    chrome: resolveSiteChrome(row.site_chrome),
+    announcementIntervalSeconds: Number.isInteger(row.announcement_interval_seconds) && row.announcement_interval_seconds! >= 3 && row.announcement_interval_seconds! <= 30
+      ? row.announcement_interval_seconds! : 5,
   }
 }
 
 async function readWholesaleSiteSettings(companyId: number): Promise<WholesaleSiteSettings> {
   const admin = createAdminClient()
-  const { data, error } = await (admin as any)
-    .from('wholesale_site_settings')
-    .select(SETTINGS_COLUMNS)
-    .eq('company_id', companyId)
-    .maybeSingle() as { data: SettingsRow | null; error: { message: string } | null }
+
+  let lastError: { code?: string; message: string } | null = null
+  for (const columns of COLUMN_TIERS) {
+    const { data, error } = await (admin as any)
+      .from('wholesale_site_settings')
+      .select(columns)
+      .eq('company_id', companyId)
+      .maybeSingle() as { data: SettingsRow | null; error: { code?: string; message: string } | null }
+
+    if (!error) return data ? fromRow(data) : DEFAULT_SETTINGS
+    if (!isMissingColumn(error)) { lastError = error; break }
+    lastError = error // coluna de migration pendente: tenta o nível anterior
+  }
 
   // Erro de banco NUNCA vira "configuração padrão": isso abriria o catálogo (catalog_active=true)
   // e trocaria pedido mínimo/WhatsApp por defaults numa falha transitória. Só "sem linha" usa defaults.
-  if (error) throw new Error(`Falha ao ler a configuração do atacado: ${error.message}`)
-
-  return data ? fromRow(data) : DEFAULT_SETTINGS
+  throw new Error(`Falha ao ler a configuração do atacado: ${lastError?.message ?? 'erro desconhecido'}`)
 }
 
 export interface UpdateWholesaleSiteSettingsInput {
@@ -130,6 +163,9 @@ export interface UpdateWholesaleSiteSettingsInput {
   pixelId?: string | null
   /** Parcial: campo ausente mantém o valor atual; `null` volta ao texto padrão. */
   texts?: Partial<WholesaleSiteTexts>
+  /** Parcial por grupo (footer/store/social/whatsappFloat). */
+  chrome?: SiteChromeInput
+  announcementIntervalSeconds?: number
 }
 
 export type UpdateSettingsResult =
@@ -183,6 +219,8 @@ export async function updateWholesaleSiteSettings(
     pixelEnabled: patch.pixelEnabled ?? current.pixelEnabled,
     pixelId: patch.pixelId !== undefined ? patch.pixelId : current.pixelId,
     texts: mergeTexts(current.texts, patch.texts),
+    chrome: mergeSiteChrome(current.chrome, patch.chrome),
+    announcementIntervalSeconds: patch.announcementIntervalSeconds ?? current.announcementIntervalSeconds,
   }
 
   const { data, error } = await (admin as any)
@@ -207,6 +245,8 @@ export async function updateWholesaleSiteSettings(
       minimum_order_note: merged.texts.minimumOrderNote,
       empty_message: merged.texts.emptyMessage,
       footer_text: merged.texts.footerText,
+      site_chrome: merged.chrome,
+      announcement_interval_seconds: merged.announcementIntervalSeconds,
     }, { onConflict: 'company_id' })
     .select(SETTINGS_COLUMNS)
     .single() as { data: SettingsRow | null; error: { message: string } | null }
