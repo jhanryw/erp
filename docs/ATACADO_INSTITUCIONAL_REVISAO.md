@@ -15,7 +15,7 @@
 - Ressalva: o cadastro fiscal traz o estabelecimento emissor único da empresa; se houver filiais no futuro, o modelo precisará de escolha explícita.
 
 ## 3. 502 em atacado.santtorini.com (somente leitura)
-- Em 14/10/2026 ~15:15 UTC: DNS A → 82.25.68.222; HTTPS 200 em `/` e `/carrinho` (3/3 tentativas, ~0,3–0,55 s);
+- Em 14/10/2026 ~15:15 UTC: DNS A → IP da VPS (registro direto, sem CDN); HTTPS 200 em `/` e `/carrinho` (3/3 tentativas, ~0,3–0,55 s);
   `/produtos` 404 (rota inexistente, esperado); `/api/health` 307 → /login (middleware).
 - Conclusão: DNS, Traefik, container, porta e aplicação respondem; não reproduzi o 502. Sem acesso à infra, não é possível
   afirmar a causa do 502 anterior (candidatos: restart/deploy em andamento, healthcheck, OOM). Ver logs do EasyPanel.

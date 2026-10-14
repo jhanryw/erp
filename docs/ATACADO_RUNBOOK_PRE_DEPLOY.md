@@ -18,7 +18,7 @@ Os seis arquivos de migration pendentes (ordem):
 ---------------------------------------------------------------------------------------------------
 
 ## ETAPA 1 — Supabase SQL Editor (banco de produção)
-Onde: Supabase Studio (o seu está em `qarvon-supabase.uxxkgy.easypanel.host`) → SQL Editor. Rode cada bloco separadamente.
+Onde: Supabase Studio do projeto de produção → SQL Editor. Rode cada bloco separadamente.
 
 ### 1.1 Versão do PostgreSQL (migration 4 exige >= 15)
 ```sql
@@ -201,7 +201,7 @@ docker inspect $T --format '{{json .Args}}' | tr ',' '\n' | grep -iE "forwardedh
 docker service inspect traefik --format '{{json .Spec.TaskTemplate.ContainerSpec.Args}}' 2>/dev/null | tr ',' '\n' | grep -iE "forwardedheaders|trustedips|insecure"
 ```
 Interpretação:
-- Sem CDN: o DNS do site aponta direto para o IP da VPS (verificado: `82.25.68.222`; resposta sem cabeçalhos `cf-*`/`via`). Logo o Traefik é a borda; o último valor de `X-Forwarded-For` é o IP real.
+- Sem CDN: o DNS do site aponta direto para o IP da VPS (verificado: registro A direto para o IP da VPS; resposta sem cabeçalhos `cf-*`/`via`). Logo o Traefik é a borda; o último valor de `X-Forwarded-For` é o IP real.
 - `WHOLESALE_TRUSTED_PROXY_HOPS=1` (usa a entrada da DIREITA do XFF) é a opção segura nesse desenho.
 - `WHOLESALE_CLIENT_IP_HEADER=x-real-ip` só é seguro se o Traefik SOBRESCREVE o cabeçalho; com `forwardedHeaders.insecure=true` ele pode vir do cliente → evitar.
 ### 3.6 Logs relacionados ao 502
@@ -227,7 +227,7 @@ git ls-remote https://github.com/jhanryw/erp.git refs/heads/main refs/heads/feat
 
 ### Fatos CONFIRMADOS (verificados nesta rodada)
 - Código: `tsc` limpo, 2572 testes verdes (218 arquivos), build de produção compilou, merge simulado com `origin/main` sem conflito; branch publicada em `b9fb178`, `main` = `d52851e`.
-- Produção em 14/10/2026: DNS direto para `82.25.68.222`, sem CDN; `/` e `/carrinho` → 200; sem artefatos desta branch (nem barra, nem rodapé novo, nem botão; `/brand/whatsapp/...svg` → 404) — ou seja, o que roda NÃO contém esta funcionalidade.
+- Produção em 14/10/2026: DNS direto para o IP da VPS, sem CDN; `/` e `/carrinho` → 200; sem artefatos desta branch (nem barra, nem rodapé novo, nem botão; `/brand/whatsapp/...svg` → 404) — ou seja, o que roda NÃO contém esta funcionalidade.
 - A funcionalidade tem fallback sem a migration 6 (anúncios → vazio; rodapé com padrões), mas sem a migration 5 o pedido sem contato cai no marcador legado.
 - O repositório não embute o commit no build → o commit em execução só é conhecido pelo EasyPanel.
 
