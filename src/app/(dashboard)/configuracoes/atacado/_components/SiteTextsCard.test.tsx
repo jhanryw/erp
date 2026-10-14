@@ -22,7 +22,7 @@ describe('Personalização do site (ERP)', () => {
     fireEvent.change(screen.getByLabelText('Título principal da vitrine'), { target: { value: 'Novo título' } })
     expect(onChange).toHaveBeenLastCalledWith({ ...EMPTY_SITE_TEXTS, footerText: 'Rodapé', heroTitle: 'Novo título' })
 
-    fireEvent.change(screen.getByLabelText('Textos institucionais do rodapé'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Descrição institucional do rodapé'), { target: { value: '' } })
     expect(onChange).toHaveBeenLastCalledWith({ ...EMPTY_SITE_TEXTS, footerText: null })
   })
 

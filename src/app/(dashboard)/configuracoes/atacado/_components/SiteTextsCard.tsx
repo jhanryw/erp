@@ -19,12 +19,22 @@ const FIELDS: FieldDef[] = [
   { key: 'addAlsoTitle', label: 'Título da seção "Adicione também"', placeholder: 'Adicione também', hint: 'Aparece no carrinho.' },
   { key: 'minimumOrderNote', label: 'Texto informativo do pedido mínimo', placeholder: 'Ex.: Pedido mínimo para atacado; frete combinado pelo WhatsApp.', multiline: true, hint: 'Texto livre exibido no carrinho. O VALOR do pedido mínimo é o campo "Pedido mínimo (R$)" acima — não é alterado por este texto.' },
   { key: 'emptyMessage', label: 'Mensagem quando não há produtos', placeholder: 'Nenhum produto encontrado.' },
-  { key: 'footerText', label: 'Textos institucionais do rodapé', placeholder: 'Ex.: Santtorini — moda íntima por atacado.\nAtendimento de segunda a sexta, 9h às 18h.', multiline: true, hint: 'Substitui o texto padrão do rodapé. Cada linha vira uma linha no site.' },
+  { key: 'footerText', label: 'Descrição institucional do rodapé', placeholder: 'Ex.: Santtorini — moda íntima por atacado.', multiline: true, hint: 'Aparece na coluna da marca do rodapé. Cada linha vira uma linha no site.' },
 ]
 
 const fieldCls = 'input-base w-full'
 
-export function SiteTextsCard({ texts, onChange }: { texts: WholesaleSiteTexts; onChange: (texts: WholesaleSiteTexts) => void }) {
+export function SiteTextsCard({ texts, onChange, only, exclude, title = 'Personalização do site', description }: {
+  texts: WholesaleSiteTexts
+  onChange: (texts: WholesaleSiteTexts) => void
+  /** Mostra só estes campos (ex.: descrição do rodapé na aba Rodapé). */
+  only?: SiteTextKey[]
+  /** Oculta estes campos (o texto do rodapé fica na aba Rodapé, uma única fonte). */
+  exclude?: SiteTextKey[]
+  title?: string
+  description?: string
+}) {
+  const fields = FIELDS.filter((f) => (!only || only.includes(f.key)) && !(exclude ?? []).includes(f.key))
   function set(key: SiteTextKey, value: string) {
     // '' vira null (padrão) já no estado; o servidor valida e normaliza de novo.
     onChange({ ...texts, [key]: value === '' ? null : value })
@@ -33,13 +43,13 @@ export function SiteTextsCard({ texts, onChange }: { texts: WholesaleSiteTexts; 
   return (
     <Card className="p-5 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold text-text-primary">Personalização do site</h3>
+        <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
         <p className="text-xs text-text-muted">
-          Edite os textos do atacado sem mexer em código. Campo vazio = texto padrão. As mudanças valem para o site público assim que você salvar. Apenas texto — HTML não é interpretado.
+          {description ?? 'Edite os textos do atacado sem mexer em código. Campo vazio = texto padrão. As mudanças valem para o site público assim que você salvar. Apenas texto — HTML não é interpretado.'}
         </p>
       </div>
 
-      {FIELDS.map((f) => {
+      {fields.map((f) => {
         const value = texts[f.key] ?? ''
         const max = SITE_TEXT_LIMITS[f.key]
         const id = `site-text-${f.key}`

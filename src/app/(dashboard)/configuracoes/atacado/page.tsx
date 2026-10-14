@@ -1,5 +1,5 @@
 import { requirePageRole } from '@/lib/auth/requirePageRole'
-import { getWholesaleSiteSettings } from '@/services/wholesale/settings'
+import { getWholesaleSiteSettings, getWholesaleCompanyLogoUrl } from '@/services/wholesale/settings'
 import { listWholesaleBanners } from '@/services/wholesale/banners'
 import { AtacadoConfigClient } from './_components/AtacadoConfigClient'
 
@@ -12,10 +12,11 @@ export default async function ConfigAtacadoPage() {
     return <p className="text-sm text-error">Usuário sem empresa vinculada.</p>
   }
 
-  const [settings, banners] = await Promise.all([
+  const [settings, banners, logoUrl] = await Promise.all([
     getWholesaleSiteSettings(profile.company_id),
     listWholesaleBanners(profile.company_id),
+    getWholesaleCompanyLogoUrl(profile.company_id),
   ])
 
-  return <AtacadoConfigClient companyId={profile.company_id} initialSettings={settings} initialBanners={banners} />
+  return <AtacadoConfigClient companyId={profile.company_id} initialSettings={settings} initialBanners={banners} logoUrl={logoUrl} />
 }
