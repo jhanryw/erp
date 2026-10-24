@@ -103,6 +103,84 @@ export type DbData = {
   modeloExplicitlyNotUsedTipoSlugs: Set<string>
 }
 
+
+// ── Normalização de colunas e campos fiscais ────────────────────────────────
+// Causa raiz do NCM/origem "sumirem": os cabeçalhos eram lidos literalmente
+// (`row.ncm`, `row.origem_fiscal`). Cabeçalhos como "NCM", "Origem Fiscal" ou
+// "Origem da Mercadoria" não casavam, a chave ficava undefined e, como os
+// campos são opcionais, nenhum erro era emitido — o produto era gravado com
+// NULL. Além disso NCM com pontuação era rejeitado e uma coluna `origem`
+// numérica (0-8) era lida como fabricação própria/terceiro.
+const HEADER_ALIASES: Record<string, string> = {
+  // Colunas já existentes: cabeçalho com outra caixa/acento/espaço ("SKU", "Nome Produto", "Preço") casa com o canônico.
+  nome_produto: 'nome_produto', nome: 'nome', tipo: 'tipo', modelo: 'modelo', ano: 'ano',
+  categoria: 'categoria', fornecedor: 'fornecedor', cor: 'cor', tamanho: 'tamanho',
+  preco: 'preco', custo: 'custo', estoque_inicial: 'estoque_inicial', ativo: 'ativo',
+  sku: 'sku', preco_atacado: 'preco_atacado',
+  ncm: 'ncm',
+  codigo_ncm: 'ncm',
+  origem_fiscal: 'origem_fiscal',
+  origem_da_mercadoria: 'origem_fiscal',
+  origem_mercadoria: 'origem_fiscal',
+  origem_icms: 'origem_fiscal',
+  icms_origem: 'origem_fiscal',
+  orig: 'origem_fiscal',
+  cst: 'cst',
+  cst_csosn: 'cst',
+}
+
+/** CST como texto (nunca por truthiness: célula numérica 0 é valor). Vazio → ausente. */
+export function normalizeCst(value: unknown): string | undefined {
+  if (value == null) return undefined
+  const v = String(value).trim()
+  return v === '' ? undefined : v
+}
+
+function normalizeHeader(h: string): string {
+  return h
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim().toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+}
+
+/** Resolve cabeçalhos de NCM/origem fiscal (caixa, acento, espaço, sinônimos). Demais colunas passam intactas. */
+export function normalizeImportRow(raw: ImportRow): ImportRow {
+  const out: Record<string, unknown> = { ...raw }
+  for (const key of Object.keys(raw)) {
+    const canonical = HEADER_ALIASES[normalizeHeader(key)]
+    if (!canonical || canonical === key) continue
+    const cur = out[canonical]
+    if (cur == null || String(cur).trim() === '') out[canonical] = (raw as Record<string, unknown>)[key]
+    delete out[key]
+  }
+  // Coluna `origem` com dígito 0-8 é origem fiscal (texto própria/terceiro continua sendo fabricação).
+  const o = out.origem
+  if (o != null && /^\s*[0-8]\s*$/.test(String(o))) {
+    if (out.origem_fiscal == null || String(out.origem_fiscal).trim() === '') out.origem_fiscal = Number(String(o).trim())
+    delete out.origem
+  }
+  return out as ImportRow
+}
+
+/** NCM: sempre string de 8 dígitos. Aceita pontuação; célula numérica de 7 dígitos recebe o zero que o Excel removeu. */
+export function normalizeNcm(value: unknown): { value?: string; invalid?: boolean } {
+  if (value == null) return {}
+  let digits = String(value).trim()
+  if (digits === '') return {}
+  if (!/^[\d.\-\/\s]+$/.test(digits)) return { invalid: true }
+  digits = digits.replace(/\D/g, '')
+  if (typeof value === 'number' && digits.length === 7) digits = '0' + digits
+  return /^\d{8}$/.test(digits) ? { value: digits } : { invalid: true }
+}
+
+/** Origem fiscal 0-8. 0 é válido (nunca tratar por falsy). Vazio → ausente. */
+export function normalizeOrigemFiscal(value: unknown): { value?: number; invalid?: boolean } {
+  if (value == null || String(value).trim() === '') return {}
+  const s = String(value).trim()
+  if (!/^\d(\.0+)?$/.test(s) || Number(s) > 8) return { invalid: true }
+  return { value: Number(s) }
+}
+
 export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
   const newIssues: ErrorWarning[] = []
   const productMap = new Map<string, ParsedProduct>()
@@ -123,8 +201,24 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
   // heads-up antecipado pro usuário.
   const seenUpdateSkus = new Set<string>()
 
-  rawRows.forEach((row, index) => {
+  rawRows.forEach((rawRow, index) => {
+    const row = normalizeImportRow(rawRow)
     const rowNum = index + 2 // row 1 is the header
+
+    // Coluna `origem` com dígito 0-8 é reinterpretada como origem fiscal (planilhas
+    // antigas só usavam texto propria/terceiro nessa coluna). Avisa para o usuário
+    // preferir o cabeçalho explícito `origem_fiscal`, que sempre tem prioridade.
+    const bareOrigem = (rawRow as Record<string, unknown>).origem
+    if (bareOrigem != null && /^\s*[0-8]\s*$/.test(String(bareOrigem))) {
+      const explicit = Object.keys(rawRow).some(k => HEADER_ALIASES[normalizeHeader(k)] === 'origem_fiscal' && String((rawRow as Record<string, unknown>)[k] ?? '').trim() !== '')
+      newIssues.push({
+        row: rowNum,
+        message: explicit
+          ? "Coluna 'origem' numérica ignorada: 'origem_fiscal' informada tem prioridade"
+          : "Coluna 'origem' com número foi interpretada como origem fiscal (0-8); use o cabeçalho 'origem_fiscal' para ser explícito",
+        type: 'warning',
+      })
+    }
 
     // ── Conclusão da fundação varejo/atacado (2026-09-01) — linha de UPDATE ──
     // SKU preenchido = atualizar produto/variação existente, nunca criar.
@@ -164,24 +258,20 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
           update.wholesale_price_override = v
         }
       }
-      const ncmVal = String(row.ncm || '').trim()
-      if (ncmVal) {
-        if (!/^\d{8}$/.test(ncmVal)) {
-          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': NCM inválido (esperado exatamente 8 dígitos) — não será atualizado`, type: 'warning' })
-        } else {
-          update.ncm = ncmVal
-        }
+      const ncmN = normalizeNcm(row.ncm)
+      if (ncmN.invalid) {
+        newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': NCM inválido (esperado exatamente 8 dígitos) — não será atualizado`, type: 'warning' })
+      } else if (ncmN.value !== undefined) {
+        update.ncm = ncmN.value
       }
-      if (row.origem_fiscal != null && String(row.origem_fiscal).trim() !== '') {
-        const v = Number(row.origem_fiscal)
-        if (isNaN(v) || v < 0 || v > 8 || !Number.isInteger(v)) {
-          newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': origem fiscal inválida (esperado inteiro de 0 a 8) — não será atualizada`, type: 'warning' })
-        } else {
-          update.origem = v
-        }
+      const origN = normalizeOrigemFiscal(row.origem_fiscal)
+      if (origN.invalid) {
+        newIssues.push({ row: rowNum, message: `SKU '${skuRaw}': origem fiscal inválida (esperado inteiro de 0 a 8) — não será atualizada`, type: 'warning' })
+      } else if (origN.value !== undefined) {
+        update.origem = origN.value
       }
-      const cstVal = String(row.cst || '').trim()
-      if (cstVal) update.cst = cstVal
+      const cstVal = normalizeCst(row.cst)
+      if (cstVal !== undefined) update.cst = cstVal
 
       parsedUpdates.push(update)
       return
@@ -206,12 +296,11 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     const pPrecoAtacado = precoAtacadoRaw != null && String(precoAtacadoRaw).trim() !== ''
       ? Number(precoAtacadoRaw)
       : undefined
-    const ncmRaw = String(row.ncm || '').trim() || undefined
-    const origemFiscalRaw = row.origem_fiscal
-    const pOrigemFiscal = origemFiscalRaw != null && String(origemFiscalRaw).trim() !== ''
-      ? Number(origemFiscalRaw)
-      : undefined
-    const cstRaw = String(row.cst || '').trim() || undefined
+    const ncmN = normalizeNcm(row.ncm)
+    const ncmRaw = ncmN.value
+    const origN = normalizeOrigemFiscal(row.origem_fiscal)
+    const pOrigemFiscal = origN.value
+    const cstRaw = normalizeCst(row.cst)
 
     // Empty name — can't aggregate anything for this row
     if (!nome_produto.trim()) {
@@ -240,10 +329,10 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     if (pPrecoAtacado !== undefined && (isNaN(pPrecoAtacado) || pPrecoAtacado <= 0)) {
       newIssues.push({ row: rowNum, message: 'Preço de atacado inválido (deve ser maior que zero)', type: 'error' })
     }
-    if (pOrigemFiscal !== undefined && (isNaN(pOrigemFiscal) || pOrigemFiscal < 0 || pOrigemFiscal > 8 || !Number.isInteger(pOrigemFiscal))) {
+    if (origN.invalid) {
       newIssues.push({ row: rowNum, message: 'Origem fiscal inválida (esperado inteiro de 0 a 8)', type: 'error' })
     }
-    if (ncmRaw !== undefined && !/^\d{8}$/.test(ncmRaw)) {
+    if (ncmN.invalid) {
       newIssues.push({ row: rowNum, message: 'NCM inválido (esperado exatamente 8 dígitos)', type: 'error' })
     }
 
@@ -324,6 +413,18 @@ export function parseImportRows(rawRows: ImportRow[], dbData: DbData) {
     }
 
     const product = productMap.get(mapKey)!
+
+    // Dados fiscais são do produto (products.ncm/origem/cst), não da variação:
+    // a primeira linha que os informar vale; linha posterior que divergir é erro.
+    if (ncmRaw !== undefined) {
+      if (product.ncm === undefined) product.ncm = ncmRaw
+      else if (product.ncm !== ncmRaw) newIssues.push({ row: rowNum, message: `"${nome_produto.trim()}" — NCM divergente entre linhas do mesmo produto (${product.ncm} × ${ncmRaw})`, type: 'error' })
+    }
+    if (pOrigemFiscal !== undefined) {
+      if (product.origem_fiscal === undefined) product.origem_fiscal = pOrigemFiscal
+      else if (product.origem_fiscal !== pOrigemFiscal) newIssues.push({ row: rowNum, message: `"${nome_produto.trim()}" — origem fiscal divergente entre linhas do mesmo produto (${product.origem_fiscal} × ${pOrigemFiscal})`, type: 'error' })
+    }
+    if (cstRaw !== undefined && product.cst === undefined) product.cst = cstRaw
 
     const duplicateVariant = product.variants.some(v => v.sku_variation === sku_variacao)
     if (duplicateVariant) {

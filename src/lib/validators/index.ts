@@ -9,7 +9,12 @@ import { brazilDate } from '@/lib/utils/date'
 // já exibia antes desta extração (nenhum comportamento observável muda).
 export function ncmFieldSchema(message?: string) {
   return z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
+    // Aceita pontuação (6109.10.00 / 6109-10-00) e normaliza para 8 dígitos.
+    (v) => {
+      if (v === '' || v == null) return null
+      const s = String(v).trim()
+      return /^[\d.\-/\s]+$/.test(s) ? s.replace(/\D/g, '') : s
+    },
     z.string().regex(/^\d{8}$/, message).nullable().optional(),
   )
 }

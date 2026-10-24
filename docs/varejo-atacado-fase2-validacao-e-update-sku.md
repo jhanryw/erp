@@ -89,7 +89,7 @@ Como o identificador do update é **sempre uma variação** (`sku_variation`), o
 
 ## 7. Validações NCM/origem/CST
 
-- **NCM**: exatamente 8 dígitos (`^\d{8}$`), mesma regra já usada na criação manual/CSV (`ncmFieldSchema`, reaproveitada, não duplicada). NCM com pontuação (`6108.22.00`) é rejeitado pelo RPC — a normalização (remover pontuação) é responsabilidade do parser/Node antes de chegar ao banco, não do SQL. NCM inválido nunca substitui um NCM válido já salvo (validação acontece antes de qualquer `UPDATE`).
+- **NCM**: exatamente 8 dígitos (`^\d{8}$`), mesma regra já usada na criação manual/CSV (`ncmFieldSchema`, reaproveitada, não duplicada). NCM com pontuação (`6108.22.00`) é rejeitado pelo RPC (o parser agora o normaliza antes — ver `docs/importacao-produtos-ncm-origem.md`) — a normalização (remover pontuação) é responsabilidade do parser/Node antes de chegar ao banco, não do SQL. NCM inválido nunca substitui um NCM válido já salvo (validação acontece antes de qualquer `UPDATE`).
 - **Origem fiscal**: inteiro 0-8, mesma regra já usada (`origemFieldSchema`). Fora da faixa é rejeitado sem alterar o registro.
 - **CST**: texto livre, sem validação de formato — mesma política da Fase 1 (reservado/informativo, o motor fiscal ainda não lê essa coluna). **Não** há conversão automática CST↔CSOSN em lugar nenhum — cada um é tratado como o que é (CST fica só armazenado; CSOSN continua sendo derivado só do CRT da empresa, nunca de produto).
 

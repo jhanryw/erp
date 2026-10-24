@@ -295,6 +295,11 @@ export default function ImportarProdutosPage() {
             <strong>Atualizar produto existente:</strong> preencha a coluna <code>sku</code> com o SKU da
             variação (não recria o produto) e informe só as colunas que quer alterar — preco, preco_atacado,
             ncm, origem_fiscal, cst. Célula vazia nunca apaga o valor já cadastrado.
+            <br />
+            <strong>Dados fiscais:</strong> NCM aceita pontuação (6109.10.00) e preserva zero à esquerda; origem
+            fiscal vai de 0 a 8 (0 é válido). Cabeçalhos aceitos sem diferenciar maiúsculas/acentos: NCM,
+            origem_fiscal (ou &quot;Origem da Mercadoria&quot;), CST. Uma coluna <code>origem</code> com número
+            é lida como origem fiscal e gera aviso — prefira <code>origem_fiscal</code>, que tem prioridade.
           </p>
           <input
             type="file"

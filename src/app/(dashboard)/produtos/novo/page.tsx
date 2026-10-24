@@ -1,5 +1,6 @@
 'use client'
 
+import { ncmFieldSchema, origemFieldSchema } from '@/lib/validators'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useForm, useFieldArray } from 'react-hook-form'
@@ -58,18 +59,12 @@ const formSchema = z.object({
   wholesale_price: wholesalePriceSchema,
   active:      z.boolean().default(true),
   variants:    z.array(variantRowSchema),
-  ncm: z.preprocess(
-    (v) => (v === '' || v == null ? null : String(v).trim()),
-    z.string().regex(/^\d{8}$/, 'NCM deve ter exatamente 8 dígitos').nullable().optional(),
-  ),
+  ncm: ncmFieldSchema('NCM deve ter exatamente 8 dígitos'),
   cest: z.preprocess(
     (v) => (v === '' || v == null ? null : String(v).trim()),
     z.string().regex(/^\d{2}\.\d{3}\.\d{2}$/, 'Formato CEST: 00.000.00').nullable().optional(),
   ),
-  origem: z.preprocess(
-    (v) => (v === '' || v == null ? null : Number(v)),
-    z.number().int().min(0).max(8).nullable().optional(),
-  ),
+  origem: origemFieldSchema(),
   unidade_med: z.string().max(10).default('UN'),
 })
 // Obrigatoriedade de Modelo não é estática — depende do Tipo (Calcinha

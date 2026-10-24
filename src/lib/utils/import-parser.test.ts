@@ -189,13 +189,12 @@ describe('parseImportRows — fundação varejo/atacado (preco_atacado/ncm/orige
     expect('cst' in update).toBe(false)
   })
 
-  it('atualização: NCM com pontuação é rejeitado na prévia (esperado só dígitos) e não entra no patch — mas não bloqueia o envio (warning, não error)', () => {
+  it('atualização: NCM com pontuação é normalizado para 8 dígitos e entra no patch', () => {
     const rows: ImportRow[] = [{ sku: 'ABC123', ncm: '6108.22.00' }]
-    const { parsedUpdates, issues, hasErrors } = parseImportRows(rows, baseDbData)
+    const { parsedUpdates, hasErrors } = parseImportRows(rows, baseDbData)
 
     expect(hasErrors).toBe(false)
-    expect(issues.some(i => i.type === 'warning' && i.message.includes('NCM inválido'))).toBe(true)
-    expect('ncm' in parsedUpdates[0]).toBe(false)
+    expect(parsedUpdates[0].ncm).toBe('61082200')
   })
 
   it('atualização: NCM só de dígitos é aceito', () => {
@@ -285,5 +284,153 @@ describe('parseImportRows — fundação varejo/atacado (preco_atacado/ncm/orige
     expect(product.wholesale_price).toBe(35) // primeira linha define o produto-pai
     expect(product.variants.find(v => v.color_value_id === 10)?.wholesale_price_override).toBeUndefined() // igual ao pai
     expect(product.variants.find(v => v.color_value_id === 11)?.wholesale_price_override).toBe(30) // diverge → override
+  })
+})
+
+
+describe('parseImportRows — NCM e origem fiscal (auditoria de importação)', () => {
+  const parse = (rows: ImportRow[]) => parseImportRows(rows, baseDbData)
+
+  it('cabeçalhos com caixa/acento/espaço ("NCM", "Origem Fiscal", "Origem da Mercadoria") são reconhecidos', () => {
+    const r1 = parse([{ ...row({}), NCM: '61091000', 'Origem Fiscal': 1 } as ImportRow])
+    expect(r1.parsedProducts[0].ncm).toBe('61091000')
+    expect(r1.parsedProducts[0].origem_fiscal).toBe(1)
+    const r2 = parse([{ ...row({}), ' Origem da Mercadoria ': '2' } as ImportRow])
+    expect(r2.parsedProducts[0].origem_fiscal).toBe(2)
+  })
+
+  it('origem fiscal 0 é preservada (não é descartada por ser falsy), como número e como texto', () => {
+    expect(parse([row({ origem_fiscal: 0 })]).parsedProducts[0].origem_fiscal).toBe(0)
+    expect(parse([row({ origem_fiscal: '0' })]).parsedProducts[0].origem_fiscal).toBe(0)
+  })
+
+  it('coluna "origem" numérica (0-8) é origem fiscal, sem virar fabricação própria/terceiro', () => {
+    const { parsedProducts } = parse([row({ origem: '0' })])
+    expect(parsedProducts[0].origem_fiscal).toBe(0)
+    expect(parsedProducts[0].origin).toBe('third_party')
+  })
+
+  it('coluna "origem" textual continua sendo fabricação própria/terceiro', () => {
+    const { parsedProducts } = parse([row({ origem: 'propria' })])
+    expect(parsedProducts[0].origin).toBe('own_brand')
+    expect(parsedProducts[0].origem_fiscal).toBeUndefined()
+  })
+
+  it('NCM iniciado por zero é preservado como string de 8 dígitos', () => {
+    expect(parse([row({ ncm: '09012100' })]).parsedProducts[0].ncm).toBe('09012100')
+  })
+
+  it('NCM numérico do Excel com 7 dígitos (zero à esquerda perdido) é restaurado; string de 7 dígitos é rejeitada', () => {
+    expect(parse([{ ...row({}), ncm: 9012100 } as unknown as ImportRow]).parsedProducts[0].ncm).toBe('09012100')
+    expect(parse([row({ ncm: '9012100' })]).hasErrors).toBe(true)
+  })
+
+  it('NCM com pontuação é normalizado', () => {
+    expect(parse([row({ ncm: '6109.10.00' })]).parsedProducts[0].ncm).toBe('61091000')
+  })
+
+  it('NCM com letras ou tamanho errado é rejeitado, nunca substituído por padrão', () => {
+    expect(parse([row({ ncm: '6109ABCD' })]).hasErrors).toBe(true)
+    expect(parse([row({ ncm: '123456789' })]).hasErrors).toBe(true)
+  })
+
+  it('sem colunas fiscais ou com células vazias: campos ausentes (undefined), sem erro', () => {
+    for (const r of [row({}), row({ ncm: '', origem_fiscal: '' })]) {
+      const out = parse([r])
+      expect(out.hasErrors).toBe(false)
+      expect(out.parsedProducts[0].ncm).toBeUndefined()
+      expect(out.parsedProducts[0].origem_fiscal).toBeUndefined()
+    }
+  })
+
+  it('produto com variações: fiscal informado só em linha posterior não se perde; divergência é erro', () => {
+    const ok = parse([
+      row({ cor: 'Dourado' }),
+      row({ cor: 'Prateado', ncm: '61091000', origem_fiscal: 0 }),
+    ])
+    expect(ok.hasErrors).toBe(false)
+    expect(ok.parsedProducts[0].variants).toHaveLength(2)
+    expect(ok.parsedProducts[0].ncm).toBe('61091000')
+    expect(ok.parsedProducts[0].origem_fiscal).toBe(0)
+
+    const bad = parse([
+      row({ cor: 'Dourado', ncm: '61091000' }),
+      row({ cor: 'Prateado', ncm: '61082200' }),
+    ])
+    expect(bad.hasErrors).toBe(true)
+  })
+
+  it('atualização por SKU: origem 0 entra no patch; sem colunas fiscais, nenhuma chave fiscal (preserva existente)', () => {
+    const withZero = parse([{ sku: 'ABC', origem_fiscal: 0, NCM: '09012100' } as ImportRow])
+    expect(withZero.parsedUpdates[0].origem).toBe(0)
+    expect(withZero.parsedUpdates[0].ncm).toBe('09012100')
+    const none = parse([{ sku: 'ABC', preco: 10 }])
+    expect('ncm' in none.parsedUpdates[0]).toBe(false)
+    expect('origem' in none.parsedUpdates[0]).toBe(false)
+  })
+
+  it('coluna "origem" numérica gera aviso (não erro); origem_fiscal explícita tem prioridade', () => {
+    const a = parse([row({ origem: '1' })])
+    expect(a.hasErrors).toBe(false)
+    expect(a.issues.some(i => i.type === 'warning' && i.message.includes('interpretada como origem fiscal'))).toBe(true)
+    const b = parse([row({ origem: '1', origem_fiscal: 0 })])
+    expect(b.parsedProducts[0].origem_fiscal).toBe(0)
+    expect(b.issues.some(i => i.message.includes('tem prioridade'))).toBe(true)
+  })
+
+  it('CST: cabeçalho "CST" reconhecido; valor numérico 0 não é descartado por falsy; vazio é ausente', () => {
+    expect(parse([{ ...row({}), CST: '060' } as ImportRow]).parsedProducts[0].cst).toBe('060')
+    expect(parse([{ sku: 'ABC', cst: 0 } as unknown as ImportRow]).parsedUpdates[0].cst).toBe('0')
+    expect(parse([row({ cst: '' })]).parsedProducts[0].cst).toBeUndefined()
+    expect('cst' in parse([{ sku: 'ABC', CST: '' } as ImportRow]).parsedUpdates[0]).toBe(false)
+  })
+})
+
+describe('parseImportRows — arquivos XLSX reais (leitura idêntica à da página de importação)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const xlsx = require('xlsx') as typeof import('xlsx')
+
+  /** Gera um .xlsx real em memória e o lê como a página faz (read + sheet_to_json). */
+  function roundtripXlsx(aoa: unknown[][]): ImportRow[] {
+    const ws = xlsx.utils.aoa_to_sheet(aoa)
+    const wb = xlsx.utils.book_new()
+    xlsx.utils.book_append_sheet(wb, ws, 'Produtos')
+    const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    const back = xlsx.read(buf, { type: 'buffer' })
+    return xlsx.utils.sheet_to_json(back.Sheets[back.SheetNames[0]]) as ImportRow[]
+  }
+
+  const H = ['Nome Produto', 'tipo', 'modelo', 'ano', 'categoria', 'cor', 'tamanho', 'preco', 'custo', 'estoque_inicial', 'NCM', 'Origem Fiscal', 'CST']
+
+  it('NCM iniciado por zero (texto e número), origem 0 e 2, CST e variações sobrevivem ao XLSX', () => {
+    const rows = roundtripXlsx([
+      H,
+      ['Calcinha A', 'calcinha', 'fio_dental', '2026', 'Calcinha', 'Dourado', 'P', 50, 20, 0, '09012100', 0, '060'],
+      ['Calcinha A', 'calcinha', 'fio_dental', '2026', 'Calcinha', 'Dourado', 'M', 50, 20, 0, '09012100', 0, '060'],
+      ['Calcinha B', 'calcinha', 'fio_dental', '2026', 'Calcinha', 'Prateado', 'P', 50, 20, 0, 9012100, 2, 60],
+      ['Calcinha C', 'calcinha', 'fio_dental', '2026', 'Calcinha', 'Dourado', 'P', 50, 20, 0, '6109.10.00', '', ''],
+    ])
+    const { parsedProducts, hasErrors, issues } = parseImportRows(rows, baseDbData)
+    expect(issues.filter(i => i.type === 'error')).toEqual([])
+    expect(hasErrors).toBe(false)
+    const [a, b, c] = parsedProducts
+    expect(a.variants).toHaveLength(2)
+    expect([a.ncm, a.origem_fiscal, a.cst]).toEqual(['09012100', 0, '060'])
+    expect([b.ncm, b.origem_fiscal, b.cst]).toEqual(['09012100', 2, '60'])
+    expect([c.ncm, c.origem_fiscal, c.cst]).toEqual(['61091000', undefined, undefined])
+  })
+
+  it('XLSX de atualização por SKU: fiscal vazio não gera chave; origem 0 gera', () => {
+    const rows = roundtripXlsx([
+      ['SKU', 'preco', 'ncm', 'origem_fiscal', 'cst'],
+      ['ABC-1', 10, '', '', ''],
+      ['ABC-2', '', '09012100', 0, ''],
+    ])
+    const { parsedUpdates, parsedProducts, hasErrors } = parseImportRows(rows, baseDbData)
+    expect(hasErrors).toBe(false)
+    expect(parsedProducts).toHaveLength(0)
+    expect(parsedUpdates).toHaveLength(2)
+    expect(parsedUpdates[0]).toEqual({ client_index: 0, sku: 'ABC-1', price_override: 10 })
+    expect(parsedUpdates[1]).toEqual({ client_index: 1, sku: 'ABC-2', ncm: '09012100', origem: 0 })
   })
 })
