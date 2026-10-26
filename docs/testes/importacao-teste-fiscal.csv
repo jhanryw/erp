@@ -1,0 +1,5 @@
+nome_produto,tipo,modelo,ano,categoria,fornecedor,origem,cor,tamanho,preco,custo,estoque_inicial,ativo,sku,preco_atacado,ncm,origem_fiscal,cst
+ZZ TESTE Fiscal A (apagar),Calcinha,Tanga,2026,Básica,Maria Bonitta Lingerie,terceiro,Preto,P,19.90,8.00,0,FALSE,,14.90,61082100,0,000
+ZZ TESTE Fiscal A (apagar),Calcinha,Tanga,2026,Básica,Maria Bonitta Lingerie,terceiro,Preto,M,19.90,8.00,0,FALSE,,14.90,61082100,0,000
+ZZ TESTE Fiscal B (apagar),Calcinha,Tanga,2026,Rendada,Maria Bonitta Lingerie,propria,Branco,P,24.90,9.50,0,FALSE,,17.90,61082200,2,
+ZZ TESTE Fiscal B (apagar),Calcinha,Tanga,2026,Rendada,Maria Bonitta Lingerie,propria,Branco,M,24.90,9.50,0,FALSE,,17.90,61082200,2,

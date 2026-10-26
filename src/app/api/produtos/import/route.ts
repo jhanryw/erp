@@ -11,6 +11,7 @@ import { getOrCreateColorSkuCode, getOrCreateSizeSkuCode } from '@/lib/sku/sku-d
 import { listActiveProductTypes, loadModeloGovernanceForAllTypes, buildDynamicSkuBase } from '@/lib/sku/sku-modelo-dynamic'
 import { resolveTipoModelo, type ResolvedTipoModelo } from '@/lib/sku/resolve-taxonomy'
 import { ncmFieldSchema, origemFieldSchema, wholesalePriceFieldSchema } from '@/lib/validators'
+import { verifyFiscalPersisted, describeRpcError, type FiscalVerifyResult } from '@/lib/import/ensure-fiscal'
 
 const variantSchema = z.object({
   color_value_id: z.number().int().positive().nullable().optional(),
@@ -127,6 +128,7 @@ export async function POST(request: Request) {
   let created = 0
   let createdProducts: unknown[] = []
   let createError: { message: string; validationErrors?: string[]; code?: string | null; details?: string | null; hint?: string | null } | null = null
+  let fiscal: FiscalVerifyResult = { unresolved: [] }
 
   if (items.length > 0) {
     const result = await processCreateBatch({
@@ -136,6 +138,7 @@ export async function POST(request: Request) {
     if (result.ok) {
       created = result.created
       createdProducts = result.products
+      fiscal = result.fiscal
     } else {
       createError = result.error
     }
@@ -159,7 +162,7 @@ export async function POST(request: Request) {
 
     if (updateRpcError) {
       console.error('[IMPORT] erro RPC update', updateRpcError)
-      updateBlockedError = updateRpcError.message
+      updateBlockedError = describeRpcError('rpc_update_products_by_sku_batch', '20260901_rpc_update_products_by_sku.sql', updateRpcError)
     } else {
       updated = updateRpcResult?.updated ?? 0
       updatedProducts = updateRpcResult?.products ?? []
@@ -194,6 +197,10 @@ export async function POST(request: Request) {
     updated_products: updatedProducts,
     update_errors: updateErrors,
     update_blocked_error: updateBlockedError,
+    fiscal,
+    fiscal_error: fiscal.unresolved.length > 0
+      ? 'NCM/origem fiscal/CST informados no arquivo NÃO foram gravados no banco. Os produtos foram criados sem esses dados. Aplique a migration 202608311203_import_products_wholesale_fiscal_fields.sql e corrija os produtos pela atualização por SKU.'
+      : null,
   }, { status })
 }
 
@@ -207,7 +214,7 @@ async function processCreateBatch({
   systemUserId: string
   idempotencyKey: string | null
 }): Promise<
-  | { ok: true; created: number; products: unknown[] }
+  | { ok: true; created: number; products: unknown[]; fiscal: FiscalVerifyResult }
   | { ok: false; error: { message: string; validationErrors?: string[]; code?: string | null; details?: string | null; hint?: string | null } }
 > {
 
@@ -487,7 +494,7 @@ async function processCreateBatch({
         // rpcError.message já vem com contexto de qual produto do lote
         // falhou (ver rpc_import_products_batch, migration 202607302700) —
         // "Falha ao importar produto "X" (client_index=N): <erro original>".
-        message: `${rpcError.message} Nenhum produto novo foi salvo porque a transação foi revertida pelo banco.`,
+        message: `${describeRpcError('rpc_import_products_batch', '202608311203_import_products_wholesale_fiscal_fields.sql', rpcError)} Nenhum produto novo foi salvo porque a transação foi revertida pelo banco.`,
         code:    rpcError.code ?? null,
         details: rpcError.details ?? null,
         hint:    rpcError.hint ?? null,
@@ -500,5 +507,25 @@ async function processCreateBatch({
     produtosRetornados: Array.isArray(rpcResult?.products) ? rpcResult!.products.length : null,
   })
 
-  return { ok: true, created: rpcResult?.imported ?? 0, products: rpcResult?.products ?? [] }
+  // O RPC só grava ncm/origem/cst se a migration 202608311203 estiver aplicada;
+  // numa versão anterior ele ignora as chaves sem erro. Confere no banco o que
+  // foi gravado: nada é corrigido depois — se um campo informado foi descartado,
+  // a importação é reportada como falha (ver fiscal_error abaixo).
+  const created = (rpcResult?.products ?? []) as { client_index: number; id: number }[]
+  const byIndex = new Map(payloadProducts.map(p => [p.client_index as number, p]))
+  let fiscal: FiscalVerifyResult = { unresolved: [] }
+  try {
+    fiscal = await verifyFiscalPersisted(admin, companyId, created.map(c => {
+      const sent = byIndex.get(c.client_index)
+      return { id: c.id, ncm: (sent?.ncm as string | null) ?? null, origem: (sent?.origem as number | null) ?? null, cst: (sent?.cst as string | null) ?? null }
+    }))
+  } catch (e) {
+    console.error('[IMPORT] erro ao conferir dados fiscais', e)
+    fiscal = { unresolved: [{ id: 0, field: 'ncm', expected: 'conferência', found: null }] }
+  }
+  if (fiscal.unresolved.length > 0) {
+    console.error('[IMPORT] dados fiscais NÃO gravados como enviados — migration 202608311203 provavelmente não aplicada', fiscal.unresolved.slice(0, 5))
+  }
+
+  return { ok: true, created: rpcResult?.imported ?? 0, products: rpcResult?.products ?? [], fiscal }
 }

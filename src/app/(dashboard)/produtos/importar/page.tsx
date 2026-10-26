@@ -223,6 +223,12 @@ export default function ImportarProdutosPage() {
       const updatedConfirmed = updated > 0 && Array.isArray(json.updated_products) && json.updated_products.length === updated
 
       if (createdConfirmed || updatedConfirmed) {
+        // Dados fiscais informados e descartados pelo banco = falha, nunca sucesso (ver verifyFiscalPersisted).
+        if (json.fiscal_error) {
+          setImportResult({ created, updated, updateErrors, serverError: json.fiscal_error })
+          toast.error('Produtos criados SEM NCM/origem fiscal', { description: json.fiscal_error, duration: 20000 })
+          return
+        }
         setImportResult({ created, updated, updateErrors, updateBlockedError: json.update_blocked_error ?? undefined })
         const parts: string[] = []
         if (created > 0) parts.push(`${created} criado${created !== 1 ? 's' : ''}`)

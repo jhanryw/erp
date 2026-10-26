@@ -26,3 +26,12 @@ Os cabeçalhos são comparados sem diferenciar maiúsculas, acentos, espaços ou
 ## Produtos já cadastrados sem NCM/origem
 Consulta somente leitura: `docs/queries/produtos-sem-ncm-ou-origem.sql`. A correção deve vir da planilha
 original (reimportação por SKU) ou de revisão manual; não há preenchimento automático.
+
+## Causa do "NCM/origem não gravados" mesmo com planilha correta (26/10)
+A importação grava NCM/origem/CST via `rpc_import_products_batch` → `_persist_single_product`, que só conhece essas
+chaves após a migration `202608311203_import_products_wholesale_fiscal_fields.sql`. Em um banco **sem** essa migration
+a função antiga ignora as chaves sem erro: a importação responde sucesso e os produtos ficam com NCM/origem NULL
+(reproduzido em PostgreSQL local com o CSV real). Desde esta correção o servidor relê os produtos recém-criados,
+completa o que ficou NULL (sem sobrescrever) e avisa na tela; RPC ausente gera mensagem clara.
+Diagnóstico/backfill: `docs/queries/importacao-fiscal-diagnostico-e-backfill.sql`.
+Teste E2E: `src/app/api/produtos/import/import.e2e.test.ts` (banco descartável + PostgREST, ver cabeçalho do arquivo).
