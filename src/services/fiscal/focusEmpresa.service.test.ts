@@ -319,3 +319,22 @@ describe('syncFocusEmpresa', () => {
     expect(syncState.company.lastError).toMatch(/instabilidade/)
   })
 })
+
+describe('syncFocusEmpresa — payload nunca envia numeração, série, NFC-e/CSC nem nulos (sync cadastral)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  it('atualização cadastral (CRT 1) sem proximo_numero_*/serie_*/nfce/certificado e sem valores nulos', async () => {
+    mockSettingsRow({ ...COMPLETE_SETTINGS, razao_social: 'SANTTORINI LINGERIE LTDA', crt: 1, telefone: null, email: null, complemento: null })
+    mockAvailableManagementToken()
+    vi.spyOn(companyIntegrations, 'getCompanyIntegration').mockResolvedValue({ ok: true, data: { ...INTEGRATION_ROW, external_account_id: '77' } })
+    vi.spyOn(companyIntegrations, 'updateCompanyIntegration').mockResolvedValue({ ok: true, data: INTEGRATION_ROW } as any)
+    const updateSpy = vi.spyOn(httpClient, 'updateFocusEmpresa').mockResolvedValue({ id: 77, cnpj: COMPLETE_SETTINGS.cnpj, nome: 'SANTTORINI LINGERIE LTDA' })
+
+    await syncFocusEmpresa(1)
+
+    const sent = JSON.parse(JSON.stringify(updateSpy.mock.calls[0][1]))
+    expect(sent.nome).toBe('SANTTORINI LINGERIE LTDA')
+    expect(sent.regime_tributario).toBe(1)
+    expect(Object.keys(sent).filter((k) => /proximo_numero|^serie_|nfce|csc|certificado|senha/.test(k))).toEqual([])
+    expect(Object.values(sent).filter((v) => v === null)).toEqual([])
+  })
+})
