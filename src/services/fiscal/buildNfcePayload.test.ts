@@ -420,3 +420,12 @@ describe('buildNfcePayload — determinismo (puro, sem I/O)', () => {
     expect({ ...a, data_emissao: null }).toEqual({ ...b, data_emissao: null })
   })
 })
+
+describe('buildNfcePayload — CRT 1 (Simples Nacional) e CRT 4 (MEI) geram o mesmo conjunto tributário de balcão', () => {
+  it.each([1, 4] as const)('CRT %i: CSOSN 102, PIS/COFINS CST 49, CFOP interno inalterado', (crt) => {
+    const p = buildNfcePayload(nfceContext({ emitente: { ...nfceContext().emitente, crt } }))
+    expect(p.items[0].icms_situacao_tributaria).toBe('102')
+    expect(p.items[0].pis_situacao_tributaria).toBe('49')
+    expect(p.items[0].cfop).toBe(NFCE_CFOP_INTERNO)
+  })
+})

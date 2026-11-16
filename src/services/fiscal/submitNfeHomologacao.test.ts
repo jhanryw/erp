@@ -561,3 +561,67 @@ describe('consultAndUpdateFiscalDocument — reconciliação nunca degrada dado 
     expect(rowNoBanco.status).toBe('pending') // continua exatamente como estava — nada foi gravado
   })
 })
+
+describe('submitNfeHomologacao — mudança de regime (MEI → Simples) e diagnóstico (venda #1243)', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+
+  it('retry após submission_error RECONSTRÓI o payload: CRT 4 → CRT 1 no contexto muda regime/CFOP enviados, mesma ref', async () => {
+    setupFake()
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 't', environment: 'homologacao' } },
+    })
+    vi.spyOn(validateModule, 'validateNfeReadiness').mockReturnValue([])
+    const base = baseFiscalContext({ saleId: SALE_ID, companyId: COMPANY_ID })
+    vi.spyOn(loadModule, 'loadSaleFiscalContext')
+      .mockResolvedValueOnce({ ...base, emitente: { ...base.emitente, crt: 4 } })
+      .mockResolvedValueOnce({ ...base, emitente: { ...base.emitente, crt: 1 } })
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe').mockRejectedValue(new FocusApiError(422, { codigo: 'erro_validacao_schema', mensagem: 'Schema' }))
+
+    await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+
+    const p1 = issueSpy.mock.calls[0][1] as any
+    const p2 = issueSpy.mock.calls[1][1] as any
+    expect(p1.regime_tributario_emitente).toBe(4)
+    expect(p1.items[0].cfop).toBe('6102')
+    expect(p2.regime_tributario_emitente).toBe(1)
+    expect(p2.items[0].cfop).toBe('6108')
+    expect(issueSpy.mock.calls[0][0]).toBe(issueSpy.mock.calls[1][0])
+  })
+
+  it('FocusApiError com erros[] preserva os detalhes por campo na mensagem persistida', async () => {
+    setupFake()
+    mockHappyPathDependencies()
+    vi.spyOn(httpClient, 'issueFocusNfe').mockRejectedValue(
+      new FocusApiError(422, { codigo: 'erro_validacao_schema', mensagem: 'Erro de schema', erros: [{ mensagem: 'valor inválido', campo: 'CRT' }] }),
+    )
+    const result = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(result.ok && result.data.submissionErrorMessage).toContain('CRT: valor inválido')
+  })
+
+  it('reconciliação com 404 NÃO apaga o erro original — mantém código e anexa a mensagem original', async () => {
+    const fake = setupFake()
+    mockHappyPathDependencies()
+    const seeded = fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'submission_error',
+      submission_error_code: 'erro_validacao_schema', submission_error_message: 'Schema XML: CRT inválido',
+    })
+    vi.spyOn(resolveModule, 'resolveFocusIntegration').mockResolvedValue({
+      ok: true,
+      data: { available: true, integration: { integrationId: 1, companyId: COMPANY_ID, token: 't', environment: 'homologacao' } },
+    })
+    vi.spyOn(httpClient, 'consultFocusNfe').mockRejectedValue(new FocusApiError(404, { codigo: 'nao_encontrado', mensagem: 'x' }))
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
+
+    const id = seeded.id
+    const r1 = await consultAndUpdateFiscalDocument(id, ref, COMPANY_ID)
+    const r2 = await consultAndUpdateFiscalDocument(id, ref, COMPANY_ID)
+    for (const r of [r1, r2]) {
+      expect(r.ok && r.data.status).toBe('submission_error')
+      expect(r.ok && r.data.submissionErrorCode).toBe('erro_validacao_schema')
+      expect(r.ok && r.data.submissionErrorMessage).toContain('Erro original: Schema XML: CRT inválido')
+    }
+  })
+})

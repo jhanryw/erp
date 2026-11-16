@@ -556,10 +556,22 @@ export async function consultAndUpdateFiscalDocument(
     // continua sem tocar a linha — resultado genuinamente desconhecido,
     // não vira uma permissão de retry.
     if (err instanceof FocusApiError && (err.httpStatus === 404 || err.codigo === 'nao_encontrado')) {
+      // Reconciliação NUNCA apaga o diagnóstico original: se já havia um
+      // erro registrado (ex.: Schema XML rejeitado no POST), ele é mantido
+      // junto da nota de reconciliação.
+      const { data: prevRaw } = await (admin as any)
+        .from('fiscal_documents')
+        .select('submission_error_code, submission_error_message')
+        .eq('id', fiscalDocumentId)
+        .maybeSingle()
+      const prev = (prevRaw ?? {}) as { submission_error_code?: string | null; submission_error_message?: string | null }
+      const reconciliationNote = 'Focus confirmou que esta referência nunca foi recebida — seguro tentar uma nova transmissão.'
+      const alreadyReconciled = !!prev.submission_error_message?.startsWith(reconciliationNote)
+      const hasPrev = !!prev.submission_error_message
       await (admin as any).from('fiscal_documents').update({
         status: 'submission_error',
-        submission_error_code: err.codigo ?? '404',
-        submission_error_message: 'Focus confirmou que esta referência nunca foi recebida — seguro tentar uma nova transmissão.',
+        submission_error_code: hasPrev ? (prev.submission_error_code ?? err.codigo ?? '404') : (err.codigo ?? '404'),
+        submission_error_message: alreadyReconciled ? prev.submission_error_message : hasPrev ? `${reconciliationNote} Erro original: ${prev.submission_error_message}` : reconciliationNote,
         // Fechamento do risco residual #2: a Focus confirmou INEQUIVOCAMENTE
         // a ausência da provider_ref (caso 2 do pedido) — a incerteza que
         // submission_started_at representava foi resolvida, libera pra um
@@ -775,6 +787,8 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
         status: 'submission_error',
         submissionErrorCode: err.codigo ?? String(err.httpStatus),
         submissionErrorMessage: err.mensagem ?? err.message,
+        // Diagnóstico original preservado (corpo bruto da Focus, incl. `erros[]`).
+        providerPayload: { http_status: err.httpStatus, error_body: err.rawBody },
       })
       if (!updated) return success(rowToResult(await fetchCurrentFiscalDocumentRow(admin, fiscalDocumentId)))
       return success(rowToResult(updated))

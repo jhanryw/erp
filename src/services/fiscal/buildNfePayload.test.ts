@@ -385,3 +385,22 @@ describe('buildNfePayload — data_emissao (venda #1243: "data_emissao não pode
     expect(() => buildNfePayload(baseFiscalContext(), { now: new Date(Date.now() + 3_600_000) })).toThrow(FiscalBuildError)
   })
 })
+
+describe('buildNfePayload — CRT 1 (Simples Nacional, não-MEI) vs CRT 4 preservado', () => {
+  const crt1 = () => baseFiscalContext({ emitente: { ...baseFiscalContext().emitente, crt: 1 } })
+
+  it('CRT 1: regime enviado = 1; grupos ICMS/PIS/COFINS/IPI compatíveis (CSOSN 102, CST 49/49/53)', () => {
+    const p = buildNfePayload(crt1())
+    expect(p.regime_tributario_emitente).toBe(1)
+    expect(p.items[0].icms_situacao_tributaria).toBe('102')
+    expect(p.items[0].pis_situacao_tributaria).toBe('49')
+    expect(p.items[0].cofins_situacao_tributaria).toBe('49')
+    expect(p.items[0].ipi_situacao_tributaria).toBe('53')
+  })
+
+  it('CRT 1 interestadual: CFOP 6108 (hipótese sujeita à validação contábil); CRT 4 segue 6102', () => {
+    expect(buildNfePayload(crt1()).items[0].cfop).toBe('6108')
+    expect(buildNfePayload(baseFiscalContext()).items[0].cfop).toBe('6102')
+    expect(buildNfePayload(baseFiscalContext()).regime_tributario_emitente).toBe(4)
+  })
+})

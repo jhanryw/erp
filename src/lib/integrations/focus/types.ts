@@ -39,7 +39,12 @@ export interface FocusSyncErrorBody {
 export class FocusApiError extends Error {
   readonly httpStatus: number
   readonly codigo: string | null
+  /** Mensagem completa: `mensagem` + detalhes por campo (`erros[]`), quando a Focus os envia (ex.: erro de Schema XML). */
   readonly mensagem: string | null
+  /** Detalhes individuais (`erros[]` da Focus) — nunca descartados. */
+  readonly detalhes: string[]
+  /** Corpo bruto do erro (a Focus nunca devolve credenciais nele) — persistido como diagnóstico. */
+  readonly rawBody: unknown
 
   constructor(httpStatus: number, body: unknown) {
     const parsed = FocusApiError.parseBody(body)
@@ -48,17 +53,32 @@ export class FocusApiError extends Error {
     this.httpStatus = httpStatus
     this.codigo = parsed.codigo
     this.mensagem = parsed.mensagem
+    this.detalhes = parsed.detalhes
+    this.rawBody = body ?? null
   }
 
-  private static parseBody(body: unknown): { codigo: string | null; mensagem: string | null } {
+  private static parseBody(body: unknown): { codigo: string | null; mensagem: string | null; detalhes: string[] } {
     if (body && typeof body === 'object') {
       const b = body as Record<string, unknown>
+      const base = typeof b.mensagem === 'string' ? b.mensagem : null
+      const detalhes: string[] = Array.isArray(b.erros)
+        ? (b.erros as unknown[]).map((e) => {
+            if (typeof e === 'string') return e
+            if (e && typeof e === 'object') {
+              const o = e as Record<string, unknown>
+              const msg = typeof o.mensagem === 'string' ? o.mensagem : JSON.stringify(o)
+              return typeof o.campo === 'string' ? `${o.campo}: ${msg}` : msg
+            }
+            return String(e)
+          })
+        : []
       return {
         codigo: typeof b.codigo === 'string' ? b.codigo : null,
-        mensagem: typeof b.mensagem === 'string' ? b.mensagem : null,
+        mensagem: detalhes.length > 0 ? `${base ?? 'Erro Focus'} — ${detalhes.join('; ')}` : base,
+        detalhes,
       }
     }
-    return { codigo: null, mensagem: null }
+    return { codigo: null, mensagem: null, detalhes: [] }
   }
 }
 
