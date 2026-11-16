@@ -15,6 +15,7 @@
 import { resolveCfop, resolveIcmsCsosn, resolvePisCofinsCst, resolveIpiTreatment, resolveIbsCbsTestYear2026, type Crt } from '@/lib/fiscal/taxRules'
 import { resolveFormaPagamento, resolveIndicadorPagamento, resolveBandeiraOperadora } from '@/lib/fiscal/paymentRules'
 import { normalizeNcm } from '@/lib/fiscal/ncmRules'
+import { formatFocusDateTime, isValidFocusDateTime } from '@/lib/fiscal/emissionDate'
 import type { FocusNfeItemPayload, FocusNfePayload, FocusFormaPagamento } from '@/lib/integrations/focus/nfePayload.types'
 import type { FiscalDocumentContext, FiscalSaleItemContext, FiscalPaymentContext } from './types'
 import { applyOrderLevelAdjustments } from './allocateOrderAdjustments'
@@ -154,7 +155,29 @@ function resolveIndicadorIeDestinatario(cnpj: string | null, inscricaoEstadual: 
   return inscricaoEstadual ? 1 : 2
 }
 
-export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
+export interface BuildNfePayloadOptions {
+  /** Instante da emissão — injetável só para testes; padrão = agora. */
+  now?: Date
+}
+
+/** Validação final do documento montado — falha cedo, com mensagem clara, antes de qualquer HTTP. */
+export function validateNfePayload(payload: FocusNfePayload): void {
+  if (!isValidFocusDateTime(payload.data_emissao)) {
+    throw new FiscalBuildError(`buildNfePayload: data_emissao inválida ("${String(payload.data_emissao)}") — esperado ISO 8601 com fuso, ex.: 2026-11-16T10:05:00-03:00.`)
+  }
+  const skewMs = Date.parse(payload.data_emissao) - Date.now()
+  if (skewMs > 5 * 60_000) {
+    throw new FiscalBuildError('buildNfePayload: data_emissao está no futuro — a SEFAZ rejeitaria. Verifique o relógio do servidor.')
+  }
+  const cpfOrCnpj = payload.cpf_destinatario ?? payload.cnpj_destinatario
+  if (!cpfOrCnpj) throw new FiscalBuildError('buildNfePayload: destinatário sem CPF/CNPJ.')
+  for (const item of payload.items) {
+    if (!(item.quantidade_comercial > 0)) throw new FiscalBuildError(`buildNfePayload: item ${item.numero_item} com quantidade inválida.`)
+    if (!(item.valor_unitario_comercial >= 0)) throw new FiscalBuildError(`buildNfePayload: item ${item.numero_item} com valor unitário inválido.`)
+  }
+}
+
+export function buildNfePayload(ctx: FiscalDocumentContext, options: BuildNfePayloadOptions = {}): FocusNfePayload {
   const emitenteUf = required(ctx.emitente.uf, 'emitente.uf')
   const emitenteCrt = required(ctx.emitente.crt, 'emitente.crt')
   const emitenteCnpj = required(ctx.emitente.cnpj, 'emitente.cnpj')
@@ -171,6 +194,7 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
   required(documentoDestinatario, 'destinatario.cpf/cnpj')
 
   const payload: FocusNfePayload = {
+    data_emissao: formatFocusDateTime(options.now ?? new Date()),
     natureza_operacao: ctx.operation.naturezaOperacao,
     presenca_comprador: ctx.operation.presencaComprador,
     local_destino: resolveLocalDestino(emitenteUf, destinatarioUf),
@@ -223,5 +247,6 @@ export function buildNfePayload(ctx: FiscalDocumentContext): FocusNfePayload {
   const troco = ctx.payments.reduce((sum, p) => sum + (p.changeAmount ?? 0), 0)
   if (troco > 0) payload.valor_troco = round2(troco)
 
+  validateNfePayload(payload)
   return payload
 }

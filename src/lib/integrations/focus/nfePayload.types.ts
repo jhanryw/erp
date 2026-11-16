@@ -168,6 +168,8 @@ export interface FocusNfeItemPayload {
 }
 
 export interface FocusNfePayload {
+  /** ISO 8601 com offset (ex.: `2026-11-16T10:05:00-03:00`) — OBRIGATÓRIO na Focus; gerado na montagem por `formatFocusDateTime`. */
+  data_emissao: string
   natureza_operacao: string
   presenca_comprador: number
   /** 1=operação interna, 2=interestadual, 3=exterior (3 não suportado nesta fase). */

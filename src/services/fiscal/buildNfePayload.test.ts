@@ -367,3 +367,21 @@ describe('buildNfePayload — determinismo (puro, sem I/O)', () => {
     expect(JSON.stringify(buildNfePayload(ctx))).toBe(JSON.stringify(buildNfePayload(ctx)))
   })
 })
+
+describe('buildNfePayload — data_emissao (venda #1243: "data_emissao não pode ser vazio")', () => {
+  it('sempre presente, ISO 8601 com offset, e sobrevive à serialização JSON', () => {
+    const payload = buildNfePayload(baseFiscalContext())
+    expect(payload.data_emissao).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}-03:00$/)
+    expect(JSON.parse(JSON.stringify(payload)).data_emissao).toBe(payload.data_emissao)
+  })
+
+  it('usa o instante efetivo (não é data fixa) no fuso de São Paulo', () => {
+    const now = new Date(Date.now() - 60_000)
+    const payload = buildNfePayload(baseFiscalContext(), { now })
+    expect(Date.parse(payload.data_emissao)).toBe(Math.floor(now.getTime() / 1000) * 1000)
+  })
+
+  it('rejeita data_emissao no futuro (relógio errado)', () => {
+    expect(() => buildNfePayload(baseFiscalContext(), { now: new Date(Date.now() + 3_600_000) })).toThrow(FiscalBuildError)
+  })
+})
