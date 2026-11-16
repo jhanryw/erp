@@ -162,6 +162,17 @@ export interface BuildNfePayloadOptions {
 
 /** Validação final do documento montado — falha cedo, com mensagem clara, antes de qualquer HTTP. */
 export function validateNfePayload(payload: FocusNfePayload): void {
+  // Campos raiz obrigatórios na Focus (NF-e 55) — detectados ANTES de qualquer HTTP.
+  const missing: string[] = []
+  const root = payload as unknown as Record<string, unknown>
+  for (const key of ['data_emissao', 'tipo_documento', 'finalidade_emissao', 'natureza_operacao', 'local_destino', 'consumidor_final', 'presenca_comprador', 'modalidade_frete', 'cnpj_emitente', 'nome_destinatario', 'logradouro_destinatario', 'numero_destinatario', 'bairro_destinatario', 'municipio_destinatario', 'uf_destinatario', 'cep_destinatario', 'indicador_inscricao_estadual_destinatario']) {
+    const v = root[key]
+    if (v === undefined || v === null || v === '') missing.push(key)
+  }
+  if (missing.length > 0) {
+    throw new FiscalBuildError(`buildNfePayload: campos obrigatórios da Focus ausentes no payload — ${missing.join(', ')}.`)
+  }
+  if (payload.tipo_documento !== 1) throw new FiscalBuildError('buildNfePayload: NF-e de venda exige tipo_documento=1 (saída).')
   if (!isValidFocusDateTime(payload.data_emissao)) {
     throw new FiscalBuildError(`buildNfePayload: data_emissao inválida ("${String(payload.data_emissao)}") — esperado ISO 8601 com fuso, ex.: 2026-11-16T10:05:00-03:00.`)
   }
@@ -195,6 +206,9 @@ export function buildNfePayload(ctx: FiscalDocumentContext, options: BuildNfePay
 
   const payload: FocusNfePayload = {
     data_emissao: formatFocusDateTime(options.now ?? new Date()),
+    // Confirmados em campos.focusnfe.com.br/nfe/NotaFiscalXML.html (obrigatórios): venda normal de saída.
+    tipo_documento: 1,
+    finalidade_emissao: 1,
     natureza_operacao: ctx.operation.naturezaOperacao,
     presenca_comprador: ctx.operation.presencaComprador,
     local_destino: resolveLocalDestino(emitenteUf, destinatarioUf),

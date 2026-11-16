@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
+import { buildNfePayload, validateNfePayload, FiscalBuildError } from './buildNfePayload'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { baseFiscalContext } from './testFixtures'
 
@@ -402,5 +402,25 @@ describe('buildNfePayload — CRT 1 (Simples Nacional, não-MEI) vs CRT 4 preser
     expect(buildNfePayload(crt1()).items[0].cfop).toBe('6108')
     expect(buildNfePayload(baseFiscalContext()).items[0].cfop).toBe('6102')
     expect(buildNfePayload(baseFiscalContext()).regime_tributario_emitente).toBe(4)
+  })
+})
+
+describe('buildNfePayload — tipo_documento / finalidade_emissao (rejeição Focus venda #1243, modelo 55)', () => {
+  it('sempre tipo_documento=1 (saída) e finalidade_emissao=1 (normal), inclusive após serialização JSON', () => {
+    const parsed = JSON.parse(JSON.stringify(buildNfePayload(baseFiscalContext())))
+    expect(parsed.tipo_documento).toBe(1)
+    expect(parsed.finalidade_emissao).toBe(1)
+    expect(parsed.data_emissao).toBeTruthy()
+  })
+
+  it.each(['tipo_documento', 'finalidade_emissao', 'data_emissao'] as const)('validateNfePayload detecta %s ausente antes da transmissão', (campo) => {
+    const payload = { ...buildNfePayload(baseFiscalContext()) } as any
+    delete payload[campo]
+    expect(() => validateNfePayload(payload)).toThrow(new RegExp(campo))
+  })
+
+  it('tipo_documento=0 (entrada) é rejeitado pra NF-e de venda', () => {
+    const payload = { ...buildNfePayload(baseFiscalContext()), tipo_documento: 0 as const }
+    expect(() => validateNfePayload(payload)).toThrow(FiscalBuildError)
   })
 })

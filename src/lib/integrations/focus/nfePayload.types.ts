@@ -170,6 +170,10 @@ export interface FocusNfeItemPayload {
 export interface FocusNfePayload {
   /** ISO 8601 com offset (ex.: `2026-11-16T10:05:00-03:00`) — OBRIGATÓRIO na Focus; gerado na montagem por `formatFocusDateTime`. */
   data_emissao: string
+  /** tpNF — obrigatório na Focus. 0=entrada, 1=saída. Este ERP só emite NF-e de SAÍDA (venda): sempre 1. */
+  tipo_documento: 0 | 1
+  /** finNFe — obrigatório na Focus. 1=normal (2 complementar, 3 ajuste, 4 devolução, 5/6 reforma). Venda comum: sempre 1. */
+  finalidade_emissao: 1 | 2 | 3 | 4 | 5 | 6
   natureza_operacao: string
   presenca_comprador: number
   /** 1=operação interna, 2=interestadual, 3=exterior (3 não suportado nesta fase). */

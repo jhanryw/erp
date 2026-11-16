@@ -429,3 +429,11 @@ describe('buildNfcePayload — CRT 1 (Simples Nacional) e CRT 4 (MEI) geram o me
     expect(p.items[0].cfop).toBe(NFCE_CFOP_INTERNO)
   })
 })
+
+describe('buildNfcePayload — NFC-e não recebe campos exclusivos da NF-e 55', () => {
+  it('sem tipo_documento/finalidade_emissao (regressão: builders separados)', () => {
+    const p = buildNfcePayload(nfceContext()) as any
+    expect(p.tipo_documento).toBeUndefined()
+    expect(p.finalidade_emissao).toBeUndefined()
+  })
+})
