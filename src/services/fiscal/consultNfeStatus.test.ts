@@ -38,7 +38,7 @@ describe('consultNfeStatus — polling manual, nunca automático', () => {
     })
     const consultSpy = vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({
       status: 'autorizado',
-      chave_nfe: 'chave-teste',
+      chave_nfe: '35260861523225000117550010000000041006759001',
       numero: '1',
       serie: '1',
       status_sefaz: '100',
@@ -51,7 +51,7 @@ describe('consultNfeStatus — polling manual, nunca automático', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.data.status).toBe('authorized')
-      expect(result.data.accessKey).toBe('chave-teste')
+      expect(result.data.accessKey).toBe('35260861523225000117550010000000041006759001')
     }
     expect(fake.tables.fiscal_documents.find((r) => r.id === seeded.id)?.status).toBe('authorized')
   })

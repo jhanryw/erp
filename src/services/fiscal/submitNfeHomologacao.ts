@@ -95,6 +95,7 @@ import { validateNfeReadiness } from './validateFiscalReadiness'
 import { buildNfePayload, FiscalBuildError } from './buildNfePayload'
 import { FiscalRuleNotImplementedError } from '@/lib/fiscal/taxRules'
 import { buildFiscalDocumentSnapshot } from './buildFiscalSnapshot'
+import { extractFocusAccessKey } from './focusAccessKey'
 import { issueFocusNfe, consultFocusNfe } from '@/lib/integrations/focus/httpClient'
 import { FocusApiError, type FocusNfeConsultaResponse, type FocusEnvironment } from '@/lib/integrations/focus/types'
 import type { ServiceOutcome } from '@/services/produtos.service'
@@ -461,8 +462,9 @@ async function applyFocusResponse(
     // comportamento permissivo já existente, só evita apagar com null.
     patch.number = response.numero ?? current.number ?? null
     patch.series = response.serie ?? current.series ?? null
-    patch.access_key = response.chave_nfe ?? current.access_key ?? null
-    patch.authorization_protocol = response.protocolo_nota_fiscal?.numero_protocolo ?? (current.authorization_protocol as string | null | undefined) ?? null
+    // Focus devolve `chave_nfe` com prefixo literal "NFe" (47 chars); a coluna é CHAR(44). Normaliza ou lança — nunca trunca, nunca persiste lixo.
+    patch.access_key = response.chave_nfe ? extractFocusAccessKey(response.chave_nfe) : (current.access_key ?? null)
+    patch.authorization_protocol = response.protocolo_nota_fiscal?.numero_protocolo ?? response.protocolo ?? (current.authorization_protocol as string | null | undefined) ?? null
     patch.xml_path = response.caminho_xml_nota_fiscal ?? current.xml_path ?? null
     patch.danfe_path = response.caminho_danfe ?? current.danfe_path ?? null
     // `authorized_at` é a data do EVENTO de autorização, não da consulta —
@@ -767,8 +769,8 @@ export async function submitNfeHomologacao(saleId: number, companyId: number): P
       ...(status === 'authorized' ? {
         number: response.numero ?? null,
         series: response.serie ?? null,
-        accessKey: response.chave_nfe ?? null,
-        authorizationProtocol: response.protocolo_nota_fiscal?.numero_protocolo ?? null,
+        accessKey: extractFocusAccessKey(response.chave_nfe),
+        authorizationProtocol: response.protocolo_nota_fiscal?.numero_protocolo ?? response.protocolo ?? null,
         xmlPath: response.caminho_xml_nota_fiscal ?? null,
         danfePath: response.caminho_danfe ?? null,
         authorizedAt: new Date().toISOString(),

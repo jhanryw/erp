@@ -199,6 +199,8 @@ export interface FocusNfeConsultaResponse {
   caminho_danfe?: string
   caminho_danfe_etiqueta?: string
   protocolo_nota_fiscal?: FocusNfeProtocoloNotaFiscal
+  /** Fallback observado em NFC-e (campo plano) — só usado se `protocolo_nota_fiscal` vier ausente. */
+  protocolo?: string
 }
 
 /**

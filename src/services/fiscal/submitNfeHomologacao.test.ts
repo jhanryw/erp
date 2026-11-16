@@ -625,3 +625,78 @@ describe('submitNfeHomologacao — mudança de regime (MEI → Simples) e diagn�
     }
   })
 })
+
+describe('NF-e autorizada com chave "NFe"+44 dígitos (venda #1243 — "value too long for type character(44)")', () => {
+  afterEach(() => { vi.restoreAllMocks() })
+  const CHAVE = '24261161523225000117550010000000051130238578'
+  const AUTORIZADA = {
+    status: 'autorizado', status_sefaz: '100', mensagem_sefaz: 'Autorizado o uso da NF-e',
+    numero: '5', serie: '1', chave_nfe: `NFe${CHAVE}`,
+    protocolo_nota_fiscal: { numero_protocolo: '224260036183753' },
+    caminho_xml_nota_fiscal: '/arquivos/x.xml', caminho_danfe: '/arquivos/x.pdf',
+  } as any
+
+  it('emissão: persiste a chave normalizada (44 dígitos), número, série, protocolo, XML e DANFE', async () => {
+    setupFake()
+    mockHappyPathDependencies()
+    vi.spyOn(httpClient, 'issueFocusNfe').mockResolvedValue(AUTORIZADA)
+    const r = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(r.ok && r.data.status).toBe('authorized')
+    if (r.ok) {
+      expect(r.data.accessKey).toBe(CHAVE)
+      expect(r.data.accessKey).toHaveLength(44)
+      expect(r.data.number).toBe('5'); expect(r.data.series).toBe('1')
+      expect(r.data.authorizationProtocol).toBe('224260036183753')
+      expect(r.data.xmlPath).toBe('/arquivos/x.xml'); expect(r.data.danfePath).toBe('/arquivos/x.pdf')
+    }
+  })
+
+  it('chave inválida na resposta autorizada: NUNCA trunca nem marca authorized — fica pending (reconciliação), sem lançar', async () => {
+    setupFake()
+    mockHappyPathDependencies()
+    vi.spyOn(httpClient, 'issueFocusNfe').mockResolvedValue({ ...AUTORIZADA, chave_nfe: `NFe${CHAVE}99` })
+    const r = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(r.ok && r.data.status).toBe('pending')
+    expect(r.ok && r.data.accessKey).toBeNull()
+  })
+
+  it('reconciliação (pending com POST despachado): consulta, normaliza a chave e autoriza o MESMO documento — sem novo POST', async () => {
+    const fake = setupFake()
+    mockHappyPathDependencies()
+    const ref = buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao')
+    const seeded = fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: ref, status: 'pending', submission_started_at: new Date(Date.now() - 5000).toISOString(),
+    })
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue(AUTORIZADA)
+
+    const r1 = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(issueSpy).not.toHaveBeenCalled()
+    expect(r1.ok && r1.data.status).toBe('authorized')
+    expect(r1.ok && r1.data.fiscalDocumentId).toBe(seeded.id)
+    expect(r1.ok && r1.data.accessKey).toBe(CHAVE)
+    expect(r1.ok && r1.data.providerRef).toBe(ref)
+
+    // Idempotente: repetir não transmite e não altera a autorização registrada.
+    const r2 = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(issueSpy).not.toHaveBeenCalled()
+    expect(r2.ok && r2.data.accessKey).toBe(CHAVE)
+    expect(r2.ok && r2.data.status).toBe('authorized')
+  })
+
+  it('reconciliação com chave inválida: falha sem persistir e sem transmitir', async () => {
+    const fake = setupFake()
+    mockHappyPathDependencies()
+    fake.seedFiscalDocument({
+      company_id: COMPANY_ID, sale_id: SALE_ID, document_type: 'nfe', provider: 'focus_nfe',
+      environment: 'homologacao', provider_ref: buildProviderRef(COMPANY_ID, SALE_ID, 'homologacao'), status: 'pending',
+      submission_started_at: new Date(Date.now() - 5000).toISOString(),
+    })
+    const issueSpy = vi.spyOn(httpClient, 'issueFocusNfe')
+    vi.spyOn(httpClient, 'consultFocusNfe').mockResolvedValue({ ...AUTORIZADA, chave_nfe: '123' })
+    const r = await submitNfeHomologacao(SALE_ID, COMPANY_ID)
+    expect(r.ok).toBe(false)
+    expect(issueSpy).not.toHaveBeenCalled()
+  })
+})
