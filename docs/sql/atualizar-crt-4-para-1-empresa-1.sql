@@ -1,3 +1,4 @@
+-- OBSOLETO: o CRT já está 1 em produção (ver registrar-historico-crt-empresa-1.sql). Não executar.
 -- ============================================================================
 -- NÃO EXECUTADO. Rodar só com autorização, DEPOIS da migration
 -- 202610151000_company_fiscal_regime_history.sql e DEPOIS de conferir o
