@@ -270,7 +270,7 @@ async function getDashboardData(companyId: number) {
       .from('finance_entries')
       .select('type, amount')
       .eq('company_id', companyId)
-      .neq('payment_status', 'pending')
+      .eq('payment_status', 'paid')
       .gte('reference_date', start)
       .lte('reference_date', end) as unknown as {
         data: RawCashEntry[] | null

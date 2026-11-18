@@ -137,6 +137,8 @@ export function LancamentosFilters({ defaultQ }: LancamentosFiltersProps) {
           <option value="">Todos</option>
           <option value="paid">Pago/Recebido</option>
           <option value="pending">Pendente</option>
+          <option value="scheduled">Agendado</option>
+          <option value="overdue">Vencido (pendente)</option>
         </Select>
 
         <Select

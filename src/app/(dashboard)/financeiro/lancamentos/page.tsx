@@ -12,6 +12,7 @@ import { Pagination } from '@/components/ui/pagination'
 import { formatCurrency } from '@/lib/utils/currency'
 import { formatDate, formatDateTime, brazilDate } from '@/lib/utils/date'
 import { DeleteEntryButton } from './_components/delete-entry-button'
+import { ScheduleActions } from './_components/schedule-actions'
 import { LancamentosFilters } from './_components/lancamentos-filters'
 
 export const dynamic = 'force-dynamic'
@@ -48,7 +49,7 @@ const ORIGIN_LABELS: Record<string, string> = {
 }
 
 const TYPE_VALUES = new Set(['income', 'expense'])
-const STATUS_VALUES = new Set(['paid', 'pending'])
+const STATUS_VALUES = new Set(['paid', 'pending', 'scheduled', 'overdue'])
 const ORIGIN_VALUES = new Set(['manual', 'sale', 'stock', 'marketing', 'return', 'cash'])
 const SORT_VALUES = new Set(['created_at', 'reference_date'])
 const PAGE_SIZE_OPTIONS = new Set([25, 50, 100, 200])
@@ -77,7 +78,7 @@ type EntryRow = {
   notes: string | null
   payment_method: string | null
   paid_at: string | null
-  payment_status: 'paid' | 'pending'
+  payment_status: 'paid' | 'pending' | 'scheduled'
   cash_movement_id: number | null
   sale_id: number | null
   stock_lot_id: number | null
@@ -90,7 +91,7 @@ interface ParsedFilters {
   q?: string
   type?: EntryType
   category?: string
-  status?: 'paid' | 'pending'
+  status?: 'paid' | 'pending' | 'scheduled' | 'overdue'
   // Data de criação no sistema (created_at) — auditoria de importação/entrada.
   createdFrom?: string
   createdTo?: string
@@ -130,7 +131,7 @@ function computeOrigin(entry: Pick<EntryRow, 'sale_id' | 'stock_lot_id' | 'marke
 function parseFilters(sp: Record<string, string | undefined>): ParsedFilters {
   const type = sp.type && TYPE_VALUES.has(sp.type) ? (sp.type as EntryType) : undefined
   const category = sp.category && sp.category in CATEGORY_LABELS ? sp.category : undefined
-  const status = sp.status && STATUS_VALUES.has(sp.status) ? (sp.status as 'paid' | 'pending') : undefined
+  const status = sp.status && STATUS_VALUES.has(sp.status) ? (sp.status as 'paid' | 'pending' | 'scheduled' | 'overdue') : undefined
   const origin = sp.origin && ORIGIN_VALUES.has(sp.origin) ? (sp.origin as OriginKey) : undefined
   const createdFrom = sp.createdFrom && DATE_RE.test(sp.createdFrom) ? sp.createdFrom : undefined
   const createdTo = sp.createdTo && DATE_RE.test(sp.createdTo) ? sp.createdTo : undefined
@@ -171,6 +172,9 @@ async function getEntries(
   if (filters.category) query = query.eq('category', filters.category)
   if (filters.status === 'paid') query = query.eq('payment_status', 'paid')
   if (filters.status === 'pending') query = query.eq('payment_status', 'pending')
+  if (filters.status === 'scheduled') query = query.eq('payment_status', 'scheduled')
+  // Vencido = pendente com vencimento (competência) anterior a hoje; derivado, nunca gravado.
+  if (filters.status === 'overdue') query = query.eq('payment_status', 'pending').lt('reference_date', brazilDate())
 
   // created_at é TIMESTAMPTZ — o limite superior precisa ser "< dia seguinte
   // 00:00", nunca "<= data" (que truncaria o dia inteiro do createdTo, já
@@ -476,6 +480,21 @@ export default async function LancamentosPage({
                                 ? (PAYMENT_METHOD_LABELS[entry.payment_method] ?? entry.payment_method)
                                 : entry.payment_status === 'pending' ? 'Pendente' : '—'}
                             </span>
+                            {entry.payment_status === 'scheduled' && (
+                              <div>
+                                <Badge variant="info" size="sm">
+                                  Agendado{entry.paid_at ? ` p/ ${formatDate(entry.paid_at)}` : ''}
+                                </Badge>
+                              </div>
+                            )}
+                            {entry.payment_status === 'pending' && entry.reference_date < brazilDate() && (
+                              <div>
+                                <Badge variant="error" size="sm">Vencido</Badge>
+                              </div>
+                            )}
+                            {entry.payment_status === 'paid' && entry.paid_at && (
+                              <div className="text-[11px] text-text-muted">Pago em {formatDate(entry.paid_at)}</div>
+                            )}
                             {pendingCashLink && (
                               <div>
                                 <Badge variant="warning" size="sm">Pendente de vínculo com o Caixa</Badge>
@@ -490,6 +509,9 @@ export default async function LancamentosPage({
                         </TableCell>
                         <TableCell align="center">
                           <div className="flex items-center justify-center gap-1">
+                            {entry.payment_status === 'scheduled' && (
+                              <ScheduleActions id={entry.id} scheduledAt={entry.paid_at} />
+                            )}
                             <Link href={`/financeiro/lancamentos/${entry.id}/editar?from=${returnTo}`}>
                               <Button variant="ghost" size="sm" className="text-xs px-2">Editar</Button>
                             </Link>

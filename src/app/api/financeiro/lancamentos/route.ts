@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { financeEntrySchema, normalizeFinanceEntryPayment, financeEntryPaymentStatus } from '@/lib/validators'
 import { NextResponse } from 'next/server'
+import { brazilDate } from '@/lib/utils/date'
 
 export async function POST(request: Request) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -27,9 +28,14 @@ export async function POST(request: Request) {
   // (Entrega 3) ou a automação do Caixa (Entrega 4) preenchem esse campo.
   // paid_at é DATE: a string 'yyyy-MM-dd' do formulário vai direto ao banco,
   // sem nenhuma conversão de timezone.
+  if (parsed.data.payment_status === 'scheduled' && parsed.data.paid_at && parsed.data.paid_at < brazilDate()) {
+    return NextResponse.json({ error: 'A data programada não pode estar no passado.' }, { status: 422 })
+  }
+
   const admin = createAdminClient()
+  const { payment_status: _ignored, ...rest } = parsed.data
   const insertPayload = {
-    ...parsed.data,
+    ...rest,
     ...normalizeFinanceEntryPayment(parsed.data),
     payment_status: financeEntryPaymentStatus(parsed.data),
     created_by: user.id,

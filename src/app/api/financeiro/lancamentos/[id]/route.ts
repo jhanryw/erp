@@ -5,6 +5,7 @@ import { requireRole } from '@/lib/supabase/session'
 import { auditLog } from '@/lib/audit/log'
 import { financeEntrySchema, normalizeFinanceEntryPayment, financeEntryPaymentStatus } from '@/lib/validators'
 import { NextResponse } from 'next/server'
+import { brazilDate } from '@/lib/utils/date'
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
   const { user, response: unauth } = await requireRole('gerente')
@@ -90,21 +91,50 @@ export async function PUT(request: Request, { params }: { params: { id: string }
   // pagamento continua realizado em reference_date — não vira pendente por
   // acidente. Qualquer registro com paid_at pode voltar a pendente.
   const isLegacyRealized = before.payment_status === 'paid' && before.paid_at == null
+  const requested = financeEntryPaymentStatus(parsed.data)
+  const explicit = parsed.data.payment_status
+  const hasOrigin = before.sale_id != null || before.stock_lot_id != null ||
+    before.marketing_cost_id != null || before.return_id != null
+
+  // Registro legado/automático realizado, editado sem escolher status, segue
+  // realizado em reference_date. Mover um legado para pendente/agendado é
+  // bloqueado (não reclassificamos histórico), e lançamentos automáticos
+  // (venda/estoque/marketing/devolução) nunca são agendados.
+  let nextStatus: 'paid' | 'pending' | 'scheduled' = requested
+  if (isLegacyRealized && !explicit && requested === 'pending') nextStatus = 'paid'
+  if (isLegacyRealized && explicit && requested !== 'paid') {
+    return NextResponse.json({ error: 'Registro realizado sem data de pagamento (legado) não pode voltar a pendente/agendado.' }, { status: 422 })
+  }
+  if (requested === 'scheduled' && hasOrigin) {
+    return NextResponse.json({ error: 'Lançamentos automáticos não podem ser agendados.' }, { status: 422 })
+  }
+  if (requested === 'scheduled' && before.cash_movement_id != null) {
+    return NextResponse.json({ error: 'Lançamento vinculado ao Caixa não pode ser agendado.' }, { status: 422 })
+  }
+  // Nova data programada nunca no passado (mantendo a data atual já gravada).
+  if (requested === 'scheduled' && parsed.data.paid_at && parsed.data.paid_at < brazilDate() &&
+      !(before.payment_status === 'scheduled' && before.paid_at === parsed.data.paid_at)) {
+    return NextResponse.json({ error: 'A data programada não pode estar no passado.' }, { status: 422 })
+  }
+  const { payment_status: _ignored, ...rest } = parsed.data
   const updatePayload = {
-    ...parsed.data,
+    ...rest,
     ...normalizeFinanceEntryPayment(parsed.data),
-    payment_status: parsed.data.paid_at || isLegacyRealized ? 'paid' : financeEntryPaymentStatus(parsed.data),
+    payment_status: nextStatus,
   }
   const { error, count } = (await (admin as any)
     .from('finance_entries')
     .update(updatePayload, { count: 'exact' })
     .eq('id', id)
-    .eq('company_id', user.company_id)) as { error: any; count: number | null }
+    .eq('company_id', user.company_id)
+    // Proteção contra operação concorrente: só atualiza se o status não mudou
+    // desde a leitura (ex.: agendamento confirmado/cancelado em outra aba).
+    .eq('payment_status', before.payment_status)) as { error: any; count: number | null }
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   // Segunda camada de proteção contra "sucesso fantasma": se o ID pertencer a
   // outra empresa, o .eq('company_id', ...) já não afeta nenhuma linha — sem
   // esta checagem a API responderia 200 mesmo sem ter alterado nada.
-  if (!count) return NextResponse.json({ error: 'Registro não encontrado' }, { status: 404 })
+  if (!count) return NextResponse.json({ error: 'O lançamento foi alterado por outra operação. Recarregue e tente novamente.' }, { status: 409 })
 
   auditLog({
     userId: user.id,

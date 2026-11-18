@@ -309,6 +309,10 @@ export type MediaUsageFormData = z.infer<typeof mediaUsageSchema>
 // hoje ou futuro; vencimento = reference_date). Nunca só um dos dois
 // (constraint fe_payment_method_paid_at_together). Vale para despesa e receita.
 //
+// payment_status (opcional) = pending | scheduled | paid. 'scheduled' (só despesa)
+// usa paid_at como data PROGRAMADA e aceita data futura; nunca vira 'paid'
+// sozinho — só pelas ações de confirmação.
+//
 // paid_at (data real do pagamento) não pode ser data futura: comparação de string 'yyyy-MM-dd' contra
 // brazilDate() (fuso fixo America/Fortaleza), mesmo formato de reference_date.
 //
@@ -337,6 +341,13 @@ export const financeEntrySchema = z
       (v) => (v === '' || v == null ? undefined : v),
       z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Data de pagamento inválida').optional(),
     ),
+    // Opcional: quando ausente é inferido (paid_at presente = paid, senão
+    // pending), preservando todos os payloads anteriores. 'scheduled' só vale
+    // para despesa e usa paid_at como data PROGRAMADA (pode ser futura).
+    payment_status: z.preprocess(
+      (v) => (v === '' || v == null ? undefined : v),
+      z.enum(['pending', 'scheduled', 'paid']).optional(),
+    ),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -357,6 +368,46 @@ export const financeEntrySchema = z
         message: 'Informe a forma de pagamento para registrar o recebimento.',
       })
     }
+    const status = data.payment_status
+    if (status === 'scheduled') {
+      if (data.type !== 'expense') {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['payment_status'],
+          message: 'Agendamento disponível apenas para despesas.',
+        })
+      }
+      if (!data.paid_at) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['paid_at'],
+          message: 'Informe a data programada do pagamento.',
+        })
+      }
+      if (!data.payment_method) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['payment_method'],
+          message: 'Informe a forma de pagamento do agendamento.',
+        })
+      }
+      return // data programada pode ser futura
+    }
+    if (status === 'pending' && (data.paid_at || data.payment_method)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['payment_status'],
+        message: 'Lançamento pendente não pode ter forma ou data de pagamento.',
+      })
+    }
+    if (status === 'paid' && !data.paid_at) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['paid_at'],
+        message: 'Informe a data efetiva do pagamento.',
+      })
+    }
+    // Pago/recebido: data efetiva nunca no futuro.
     if (data.paid_at && data.paid_at > brazilDate()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -377,7 +428,10 @@ export type FinanceEntryFormData = z.infer<typeof financeEntrySchema>
 // edição "recebido → pendente" (só paid_at explicitamente nulado,
 // payment_method omitido e mantido) violava fe_payment_method_paid_at_together.
 // Forçar `?? null` nos dois campos, sempre juntos, elimina essa classe de bug.
-export function financeEntryPaymentStatus(data: FinanceEntryFormData): 'paid' | 'pending' {
+export type FinancePaymentStatus = 'paid' | 'pending' | 'scheduled'
+
+export function financeEntryPaymentStatus(data: FinanceEntryFormData): FinancePaymentStatus {
+  if (data.payment_status === 'scheduled') return 'scheduled'
   return data.paid_at ? 'paid' : 'pending'
 }
 
@@ -390,3 +444,4 @@ export function normalizeFinanceEntryPayment(data: FinanceEntryFormData): {
     paid_at: data.paid_at ?? null,
   }
 }
+

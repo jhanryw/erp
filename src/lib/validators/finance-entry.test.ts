@@ -179,3 +179,57 @@ describe('financeEntrySchema — despesa pendente / vencimento futuro', () => {
     expect(r.success).toBe(false)
   })
 })
+
+describe('financeEntrySchema — pagamento agendado (scheduled)', () => {
+  const exp = {
+    type: 'expense' as const,
+    category: 'operational' as const,
+    description: 'Boleto fornecedor',
+    amount: 500,
+    reference_date: today,
+  }
+  const sched = (over: Record<string, unknown> = {}) => ({
+    ...exp, payment_status: 'scheduled', payment_method: 'pix', paid_at: addDays(today, 7), ...over,
+  })
+
+  it('aceita despesa agendada com paid_at futuro e forma de pagamento', () => {
+    const r = financeEntrySchema.safeParse(sched())
+    expect(r.success).toBe(true)
+    if (r.success) expect(financeEntryPaymentStatus(r.data)).toBe('scheduled')
+  })
+
+  it('vencimento independente da data programada', () => {
+    const r = financeEntrySchema.safeParse(sched({ reference_date: addDays(today, 3), paid_at: addDays(today, 2) }))
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.reference_date).toBe(addDays(today, 3))
+      expect(normalizeFinanceEntryPayment(r.data).paid_at).toBe(addDays(today, 2))
+    }
+  })
+
+  it('exige data programada e forma de pagamento', () => {
+    expect(financeEntrySchema.safeParse(sched({ paid_at: undefined })).success).toBe(false)
+    expect(financeEntrySchema.safeParse(sched({ payment_method: undefined })).success).toBe(false)
+  })
+
+  it('não permite agendar receita', () => {
+    expect(financeEntrySchema.safeParse(sched({ type: 'income', category: 'sale' })).success).toBe(false)
+  })
+
+  it('pago com data futura continua rejeitado', () => {
+    expect(financeEntrySchema.safeParse(sched({ payment_status: 'paid' })).success).toBe(false)
+  })
+
+  it('pago explícito exige data efetiva; pendente explícito não aceita pagamento', () => {
+    expect(financeEntrySchema.safeParse({ ...exp, payment_status: 'paid' }).success).toBe(false)
+    expect(financeEntrySchema.safeParse({ ...exp, payment_status: 'pending', payment_method: 'pix', paid_at: today }).success).toBe(false)
+    expect(financeEntrySchema.safeParse({ ...exp, payment_status: 'pending' }).success).toBe(true)
+  })
+
+  it('payload sem payment_status mantém inferência anterior', () => {
+    const p = financeEntrySchema.safeParse({ ...exp, payment_method: 'pix', paid_at: today })
+    expect(p.success && financeEntryPaymentStatus(p.data)).toBe('paid')
+    const n = financeEntrySchema.safeParse(exp)
+    expect(n.success && financeEntryPaymentStatus(n.data)).toBe('pending')
+  })
+})

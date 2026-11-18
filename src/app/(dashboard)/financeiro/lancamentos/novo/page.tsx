@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense } from 'react'
+import { Suspense, useEffect } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -61,17 +61,34 @@ function NovoLancamentoForm() {
     register,
     handleSubmit,
     watch,
+    setValue,
     formState: { errors, isSubmitting },
   } = useForm<FinanceEntryForm>({
     resolver: zodResolver(financeEntrySchema),
     defaultValues: {
       type: 'expense',
+      payment_status: 'pending',
       reference_date: toISODate(new Date()),
     },
   })
 
   const entryType = watch('type')
+  const status = watch('payment_status')
+  const isLegacy = false
   const categories = entryType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
+
+  // Receita não tem agendamento: ao trocar para receita, volta a Pendente.
+  useEffect(() => {
+    if (entryType === 'income' && status === 'scheduled') setValue('payment_status', 'pending')
+  }, [entryType, status, setValue])
+
+  // Pendente nunca carrega forma/data de pagamento.
+  useEffect(() => {
+    if (status === 'pending') {
+      setValue('payment_method', undefined)
+      setValue('paid_at', undefined)
+    }
+  }, [status, setValue])
 
   async function onSubmit(data: FinanceEntryForm) {
     const res = await fetch('/api/financeiro/lancamentos', {
@@ -80,6 +97,7 @@ function NovoLancamentoForm() {
       body: JSON.stringify({
         ...data,
         notes: data.notes || null,
+        payment_status: data.payment_status || 'pending',
         payment_method: data.payment_method || undefined,
         paid_at: data.paid_at || undefined,
       }),
@@ -159,30 +177,43 @@ function NovoLancamentoForm() {
           />
         </div>
 
-        {/* Forma e data de pagamento — obrigatórios juntos para despesa;
-            para receita são opcionais (venda pode ficar pendente), mas nunca
-            só um dos dois preenchido (financeEntrySchema barra isso). */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Select
-            label="Forma de pagamento"
-            hint="Escolha 'Pendente' para agendar uma conta ainda não paga/recebida."
-            error={errors.payment_method?.message}
-            {...register('payment_method')}
-          >
-            <option value="">{entryType === 'income' ? 'Pendente — ainda não recebida' : 'Pendente — ainda não paga'}</option>
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </Select>
-          <Input
-            label="Data do pagamento/recebimento"
-            hint="Só quando já foi pago. Não pode ser futura."
-            type="date"
-            max={toISODate(new Date())}
-            error={errors.paid_at?.message}
-            {...register('paid_at')}
-          />
-        </div>
+        {/* Situação do pagamento: Pendente (sem pagamento), Agendado (programado
+            no banco, ainda não confirmado — só despesa) ou Pago (efetivado). */}
+        <Select
+          label="Situação do pagamento"
+          hint="Agendado = programado no banco para uma data, ainda não confirmado. Não vira Pago sozinho."
+          error={errors.payment_status?.message}
+          {...register('payment_status')}
+        >
+          <option value="pending">{entryType === 'income' ? 'Pendente — ainda não recebida' : 'Pendente — ainda não paga'}</option>
+          {entryType === 'expense' && <option value="scheduled">Agendado — programado no banco</option>}
+          <option value="paid">{entryType === 'income' ? 'Recebido' : 'Pago'}</option>
+        </Select>
+
+        {status !== 'pending' && !(isLegacy && !status) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select
+              label="Forma de pagamento"
+              required
+              error={errors.payment_method?.message}
+              {...register('payment_method')}
+            >
+              <option value="">Selecione</option>
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
+            <Input
+              label={status === 'scheduled' ? 'Data programada do pagamento' : entryType === 'income' ? 'Data do recebimento' : 'Data do pagamento'}
+              hint={status === 'scheduled' ? 'Data em que o banco fará o pagamento. Pode ser futura.' : 'Data em que o pagamento foi efetivado. Não pode ser futura.'}
+              required
+              type="date"
+              {...(status === 'scheduled' ? { min: toISODate(new Date()) } : { max: toISODate(new Date()) })}
+              error={errors.paid_at?.message}
+              {...register('paid_at')}
+            />
+          </div>
+        )}
 
         {/* Observações */}
         <div>

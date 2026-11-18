@@ -88,6 +88,7 @@ function EditarLancamentoForm({ params }: { params: { id: string } }) {
     register,
     handleSubmit,
     watch,
+    setValue,
     reset,
     formState: { errors, isSubmitting },
   } = useForm<FinanceEntryForm>({
@@ -95,6 +96,11 @@ function EditarLancamentoForm({ params }: { params: { id: string } }) {
   })
 
   const entryType = watch('type')
+  const status = watch('payment_status')
+  // Registro legado/automático realizado sem data de pagamento: segue realizado
+  // em reference_date. Não é reclassificado — a opção "Realizado (legado)" é a
+  // única que o mantém assim, e o servidor bloqueia movê-lo para pendente/agendado.
+  const [isLegacy, setIsLegacy] = useState(false)
   const categories = entryType === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
 
   useEffect(() => {
@@ -119,12 +125,26 @@ function EditarLancamentoForm({ params }: { params: { id: string } }) {
           // sem nenhuma conversão de Date/timezone.
           payment_method: entry.payment_method ?? undefined,
           paid_at: entry.paid_at ?? undefined,
+          payment_status:
+            entry.payment_status === 'paid' && !entry.paid_at ? undefined : entry.payment_status,
         })
+        setIsLegacy(entry.payment_status === 'paid' && !entry.paid_at)
         setCashMovement(cashMovement ?? null)
         setAuditHistory(auditHistory ?? [])
         setLoading(false)
       })
   }, [params.id, reset, router])
+
+  useEffect(() => {
+    if (status === 'pending') {
+      setValue('payment_method', undefined)
+      setValue('paid_at', undefined)
+    }
+  }, [status, setValue])
+
+  useEffect(() => {
+    if (entryType === 'income' && status === 'scheduled') setValue('payment_status', 'pending')
+  }, [entryType, status, setValue])
 
   async function onSubmit(data: FinanceEntryForm) {
     const res = await fetch(`/api/financeiro/lancamentos/${params.id}`, {
@@ -132,8 +152,9 @@ function EditarLancamentoForm({ params }: { params: { id: string } }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...data,
-        payment_method: data.payment_method || undefined,
-        paid_at: data.paid_at || undefined,
+        payment_status: data.payment_status || undefined,
+        payment_method: data.payment_status === 'pending' ? undefined : data.payment_method || undefined,
+        paid_at: data.payment_status === 'pending' ? undefined : data.paid_at || undefined,
       }),
     })
     const json = await res.json()
@@ -262,35 +283,44 @@ function EditarLancamentoForm({ params }: { params: { id: string } }) {
           />
         </div>
 
-        {/* Forma e data de pagamento — obrigatórios juntos para despesa;
-            para receita são opcionais (venda pode ficar pendente), mas nunca
-            só um dos dois preenchido (financeEntrySchema barra isso).
-            Registro antigo com pagamento nulo: campos abrem vazios, mas
-            exigidos para salvar quando type='expense' (leitura nunca é
-            bloqueada, só o submit). Mudar de recebido → pendente é só
-            selecionar "Pendente" / limpar a data — nenhum campo fica
-            escondido no estado do formulário. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Select
-            label="Forma de pagamento"
-            hint="Escolha 'Pendente' para agendar uma conta ainda não paga/recebida."
-            error={errors.payment_method?.message}
-            {...register('payment_method')}
-          >
-            <option value="">{entryType === 'income' ? 'Pendente — ainda não recebida' : 'Pendente — ainda não paga'}</option>
-            {PAYMENT_METHODS.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-          </Select>
-          <Input
-            label="Data do pagamento/recebimento"
-            hint="Só quando já foi pago. Não pode ser futura."
-            type="date"
-            max={toISODate(new Date())}
-            error={errors.paid_at?.message}
-            {...register('paid_at')}
-          />
-        </div>
+        {/* Situação do pagamento: Pendente (sem pagamento), Agendado (programado
+            no banco, ainda não confirmado — só despesa) ou Pago (efetivado). */}
+        <Select
+          label="Situação do pagamento"
+          hint="Agendado = programado no banco para uma data, ainda não confirmado. Não vira Pago sozinho."
+          error={errors.payment_status?.message}
+          {...register('payment_status')}
+        >
+          {isLegacy && <option value="">Realizado (registro legado, sem data)</option>}
+          <option value="pending">{entryType === 'income' ? 'Pendente — ainda não recebida' : 'Pendente — ainda não paga'}</option>
+          {entryType === 'expense' && <option value="scheduled">Agendado — programado no banco</option>}
+          <option value="paid">{entryType === 'income' ? 'Recebido' : 'Pago'}</option>
+        </Select>
+
+        {status !== 'pending' && !(isLegacy && !status) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <Select
+              label="Forma de pagamento"
+              required
+              error={errors.payment_method?.message}
+              {...register('payment_method')}
+            >
+              <option value="">Selecione</option>
+              {PAYMENT_METHODS.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
+            <Input
+              label={status === 'scheduled' ? 'Data programada do pagamento' : entryType === 'income' ? 'Data do recebimento' : 'Data do pagamento'}
+              hint={status === 'scheduled' ? 'Data em que o banco fará o pagamento. Pode ser futura.' : 'Data em que o pagamento foi efetivado. Não pode ser futura.'}
+              required
+              type="date"
+              {...(status === 'scheduled' ? { min: toISODate(new Date()) } : { max: toISODate(new Date()) })}
+              error={errors.paid_at?.message}
+              {...register('paid_at')}
+            />
+          </div>
+        )}
 
         <div>
           <label className="label-base">
