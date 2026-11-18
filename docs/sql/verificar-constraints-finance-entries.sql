@@ -30,3 +30,14 @@ WHERE n.nspname='public' AND p.prosrc ILIKE '%payment_status%'
   AND p.prosrc ILIKE '%finance_entries%';
 SELECT schemaname, viewname FROM pg_views
 WHERE schemaname='public' AND definition ILIKE '%payment_status%' AND definition ILIKE '%finance_entries%';
+
+-- ── Pré-requisitos da efetivação automática (202611191000/1100) ─────────────
+-- 1) Trigger de auditoria genérico de finance_entries: precisa tolerar UPDATE
+--    sem usuário (auth.uid() NULL), pois o job roda sem sessão.
+SELECT pg_get_functiondef('public.audit_trigger_function'::regproc);
+-- 2) audit_logs (usada pela função) e audit_log (usada pelo trigger): user_id nullable?
+SELECT table_name, column_name, is_nullable FROM information_schema.columns
+WHERE table_schema='public' AND table_name IN ('audit_logs','audit_log') AND column_name='user_id';
+-- 3) pg_cron habilitado e jobs atuais
+SELECT extname FROM pg_extension WHERE extname IN ('pg_cron','pg_net');
+SELECT jobid, jobname, schedule, active FROM cron.job ORDER BY jobid;

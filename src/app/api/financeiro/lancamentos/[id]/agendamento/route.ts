@@ -55,7 +55,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
     .maybeSingle()) as { data: any }
   if (!before) return NextResponse.json({ error: 'Registro não encontrado' }, { status: 404 })
   if (before.payment_status !== 'scheduled') {
-    return NextResponse.json({ error: 'Este lançamento não está agendado (já foi alterado).' }, { status: 409 })
+    return NextResponse.json({ error: 'Este lançamento não está mais agendado (já foi efetivado, cancelado ou alterado). Recarregue a página.' }, { status: 409 })
   }
 
   let patch: Record<string, unknown>
